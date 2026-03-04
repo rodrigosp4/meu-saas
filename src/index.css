@@ -1,1 +1,147 @@
+/* src/index.css */
 @import "tailwindcss";
+
+/* ===== Paleta MeliUnlocker (variáveis CSS) ===== */
+:root {
+  --sidebar-bg: #2d3e50;
+  --sidebar-hover: #34495e;
+  --sidebar-border: #3a5068;
+  --sidebar-text: #bdc3c7;
+  --sidebar-text-hover: #ffffff;
+  --sidebar-icon: #7f8c8d;
+
+  --meli-orange: #e67e22;
+  --meli-orange-hover: #d35400;
+  --meli-yellow: #f1c40f;
+  --meli-green: #27ae60;
+  --meli-green-hover: #229954;
+  --meli-red: #c0392b;
+  --meli-red-hover: #e74c3c;
+  --meli-blue: #2980b9;
+
+  --heading: #2c3e50;
+  --heading-sub: #34495e;
+
+  --surface: #f4f6f8;
+  --surface-card: #ffffff;
+  --surface-input: #f5f6f7;
+  --text-primary: #333333;
+  --text-secondary: #555555;
+  --text-muted: #7f8c8d;
+  --border-light: #e0e0e0;
+  --border-input: #ccd0d5;
+}
+
+/* ===== Base ===== */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text-primary);
+  background-color: var(--surface);
+  margin: 0;
+}
+
+/* ===== Scrollbar customizada (estilo MeliUnlocker) ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}
+
+/* ===== Form Section (estilo card branco MeliUnlocker) ===== */
+.form-section {
+  background-color: var(--surface-card);
+  padding: 20px;
+  border-radius: 6px;
+  margin-bottom: 25px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+}
+.form-section h3 {
+  font-size: 1.2em;
+  color: var(--meli-orange);
+  margin-top: 0;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ===== Status Messages ===== */
+.status-message {
+  padding: 8px 12px;
+  margin-top: 10px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  border: 1px solid transparent;
+}
+.status-message.info    { background-color: #e7f3fe; border-color: #d0eaff; color: #0c549c; }
+.status-message.success { background-color: #d4edda; border-color: #c3e6cb; color: #155724; }
+.status-message.warning { background-color: #fff3cd; border-color: #ffeeba; color: #856404; }
+.status-message.error   { background-color: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+
+/* ===== Botão primário (laranja MeliUnlocker) ===== */
+.btn-meli {
+  background-color: var(--meli-orange);
+  color: white;
+  padding: 10px 15px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95em;
+  transition: background-color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.btn-meli:hover {
+  background-color: var(--meli-orange-hover);
+}
+
+/* ===== Section Divider ===== */
+hr.section-divider {
+  border: 0;
+  height: 1px;
+  background-color: var(--border-light);
+  margin: 30px 0;
+}
+
+/* ===== Tab Pane Header (estilo MeliUnlocker) ===== */
+.tab-heading {
+  color: var(--heading);
+  margin-top: 0;
+  margin-bottom: 25px;
+  font-size: 1.4em;
+  font-weight: 500;
+  border-bottom: 1px solid #dde2e7;
+  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ===== ML Account Card style ===== */
+.ml-account-card {
+  background-color: var(--surface-card);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 12px 15px;
+  transition: box-shadow 0.2s ease-in-out;
+}
+.ml-account-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.ml-account-card.active {
+  border-left: 5px solid var(--meli-orange);
+  background-color: #fdf8f2;
+}

@@ -3,47 +3,162 @@ import React, { useState } from 'react';
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Aqui entrará a lógica de validação no banco de dados
-    onLogin();
+    setError('');
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.erro);
+      
+      onLogin(data);
+    } catch (err) {
+      setError(err.message);
+    }
   };
-
+  
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
-        <h2 className="text-2xl font-bold text-center text-gray-800 mb-6">Acesse sua Conta</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">E-mail</label>
-            <input 
-              type="email" 
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#2c3e50',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+        margin: 0,
+      }}
+    >
+      <div
+        style={{
+          backgroundColor: '#34495e',
+          padding: '30px 40px',
+          borderRadius: '8px',
+          boxShadow: '0 4px 15px rgba(0, 0, 0, 0.2)',
+          textAlign: 'center',
+          width: '380px',
+          maxWidth: '90vw',
+        }}
+      >
+        {/* Logo / Título */}
+        <div style={{ marginBottom: '8px' }}>
+          <div
+            style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, #e67e22, #f1c40f)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 16px',
+              boxShadow: '0 2px 10px rgba(230, 126, 34, 0.3)',
+            }}
+          >
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+        </div>
+        
+        <h2 style={{ color: '#ecf0f1', marginBottom: '25px', fontSize: '1.4em', fontWeight: 600 }}>
+          Painel Administrativo
+        </h2>
+
+        {error && (
+          <p style={{ color: '#e74c3c', marginBottom: '15px', fontSize: '0.9em' }}>
+            {error}
+          </p>
+        )}
+
+        <div onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
+          {/* Campo E-mail */}
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9em', color: '#bdc3c7' }}>
+              E-mail
+            </label>
+            <input
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               placeholder="seu@email.com"
-              required 
+              required
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #7f8c8d',
+                borderRadius: '4px',
+                backgroundColor: '#2c3e50',
+                color: '#ecf0f1',
+                fontSize: '0.95em',
+                boxSizing: 'border-box',
+                outline: 'none',
+                transition: 'border-color 0.3s ease',
+              }}
+              onFocus={(e) => e.target.style.borderColor = '#e67e22'}
+              onBlur={(e) => e.target.style.borderColor = '#7f8c8d'}
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Senha</label>
-            <input 
-              type="password" 
+
+          {/* Campo Senha */}
+          <div style={{ marginBottom: '25px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9em', color: '#bdc3c7' }}>
+              Senha
+            </label>
+            <input
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               placeholder="••••••••"
-              required 
+              required
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #7f8c8d',
+                borderRadius: '4px',
+                backgroundColor: '#2c3e50',
+                color: '#ecf0f1',
+                fontSize: '0.95em',
+                boxSizing: 'border-box',
+                outline: 'none',
+                transition: 'border-color 0.3s ease',
+              }}
+              onFocus={(e) => e.target.style.borderColor = '#e67e22'}
+              onBlur={(e) => e.target.style.borderColor = '#7f8c8d'}
             />
           </div>
-          <button 
-            type="submit" 
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
+
+          {/* Botão Entrar */}
+          <button
+            type="button"
+            onClick={handleSubmit}
+            style={{
+              width: '100%',
+              padding: '12px',
+              backgroundColor: '#e67e22',
+              border: 'none',
+              borderRadius: '4px',
+              color: 'white',
+              fontSize: '1em',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'background-color 0.3s ease',
+            }}
+            onMouseOver={(e) => e.target.style.backgroundColor = '#d35400'}
+            onMouseOut={(e) => e.target.style.backgroundColor = '#e67e22'}
           >
             Entrar
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );

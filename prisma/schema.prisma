@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String                  @id @default(uuid())
+  email        String                  @unique
+  senha        String
+  tinyToken    String?
+  createdAt    DateTime                @default(now())
+  contasMl     ContaML[]
+  perfisCompat PerfilCompatibilidade[]
+  produtos     Produto[]
+  regras       RegraPreco[]
+  tarefas      TarefaFila[]
+}
+
+model ContaML {
+  id           String      @id @default(uuid())
+  userId       String
+  nickname     String
+  accessToken  String
+  refreshToken String
+  expiresAt    BigInt
+  logistica    String      @default("ME2")
+  anuncios     AnuncioML[]
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AnuncioML {
+  id            String   @id
+  contaId       String
+  sku           String?
+  titulo        String
+  preco         Float
+  precoOriginal Float?
+  status        String
+  estoque       Int
+  vendas        Int      @default(0)
+  visitas       Int      @default(0)
+  thumbnail     String?
+  permalink     String?
+  dadosML       Json?
+  updatedAt     DateTime @updatedAt
+  tagPrincipal  String?
+  conta         ContaML  @relation(fields: [contaId], references: [id], onDelete: Cascade)
+
+  @@index([contaId])
+  @@index([tagPrincipal])
+}
+
+model RegraPreco {
+  id        String @id @default(uuid())
+  userId    String
+  nome      String
+  variaveis Json
+  precoBase String @default("promocional")
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Produto {
+  id        String   @id @default(uuid())
+  userId    String
+  sku       String
+  nome      String
+  preco     Float
+  estoque   Int
+  statusML  String   @default("Não Publicado")
+  dadosTiny Json?
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sku])
+  @@index([userId])
+}
+
+model PerfilCompatibilidade {
+  id                   String   @id @default(uuid())
+  userId               String
+  nome                 String
+  descricao            String?
+  compatibilidadesJson String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, nome])
+  @@index([userId])
+}
+
+model TarefaFila {
+  id         String   @id @default(uuid())
+  userId     String
+  jobId      String?
+  tipo       String
+  alvo       String?
+  conta      String?
+  status     String   @default("PENDENTE")
+  tentativas Int      @default(0)
+  detalhes   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

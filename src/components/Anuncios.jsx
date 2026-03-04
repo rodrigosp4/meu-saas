@@ -1,193 +1,254 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 
-
-export default function Anuncios() {
-  const [syncProgress, setSyncProgress] = useState(null);
+// DECLARE A FUNÇÃO APENAS UMA VEZ AQUI:
+export default function Anuncios({ onAnunciar, usuarioId }) { 
+  const [produtos, setProdutos] = useState([]);
+  const [totalProdutos, setTotalProdutos] = useState(0);
+  const[syncProgress, setSyncProgress] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
-  const [logs, setLogs] = useState([{ id: 1, time: new Date().toLocaleTimeString(), message: 'Sistema iniciado. Aguardando comandos...', type: 'info' }]);
+  const [isLoading, setIsLoading] = useState(false);
   
-  // A lista inicial de produtos agora está vazia. Ela será preenchida pela sincronização.
-  const [produtos, setProdutos] = useState([]);
+  const[isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [specificSku, setSpecificSku] = useState('');
 
-  const addLog = (message, type = 'info') => {
-    const newLog = { id: Date.now(), time: new Date().toLocaleTimeString(), message, type };
-    setLogs((prevLogs) => [newLog, ...prevLogs]);
+  const itemsPerPage = 50;
+
+  const fetchProdutos = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/produtos?userId=${usuarioId}&page=${currentPage}&limit=${itemsPerPage}&search=${searchTerm}&status=${statusFilter}`);
+      const data = await res.json();
+      setProdutos(data.produtos);
+      setTotalProdutos(data.total);
+    } catch (error) {
+      console.error("Erro ao buscar produtos:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-const iniciarSincronizacao = async () => {
-    if (syncProgress !== null) return;
+  useEffect(() => {
+    fetchProdutos();
+  }, [currentPage, searchTerm, statusFilter]);
 
-    addLog('Conectando ao nosso servidor para buscar produtos no Tiny...', 'info');
-    setSyncProgress(10);
-    setProdutos([]); // Limpa a tabela
+const iniciarSincronizacao = async (mode = 'all', sku = '') => {
+    const userDb = JSON.parse(localStorage.getItem('saas_usuario'));
+    const tinyToken = userDb?.tinyToken;
 
-    try {
-        const resposta = await fetch('http://localhost:3001/api/tiny-produtos', { method: 'POST' });
-        const dados = await resposta.json();
-
-        setSyncProgress(50);
-
-        if (!resposta.ok) {
-            // Se o nosso backend ou o Tiny deu erro, mostra no log
-            addLog(`[ERRO] ${dados.erro || 'Falha ao buscar produtos.'}`, 'error');
-            setSyncProgress(null);
-            return;
-        }
-
-        // Transforma os dados do Tiny para o formato da nossa tabela
-        const produtosFormatados = dados.map(item => ({
-            id: item.produto.id,
-            sku: item.produto.codigo,
-            nome: item.produto.nome,
-            estoque: parseFloat(item.produto.saldo),
-            preco: parseFloat(item.produto.preco),
-            statusML: 'Não Publicado' // Status padrão
-        }));
-
-        addLog(`[SUCESSO] ${produtosFormatados.length} produtos recebidos do Tiny!`, 'success');
-        setProdutos(produtosFormatados);
-
-        setSyncProgress(100);
-        setTimeout(() => setSyncProgress(null), 1500);
-
-    } catch (error) {
-        addLog(`[ERRO GRAVE] Não foi possível conectar ao nosso servidor backend. Ele está rodando?`, 'error');
-        setSyncProgress(null);
-    }
-};
-  
-  // (O resto das funções como `publicarNoML` continuam iguais)
-  const publicarNoML = (produto) => {
-    addLog(`Iniciando publicação do produto[${produto.sku}] no Mercado Livre...`, 'info');
-    if (produto.estoque <= 0) {
-      addLog(`[ERRO] Falha ao publicar ${produto.sku}: Estoque zerado.`, 'error');
+    if (!tinyToken) {
+      alert("Vá em Configurações e salve seu Token do Tiny ERP primeiro!");
       return;
     }
-    addLog(`Enviando POST para https://api.mercadolibre.com/items com os dados de [${produto.sku}]...`, 'warning');
-    setTimeout(() => {
-      addLog(`[SUCESSO] Produto ${produto.sku} publicado! ID: MLB${Math.floor(Math.random() * 1000000000)}`, 'success');
-      const novosProdutos = produtos.map(p => p.id === produto.id ? { ...p, statusML: 'Ativo' } : p);
-      setProdutos(novosProdutos);
-    }, 1000);
+
+    setIsSyncModalOpen(false);
+    setSyncProgress(0);
+
+    try {
+      const res = await fetch('/api/produtos/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, tinyToken, mode, sku })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || "Falha ao iniciar sincronização");
+
+      const jobId = data.jobId;
+
+      const interval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/produtos/sync-status/${jobId}`);
+          const statusData = await statusRes.json();
+
+          if (statusData.state === 'completed') {
+            clearInterval(interval);
+            setSyncProgress(100);
+            setTimeout(() => {
+              setSyncProgress(null);
+              fetchProdutos();
+              alert("✅ Sincronização concluída com sucesso!");
+            }, 500);
+          } else if (statusData.state === 'failed') {
+            clearInterval(interval);
+            setSyncProgress(null);
+            alert("❌ Erro ao sincronizar. Verifique o terminal do Worker.");
+          } else {
+            setSyncProgress(statusData.progress || 5);
+          }
+        } catch (e) {
+          console.error("Erro ao checar status:", e);
+        }
+      }, 1500);
+
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao conectar com o servidor: " + error.message);
+      setSyncProgress(null);
+    }
   };
 
-  const produtosFiltrados = useMemo(() => {
-    return produtos.filter(produto => {
-      const matchSearch = produto.nome.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          produto.sku.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchStatus = statusFilter === 'Todos' || produto.statusML === statusFilter;
-      return matchSearch && matchStatus;
-    });
-  }, [produtos, searchTerm, statusFilter]);
-
-  const totalPages = Math.ceil(produtosFiltrados.length / itemsPerPage);
-  const currentItems = produtosFiltrados.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const getVariacoesInfo = (produto) => {
+    const variacoes = produto.dadosTiny?.variacoes;
+    if (!variacoes) return { isPai: false, qtd: 0 };
+    const lista = Array.isArray(variacoes) ? variacoes : Object.values(variacoes);
+    return { isPai: lista.length > 0, qtd: lista.length };
+  };
 
   return (
     <div className="space-y-6">
-      {/* O resto do HTML (JSX) continua exatamente o mesmo da versão anterior */}
+      {/* MODAL DE SINCRONIZAÇÃO */}
+      {isSyncModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" style={{ animation: 'fadeIn 0.3s ease-out' }}>
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" style={{ animation: 'slideIn 0.3s ease-out' }}>
+            <h4 className="text-lg font-bold mb-4" style={{ color: '#34495e' }}>Opções de Sincronização</h4>
+            
+            <div className="p-4 border rounded-md mb-4" style={{ backgroundColor: '#d4edda', borderColor: '#c3e6cb' }}>
+              <h5 className="font-semibold" style={{ color: '#155724' }}>⚡ Sincronização Rápida</h5>
+              <p className="text-sm mb-3" style={{ color: '#155724' }}>Busca apenas os últimos ~500 produtos.</p>
+              <button onClick={() => iniciarSincronizacao('recentes')} className="w-full px-4 py-2 text-white font-semibold rounded shadow-sm transition" style={{ backgroundColor: '#27ae60' }}
+                onMouseOver={e => e.target.style.backgroundColor = '#229954'}
+                onMouseOut={e => e.target.style.backgroundColor = '#27ae60'}
+              >
+                Sincronizar Recentes
+              </button>
+            </div>
+
+            <div className="p-4 border rounded-md mb-4" style={{ borderColor: '#e0e0e0' }}>
+              <h5 className="font-semibold" style={{ color: '#34495e' }}>Buscar SKU Específico</h5>
+              <div className="flex gap-2 mt-2">
+                <input type="text" value={specificSku} onChange={(e) => setSpecificSku(e.target.value)} placeholder="Ex: SKU-12345" className="w-full px-3 py-2 border rounded-md text-sm" />
+                <button onClick={() => iniciarSincronizacao('sku', specificSku)} disabled={!specificSku} className="px-4 py-2 text-white font-semibold rounded shadow-sm transition disabled:opacity-50" style={{ backgroundColor: '#2d3e50' }}>
+                  Buscar
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 border rounded-md" style={{ borderColor: '#f5c6cb' }}>
+              <h5 className="font-semibold" style={{ color: '#c0392b' }}>Atualização Completa</h5>
+              <button onClick={() => iniciarSincronizacao('all')} className="mt-2 w-full px-4 py-2 bg-white font-semibold rounded shadow-sm transition" style={{ border: '1px solid #c0392b', color: '#c0392b' }}>
+                Iniciar Atualização Completa
+              </button>
+            </div>
+            
+            <button onClick={() => setIsSyncModalOpen(false)} className="mt-4 text-sm font-semibold w-full text-center" style={{ color: '#7f8c8d' }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-start">
         <div>
-          <h3 className="text-xl font-medium text-gray-900">Gerenciador de Anúncios</h3>
-          <p className="text-sm text-gray-500 mb-4">Seu estoque Tiny espelhado e pronto para vender no Mercado Livre.</p>
+          <h3 className="text-xl font-medium" style={{ color: '#2c3e50' }}>Produtos do ERP (Catálogo Local)</h3>
+          <p className="text-sm mb-4" style={{ color: '#7f8c8d' }}>{totalProdutos} produtos no banco de dados.</p>
+          
           {syncProgress !== null && (
             <div className="w-full max-w-md">
               <div className="flex justify-between mb-1">
-                <span className="text-xs font-medium text-blue-700">Sincronizando em background...</span>
-                <span className="text-xs font-medium text-blue-700">{syncProgress}%</span>
+                <span className="text-xs font-medium" style={{ color: '#e67e22' }}>Sincronizando com o Tiny...</span>
+                <span className="text-xs font-medium" style={{ color: '#e67e22' }}>{syncProgress}%</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-blue-600 h-2 rounded-full" style={{ width: `${syncProgress}%` }}></div></div>
+              <div className="w-full rounded-full h-2" style={{ backgroundColor: '#e0e0e0' }}>
+                <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${syncProgress}%`, backgroundColor: '#e67e22' }}></div>
+              </div>
             </div>
           )}
         </div>
         <button 
-          onClick={iniciarSincronizacao}
-          disabled={syncProgress !== null}
-          className="px-4 py-2 bg-blue-600 text-white font-semibold rounded shadow-sm hover:bg-blue-700 transition disabled:opacity-50"
+          onClick={() => setIsSyncModalOpen(true)} 
+          disabled={syncProgress !== null} 
+          className="px-4 py-2 text-white font-semibold rounded shadow-sm transition disabled:opacity-50"
+          style={{ backgroundColor: '#e67e22' }}
+          onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = '#d35400'; }}
+          onMouseOut={e => e.target.style.backgroundColor = '#e67e22'}
         >
           {syncProgress !== null ? 'Sincronizando...' : '🔄 Sincronizar com Tiny'}
         </button>
       </div>
-      
-      <div className="flex gap-4 bg-white p-4 rounded-lg shadow-sm border">
-        <input 
-          type="text" 
-          placeholder="Buscar por SKU ou Nome..." 
-          value={searchTerm}
-          onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-          className="w-full px-3 py-2 border rounded-md text-sm"
-        />
-        <select 
-          value={statusFilter}
-          onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
-          className="w-64 px-3 py-2 border rounded-md text-sm"
-        >
+
+      <div className="flex gap-4 p-4 rounded-lg shadow-sm" style={{ backgroundColor: '#ffffff', border: '1px solid #e0e0e0' }}>
+        <input type="text" placeholder="Buscar por SKU ou Nome..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full px-3 py-2 border rounded-md text-sm" />
+        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }} className="w-64 px-3 py-2 border rounded-md text-sm">
           <option value="Todos">Todos os Status</option>
-          <option value="Ativo">Ativos</option>
+          <option value="Ativo">Ativos ML</option>
           <option value="Não Publicado">Não Publicados</option>
-          <option value="Pausado">Pausados</option>
         </select>
       </div>
-      
-      <div className="bg-white shadow-sm border rounded-lg overflow-hidden">
-        <table className="min-w-full divide-y">
-          <thead className="bg-gray-50">
+
+      <div className="shadow-sm rounded-lg overflow-hidden" style={{ backgroundColor: '#ffffff', border: '1px solid #e0e0e0' }}>
+        <table className="min-w-full divide-y" style={{ borderColor: '#e0e0e0' }}>
+          <thead style={{ backgroundColor: '#f0f2f5' }}>
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Produto</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Estoque</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Preço</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status ML</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>SKU</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Produto</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Estoque</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Preço</th>
+              <th className="px-6 py-3 text-right text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Ações</th>
             </tr>
           </thead>
-          <tbody className="bg-white divide-y">
-            {currentItems.length > 0 ? (
-              currentItems.map((produto) => (
-                <tr key={produto.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-medium">{produto.sku}</td>
-                  <td className="px-6 py-4 text-sm">{produto.nome}</td>
-                  <td className="px-6 py-4 text-sm">{produto.estoque} un</td>
-                  <td className="px-6 py-4 text-sm">R$ {produto.preco.toFixed(2).replace('.', ',')}</td>
-                  <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${produto.statusML === 'Ativo' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>{produto.statusML}</span>
-                  </td>
-                  <td className="px-6 py-4 text-right text-sm font-medium">
-                    {produto.statusML === 'Não Publicado' ? (
-                      <button onClick={() => publicarNoML(produto)} className="text-blue-600 hover:text-blue-900 font-bold">Publicar</button>
-                    ) : (
-                      <button className="text-gray-500 underline">Ver Anúncio</button>
-                    )}
-                  </td>
-                </tr>
-              ))
+          <tbody className="divide-y" style={{ backgroundColor: '#ffffff' }}>
+            {isLoading ? (
+              <tr><td colSpan="5" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Buscando no banco de dados...</td></tr>
+            ) : produtos.length > 0 ? (
+              produtos.map((produto) => {
+                const varInfo = getVariacoesInfo(produto);
+                
+                return (
+                  <tr key={produto.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-bold" style={{ color: '#34495e' }}>{produto.sku}</td>
+                    
+                    <td className="px-6 py-4 text-sm">
+                      <div className="font-medium" style={{ color: '#2c3e50' }}>{produto.nome}</div>
+                      {varInfo.isPai && (
+                        <div className="mt-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-bold shadow-sm" 
+                          style={{ backgroundColor: '#fdf8f2', color: '#e67e22', border: '1px solid #f1c40f' }}>
+                          📦 Produto Pai ({varInfo.qtd} Variações)
+                        </div>
+                      )}
+                    </td>
+
+                    <td className="px-6 py-4 text-sm">
+                      <span className="font-semibold" style={{ color: produto.estoque > 0 ? '#27ae60' : '#7f8c8d' }}>
+                         {produto.estoque} un
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm font-medium">R$ {produto.preco.toFixed(2).replace('.', ',')}</td>
+                    <td className="px-6 py-4 text-right text-sm font-medium">
+                      <button onClick={() => {
+                          const idCorreto = produto.dadosTiny?.id || produto.idTiny;
+                          if (!idCorreto) return alert("Erro: Produto sem ID do Tiny salvo.");
+                          
+                          onAnunciar({
+                            id: idCorreto, 
+                            sku: produto.sku,
+                            nome: produto.nome,
+                            preco: produto.preco,
+                            dadosTiny: produto.dadosTiny
+                          });
+                        }} 
+                        className="text-white px-3 py-1.5 rounded-md text-xs font-bold shadow-sm transition-colors"
+                        style={{ backgroundColor: '#e67e22' }}
+                        onMouseOver={e => e.target.style.backgroundColor = '#d35400'}
+                        onMouseOut={e => e.target.style.backgroundColor = '#e67e22'}
+                      >
+                        Criar Anúncio
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
             ) : (
-              <tr>
-                <td colSpan="6" className="px-6 py-8 text-center text-sm text-gray-500">
-                  {syncProgress !== null ? 'Carregando produtos...' : 'Nenhum produto encontrado. Clique em "Sincronizar com Tiny" para buscar.'}
-                </td>
-              </tr>
+              <tr><td colSpan="5" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Nenhum produto encontrado. Sincronize com o Tiny.</td></tr>
             )}
           </tbody>
         </table>
-        {/* PAGINAÇÃO (igual) */}
-      </div>
-      
-      <div className="bg-gray-900 rounded-lg shadow-inner overflow-hidden h-64 border flex flex-col">
-        <div className="bg-gray-800 px-4 py-2 border-b flex justify-between items-center">
-          <span className="text-xs font-bold text-gray-300 uppercase">Terminal de Eventos</span>
-          <button onClick={() => setLogs([])} className="text-xs text-gray-500 hover:text-white">Limpar Logs</button>
-        </div>
-        <div className="p-4 overflow-y-auto flex-1 font-mono text-xs space-y-1">
-          {logs.map((log) => (
-            <div key={log.id} className="flex gap-3">
-              <span className="text-gray-500">[{log.time}]</span>
-              <span className={`${log.type === 'success' ? 'text-green-400' : log.type === 'error' ? 'text-red-400 font-bold' : log.type === 'warning' ? 'text-yellow-400' : 'text-blue-400'}`}>{log.message}</span>
-            </div>
-          ))}
+        
+        <div className="flex items-center justify-between p-4" style={{ borderTop: '1px solid #e0e0e0' }}>
+          <span className="text-sm" style={{ color: '#555' }}>Mostrando página {currentPage}</span>
+          <div className="flex gap-2">
+            <button className="px-3 py-1 border rounded disabled:opacity-50" style={{ borderColor: '#ccd0d5', color: '#34495e' }} disabled={currentPage <= 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>Anterior</button>
+            <button className="px-3 py-1 border rounded disabled:opacity-50" style={{ borderColor: '#ccd0d5', color: '#34495e' }} disabled={produtos.length < itemsPerPage} onClick={() => setCurrentPage(p => p + 1)}>Próxima</button>
+          </div>
         </div>
       </div>
     </div>

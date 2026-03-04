@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Login from './components/Login';
 import DashboardLayout from './components/DashboardLayout';
 import Configuracoes from './components/Configuracoes';
@@ -40,8 +40,10 @@ function App() {
     }
   }, []); 
 
-  if (!usuarioLogado) {
-    return <Login onLogin={handleLogin} />;
+  const resetToken = new URLSearchParams(window.location.search).get('resetToken');
+
+  if (!usuarioLogado || resetToken) {
+    return <Login onLogin={handleLogin} initialToken={resetToken} />;
   }
 
   return (

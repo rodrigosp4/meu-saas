@@ -4,27 +4,29 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-  "node": ">=18.0.0"
-},
-"scripts": {
-  "dev": "vite",
-  "build": "vite build",
-  "start": "node backend/src/server.js",
-  "lint": "eslint .",
-  "preview": "vite preview",
-  "server": "node backend/src/server.js",
-  "worker": "node backend/src/workers/sync.worker.js",
-  "postinstall": "prisma generate"
-},
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node backend/src/server.js",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "server": "node backend/src/server.js",
+    "worker": "node backend/src/workers/sync.worker.js",
+    "postinstall": "prisma generate"
+  },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "@tailwindcss/vite": "^4.2.1",
     "axios": "^1.13.5",
+    "bcryptjs": "^3.0.3",
     "bullmq": "^5.70.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "ioredis": "^5.10.0",
+    "nodemailer": "^8.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

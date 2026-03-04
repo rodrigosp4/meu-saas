@@ -9,16 +9,18 @@ datasource db {
 }
 
 model User {
-  id           String                  @id @default(uuid())
-  email        String                  @unique
-  senha        String
-  tinyToken    String?
-  createdAt    DateTime                @default(now())
-  contasMl     ContaML[]
-  perfisCompat PerfilCompatibilidade[]
-  produtos     Produto[]
-  regras       RegraPreco[]
-  tarefas      TarefaFila[]
+  id                   String                  @id @default(uuid())
+  email                String                  @unique
+  senha                String
+  tinyToken            String?
+  createdAt            DateTime                @default(now())
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  contasMl             ContaML[]
+  perfisCompat         PerfilCompatibilidade[]
+  produtos             Produto[]
+  regras               RegraPreco[]
+  tarefas              TarefaFila[]
 }
 
 model ContaML {

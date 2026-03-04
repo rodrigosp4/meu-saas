@@ -3,7 +3,7 @@ import { mlController } from '../controllers/ml.controller.js';
 
 const router = Router();
 
-router.get('/', mlController.handleCallback);
+router.get('/callback', mlController.handleCallback);
 router.post('/api/ml/auth', mlController.auth);
 router.post('/api/ml/refresh-token', mlController.refreshToken);
 router.get('/api/ml/categories', mlController.getCategories);

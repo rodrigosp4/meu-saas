@@ -408,6 +408,10 @@ export const mlWorker = new Worker('sync-ml', async (job) => {
   drainDelay: 10
 });
 
+mlWorker.on('error', (err) => {
+  console.error('❌ Erro no Worker ML (Redis):', err.message);
+});
+
 
 // ============================================================================
 // FUNÇÕES AUXILIARES

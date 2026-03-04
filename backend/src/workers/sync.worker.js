@@ -162,3 +162,7 @@ syncWorker.on('completed', (job) => {
 syncWorker.on('failed', (job, err) => {
   console.log(`❌ Falha na Sincronização (Job ${job.id}): ${err.message}`);
 });
+
+syncWorker.on('error', (err) => {
+  console.error('❌ Erro no Worker de Sincronização (Redis):', err.message);
+});

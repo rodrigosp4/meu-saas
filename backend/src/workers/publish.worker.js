@@ -137,10 +137,14 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
 
     throw new Error(erroTxt);
   }
-}, { 
-  connection, 
+}, {
+  connection,
   concurrency: 1,
   stalledInterval: 120000,
   lockDuration: 300000,
   drainDelay: 10
+});
+
+publishWorker.on('error', (err) => {
+  console.error('❌ Erro no Worker de Publicação (Redis):', err.message);
 });

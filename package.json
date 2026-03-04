@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-  "node": ">=22.12"
+  "node": ">=18.0.0"
 },
 "scripts": {
   "dev": "vite",
@@ -42,9 +42,6 @@
     "postcss": "^8.5.6",
     "prisma": "^5.22.0",
     "tailwindcss": "^4.2.1",
-    "vite": "^8.0.0-beta.13"
-  },
-  "overrides": {
-    "vite": "^8.0.0-beta.13"
+    "vite": "^6.0.0"
   }
 }

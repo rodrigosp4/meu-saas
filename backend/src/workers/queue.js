@@ -21,3 +21,7 @@ const defaultOpts = {
 export const syncQueue = new Queue('sync-tiny', defaultOpts);
 export const mlSyncQueue = new Queue('sync-ml', defaultOpts);
 export const publishQueue = new Queue('publish-ml', defaultOpts);
+
+syncQueue.on('error', (err) => console.error('❌ Erro na Queue sync-tiny (Redis):', err.message));
+mlSyncQueue.on('error', (err) => console.error('❌ Erro na Queue sync-ml (Redis):', err.message));
+publishQueue.on('error', (err) => console.error('❌ Erro na Queue publish-ml (Redis):', err.message));

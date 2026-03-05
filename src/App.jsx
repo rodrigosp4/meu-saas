@@ -29,16 +29,19 @@ function App() {
     localStorage.removeItem('saas_usuario');
   }
   
-  const [activePage, setActivePage] = useState('home');
+  const [activePage, setActivePage] = useState(() => {
+    const redirectPage = localStorage.getItem('redirect_to_page');
+    if (redirectPage) {
+      localStorage.removeItem('redirect_to_page');
+      return redirectPage;
+    }
+    return localStorage.getItem('saas_active_page') || 'home';
+  });
   const [produtoParaAnunciar, setProdutoParaAnunciar] = useState(null);
 
   useEffect(() => {
-    const redirectPage = localStorage.getItem('redirect_to_page');
-    if (redirectPage) {
-      setActivePage(redirectPage);
-      localStorage.removeItem('redirect_to_page');
-    }
-  }, []); 
+    localStorage.setItem('saas_active_page', activePage);
+  }, [activePage]); 
 
   const resetToken = new URLSearchParams(window.location.search).get('resetToken');
 

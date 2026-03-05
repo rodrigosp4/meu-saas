@@ -171,6 +171,7 @@ export default function Configuracoes({ usuarioId }) {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(novaConta)
         });
         const contaSalva = await resDb.json();
+        if (!resDb.ok) throw new Error(contaSalva.erro || 'Erro ao salvar conta no banco.');
         setContasML(prev => {
           const index = prev.findIndex(c => String(c.id) === String(contaSalva.id));
           if (index >= 0) { const copia = [...prev]; copia[index] = contaSalva; return copia; }

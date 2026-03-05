@@ -17,7 +17,8 @@ export default function Configuracoes({ usuarioId }) {
 
   // 1. CARREGA TUDO DO BANCO DE DADOS
   const carregarConfig = (id) => {
-    return fetch(`/api/usuario/${id}/config`)
+    // O Date.now() impede que a Vercel entregue dados cacheados (antigos)
+    return fetch(`/api/usuario/${id}/config?t=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
         if (data.tinyToken) {
@@ -179,7 +180,14 @@ export default function Configuracoes({ usuarioId }) {
         });
         const contaSalva = await resDb.json();
         if (!resDb.ok) throw new Error(contaSalva.erro || 'Erro ao salvar conta no banco.');
-        // Re-busca do banco para garantir que o estado reflete o que foi salvo
+        
+        // 👇 FORÇA A CONTA A APARECER NA TELA IMEDIATAMENTE
+        setContasML(prev => {
+          const existe = prev.find(c => c.id === contaSalva.id);
+          if (existe) return prev.map(c => c.id === contaSalva.id ? contaSalva : c);
+          return [...prev, contaSalva];
+        });
+
         await carregarConfig(usuarioId);
         alert('Conta do Mercado Livre conectada com sucesso!');
       } catch (e) { alert('Erro: ' + e.message); }

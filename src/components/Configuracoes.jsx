@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function Configuracoes({ usuarioId }) {
   const [tinyToken, setTinyToken] = useState('');
   const [isTokenSalvo, setIsTokenSalvo] = useState(false);
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
+  const isProcessingOAuth = useRef(new URLSearchParams(window.location.search).has('code'));
   
   const [novaRegraNome, setNovaRegraNome] = useState('');
   const [novaRegraPrecoBase, setNovaRegraPrecoBase] = useState('promocional'); 
@@ -15,8 +16,8 @@ export default function Configuracoes({ usuarioId }) {
   const [editandoRegraId, setEditandoRegraId] = useState(null);
 
   // 1. CARREGA TUDO DO BANCO DE DADOS
-  useEffect(() => {
-    fetch(`/api/usuario/${usuarioId}/config`)
+  const carregarConfig = (id) => {
+    return fetch(`/api/usuario/${id}/config`)
       .then(res => res.json())
       .then(data => {
         if (data.tinyToken) {
@@ -28,6 +29,12 @@ export default function Configuracoes({ usuarioId }) {
         localStorage.setItem('saas_contas_ml', JSON.stringify(data.contasML || []));
         localStorage.setItem('saas_regras_preco', JSON.stringify(data.regrasPreco || []));
       });
+  };
+
+  useEffect(() => {
+    // Pula o carregamento inicial se há um código OAuth — o Effect 5 fará o reload após salvar
+    if (isProcessingOAuth.current) return;
+    carregarConfig(usuarioId);
   }, [usuarioId]);
 
   // 2. SALVAR TOKEN TINY NO BANCO
@@ -172,11 +179,8 @@ export default function Configuracoes({ usuarioId }) {
         });
         const contaSalva = await resDb.json();
         if (!resDb.ok) throw new Error(contaSalva.erro || 'Erro ao salvar conta no banco.');
-        setContasML(prev => {
-          const index = prev.findIndex(c => String(c.id) === String(contaSalva.id));
-          if (index >= 0) { const copia = [...prev]; copia[index] = contaSalva; return copia; }
-          return [...prev, contaSalva];
-        });
+        // Re-busca do banco para garantir que o estado reflete o que foi salvo
+        await carregarConfig(usuarioId);
         alert('Conta do Mercado Livre conectada com sucesso!');
       } catch (e) { alert('Erro: ' + e.message); }
     })();

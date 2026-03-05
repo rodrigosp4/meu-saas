@@ -175,7 +175,8 @@ router.post('/api/usuario/:id/contas-ml', async (req, res) => {
 
     const conta = await prisma.contaML.upsert({
       where: { id: String(id) },
-      update: { accessToken, refreshToken, expiresAt: BigInt(expiresAt), nickname, logistica: logisticaReal },
+      // 👇 AQUI: Adicionado userId: req.params.id no update
+      update: { userId: req.params.id, accessToken, refreshToken, expiresAt: BigInt(expiresAt), nickname, logistica: logisticaReal },
       create: { id: String(id), userId: req.params.id, nickname, accessToken, refreshToken, expiresAt: BigInt(expiresAt), logistica: logisticaReal }
     });
 

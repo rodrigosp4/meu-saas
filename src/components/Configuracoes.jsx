@@ -15,19 +15,22 @@ export default function Configuracoes({ usuarioId }) {
   const [varValor, setVarValor] = useState('');
   const [editandoRegraId, setEditandoRegraId] = useState(null);
 
-  // 1. CARREGA TUDO DO BANCO DE DADOS
+// 1. CARREGA TUDO DO BANCO DE DADOS
   const carregarConfig = (id) => {
     // O Date.now() impede que a Vercel entregue dados cacheados (antigos)
     return fetch(`/api/usuario/${id}/config?t=${Date.now()}`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error('Falha ao carregar dados do servidor');
+        return res.json();
+      })
       .then(data => {
         if (data.tinyToken) {
           setTinyToken(data.tinyToken);
           setIsTokenSalvo(true);
         }
-        setContasML(data.contasML || []);
-        setRegrasPreco(data.regrasPreco || []);
-        localStorage.setItem('saas_contas_ml', JSON.stringify(data.contasML || []));
+        setContasML(data.contasML ||[]);
+        setRegrasPreco(data.regrasPreco ||[]);
+        localStorage.setItem('saas_contas_ml', JSON.stringify(data.contasML ||[]));
         localStorage.setItem('saas_regras_preco', JSON.stringify(data.regrasPreco || []));
       });
   };

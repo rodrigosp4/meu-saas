@@ -66,10 +66,14 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
         } else {
           idsToFetch.push(...items.map(p => p.produto.id));
           page++;
+          
+          // ✅ NOVO: Delay de 300ms entre as páginas para não tomar bloqueio da API da Tiny (Erro 429)
+          await delay(300);
         }
         
-        // Trava de segurança para não rodar infinitamente no plano grátis (Muda conforme sua necessidade)
-        if (page > 10) break; 
+        // Aumentamos a trava para 500 páginas (suporta até 50.000 produtos). 
+        // Impede apenas loops infinitos caso a API da Tiny bugue.
+        if (page > 500) break; 
       }
     }
   } catch (error) {

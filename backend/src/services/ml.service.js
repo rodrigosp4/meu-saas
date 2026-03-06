@@ -76,6 +76,15 @@ export const mlService = {
     return res.data.coverage?.all_country?.list_cost || 0;
   },
 
+  async getShippingCostByItemId(accessToken, sellerId, itemId) {
+    const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
+    const res = await axios.get(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { item_id: itemId, free_shipping: true, verbose: true }
+    });
+    return res.data.coverage?.all_country?.list_cost || 0;
+  },
+
   async publishSmart({ accessToken, payload, description }) {
     try {
       const res = await axios.post('https://api.mercadolibre.com/items', payload, { 
@@ -107,7 +116,7 @@ export const mlService = {
     const attrs = 'id,title,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health';
     
     const [detailsRes, visitsRes, salePriceRes] = await Promise.all([
-      axios.get(`https://api.mercadolibre.com/items/${itemId}?attributes=${attrs}`, {
+      axios.get(`https://api.mercadolibre.com/items/${itemId}?include_attributes=all&attributes=${attrs}`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       }).catch(err => { throw err; }),
 
@@ -140,5 +149,36 @@ export const mlService = {
       params: { seller_sku: sku }
     });
     return res.data.results || [];
+  },
+
+  async getQuestions(sellerId, accessToken, status = 'UNANSWERED', offset = 0, limit = 50) {
+    const res = await axios.get('https://api.mercadolibre.com/questions/search', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { seller_id: sellerId, api_version: 4, status, offset, limit, sort_fields: 'date_created', sort_types: 'DESC' }
+    });
+    return res.data;
+  },
+
+  async getItemQuestions(itemId, accessToken) {
+    const res = await axios.get('https://api.mercadolibre.com/questions/search', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { item: itemId, api_version: 4, limit: 50, sort_fields: 'date_created', sort_types: 'ASC' }
+    });
+    return res.data;
+  },
+
+  async answerQuestion(questionId, text, accessToken) {
+    const res = await axios.post('https://api.mercadolibre.com/answers',
+      { question_id: questionId, text },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    return res.data;
+  },
+
+  async deleteQuestion(questionId, accessToken) {
+    const res = await axios.delete(`https://api.mercadolibre.com/questions/${questionId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    return res.data;
   }
 };

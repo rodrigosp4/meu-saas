@@ -11,9 +11,11 @@ router.get('/api/ml/categories-all', mlController.getAllCategories);
 router.get('/api/ml/category-attributes/:categoryId', mlController.getAttributes);
 router.get('/api/ml/predict-category', mlController.predictCategory);
 router.post('/api/ml/simulate-shipping', mlController.simulateShipping);
+router.post('/api/ml/shipping-cost-items', mlController.getShippingCostItems);
 router.post('/api/ml/publish', mlController.publish);
 
 router.post('/api/ml/sync-ads', mlController.syncAds);
+router.post('/api/ml/sync-all-ads', mlController.syncAllAds);
 router.get('/api/ml/sync-ads-status/:id', mlController.getSyncStatus);
 router.get('/api/ml/anuncios', mlController.getAds);
 
@@ -22,6 +24,11 @@ router.get('/api/ml/anuncios/tags', mlController.getAdTags);
 
 router.get('/api/ml/anuncio/:itemId', mlController.getAdById);
 router.post('/api/ml/anuncios-por-sku', mlController.getAdsBySku);
+router.post('/api/ml/corrigir-preco', mlController.corrigirPreco);
 
+router.get('/api/ml/perguntas', mlController.getPerguntas);
+router.get('/api/ml/perguntas/item', mlController.getItemPerguntas);
+router.post('/api/ml/responder-pergunta', mlController.responderPergunta);
+router.delete('/api/ml/excluir-pergunta/:questionId', mlController.excluirPergunta);
 
 export default router;

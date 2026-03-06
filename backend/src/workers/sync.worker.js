@@ -106,6 +106,19 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       if (det && det.codigo) {
         const estoqueAtual = est ? Number(est.saldo) : 0;
         const preco = Number(det.preco) || 0;
+
+        // =======================================================================
+        //  ✅ INÍCIO DA CORREÇÃO: Adicione este bloco de código
+        //  Normaliza o campo 'variacoes' para ser sempre um array
+        // =======================================================================
+        if (det.variacoes && typeof det.variacoes === 'object' && !Array.isArray(det.variacoes)) {
+          console.log(`[sync.worker] Normalizando variações do SKU ${det.codigo} de Objeto para Array.`);
+          det.variacoes = Object.values(det.variacoes);
+        }
+        // =======================================================================
+        //  ✅ FIM DA CORREÇÃO
+        // =======================================================================
+
         const dadosCompletos = { ...det, estoque_atual: estoqueAtual };
 
         // Usa o upsert do Prisma (Se o SKU já existe para esse usuário, ele atualiza. Se não, ele cria)
@@ -118,7 +131,7 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
             nome: det.nome,
             preco: preco,
             estoque: estoqueAtual,
-            dadosTiny: dadosCompletos
+            dadosTiny: dadosCompletos // <-- 'dadosCompletos' agora terá as variações normalizadas
           },
           create: {
             userId: userId,
@@ -127,7 +140,7 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
             preco: preco,
             estoque: estoqueAtual,
             statusML: 'Não Publicado',
-            dadosTiny: dadosCompletos
+            dadosTiny: dadosCompletos // <-- 'dadosCompletos' agora terá as variações normalizadas
           }
         });
       }

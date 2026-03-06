@@ -378,7 +378,7 @@ export default function Configuracoes({ usuarioId }) {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="font-bold" style={{ color: v.valor >= 0 ? c.orange : c.red }}>
-                        {v.valor > 0 ? '+' : ''}{v.tipo === 'fixo_custo' ? `R$ ${v.valor}` : `${v.valor}%`} 
+                        {v.valor > 0 ? '+' : ''}{v.tipo === 'fixo_custo' ? `R$ ${v.valor}` : `${v.valor}%`}
                         <span className="text-xs font-normal ml-1" style={{ color: c.muted }}>
                           ({v.tipo === 'perc_venda' ? 'S/ Venda' : 'S/ Custo'})
                         </span>

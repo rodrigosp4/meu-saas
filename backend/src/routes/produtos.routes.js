@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import prisma from '../config/prisma.js';
+import { Prisma } from '@prisma/client';
 import { syncQueue } from '../workers/queue.js';
 import axios from 'axios';
 import { config } from '../config/env.js';
@@ -10,14 +11,10 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 router.get('/api/produtos', async (req, res) => {
   try {
-    // 1. Receba o userId da query
     const { userId, search = '', status = 'Todos', page = 1, limit = 50 } = req.query;
-    
     if (!userId) return res.status(400).json({ erro: "userId obrigatório" });
 
     const skip = (Number(page) - 1) * Number(limit);
-
-    // 2. Adicione o userId como filtro obrigatório (WHERE)
     const where = { userId: userId }; 
     
     if (search) {
@@ -38,6 +35,85 @@ router.get('/api/produtos', async (req, res) => {
     res.status(500).json({ erro: "Erro ao buscar produtos no banco de dados." });
   }
 });
+
+// ===== BUSCA PREÇOS BASE DOS PRODUTOS POR SKU (para o modal Corrigir Preço) =====
+// ✅ CORRIGIDO: Lógica otimizada para buscar SKUs de pais e filhos de forma mais eficiente.
+router.post('/api/produtos/precos-base', async (req, res) => {
+  try {
+    const { userId, skus } = req.body;
+    if (!userId || !skus || !Array.isArray(skus) || skus.length === 0) {
+      return res.status(400).json({ erro: 'userId e skus[] são obrigatórios.' });
+    }
+
+    const skusLimpos = [...new Set(skus.filter(s => s))];
+    const mapaPrecos = {};
+
+    // --- ETAPA 1: Busca produtos cujo SKU principal corresponde aos da lista
+    const produtosPrincipais = await prisma.produto.findMany({
+      where: { userId, sku: { in: skusLimpos } },
+      select: { sku: true, preco: true, dadosTiny: true }
+    });
+
+    for (const p of produtosPrincipais) {
+      const dados = p.dadosTiny || {};
+      mapaPrecos[p.sku] = {
+        preco: Number(dados.preco || p.preco || 0),
+        preco_promocional: Number(dados.preco_promocional || 0),
+        preco_custo: Number(dados.preco_custo || 0),
+      };
+    }
+
+// --- ETAPA 2: Busca os SKUs que NÃO foram encontrados (podem ser variações)
+    const skusRestantes = skusLimpos.filter(s => !mapaPrecos[s]);
+
+    if (skusRestantes.length > 0) {
+      // A abordagem via jsonb_to_recordset quebra caso a estrutura de variações no banco 
+      // (originada do ERP) mude ou venha como Objeto no lugar de Array.
+      // Em vez disso, filtramos os produtos que contém 'variacoes' e extraímos via Javascript (à prova de falhas).
+      const produtosComVariacoes = await prisma.$queryRawUnsafe(`
+        SELECT sku, "dadosTiny"
+        FROM "Produto"
+        WHERE "userId" = $1
+          AND "dadosTiny"::text LIKE '%variacoes%'
+      `, userId);
+      
+      for (const p of produtosComVariacoes) {
+        const dadosPai = p.dadosTiny || {};
+        let variacoes = dadosPai.variacoes;
+
+        if (!variacoes) continue;
+
+        // O Tiny às vezes retorna objeto em vez de array. Normalizamos aqui.
+        if (typeof variacoes === 'object' && !Array.isArray(variacoes)) {
+          variacoes = Object.values(variacoes);
+        }
+
+        if (Array.isArray(variacoes)) {
+          for (const v of variacoes) {
+            // O Tiny envelopa os dados dentro de 'variacao', mas as vezes não.
+            const varObj = v.variacao || v;
+            const skuFilho = String(varObj.codigo || '').trim();
+
+            if (skuFilho && skusRestantes.includes(skuFilho)) {
+              mapaPrecos[skuFilho] = {
+                // A variação pode não ter preço, então fazemos fallback para o preço do pai
+                preco: Number(varObj.preco || dadosPai.preco || 0),
+                preco_promocional: Number(varObj.preco_promocional || dadosPai.preco_promocional || 0),
+                preco_custo: Number(varObj.preco_custo || dadosPai.preco_custo || 0), // Custo geralmente é do pai
+              };
+            }
+          }
+        }
+      }
+    }
+
+    res.json({ precos: mapaPrecos });
+  } catch (error) {
+    console.error('Erro ao buscar preços base:', error.message);
+    res.status(500).json({ erro: error.message });
+  }
+});
+
 
 router.post('/api/produtos/sync', async (req, res) => {
   try {
@@ -83,7 +159,6 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
       variacoesTiny = Object.values(variacoesTiny); 
     }
 
-    // BUSCA DE VARIAÇÕES (FILHOS)
     if (variacoesTiny && variacoesTiny.length > 0) {
       const filhosResolvidos = [];
       
@@ -101,7 +176,6 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
           const pFilho = detF.data?.retorno?.produto || {};
           const saldoFilho = estF.data?.retorno?.produto?.saldo || 0;
 
-          // Padroniza os anexos do filho para sempre ser um Array
           let anexosFilho = pFilho.anexos || [];
           if (!Array.isArray(anexosFilho)) anexosFilho = Object.values(anexosFilho);
 

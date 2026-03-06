@@ -74,7 +74,7 @@ function App() {
       {activePage === 'compatibilidade' && <CompatibilidadeAutopecas usuarioId={usuarioLogado.id} />}
       {activePage === 'centralPromocoes' && <CentralPromocoes />}
       {activePage === 'monitorConcorrentes' && <MonitorConcorrentes />}
-      {activePage === 'perguntasPreVenda' && <PerguntasPreVenda />}
+      {activePage === 'perguntasPreVenda' && <PerguntasPreVenda usuarioId={usuarioLogado.id} />}
       {activePage === 'posVenda' && <PosVenda />}
       {activePage === 'qualidadePublicacoes' && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: '16px', color: '#7f8c8d' }}>

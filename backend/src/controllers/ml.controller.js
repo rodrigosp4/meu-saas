@@ -1,8 +1,9 @@
 import { mlService } from '../services/ml.service.js';
 import { config } from '../config/env.js';
 import prisma from '../config/prisma.js';
-import { mlSyncQueue, publishQueue } from '../workers/queue.js';
+import { mlSyncQueue, publishQueue, priceQueue } from '../workers/queue.js';
 import axios from 'axios';
+
 
 // ✅ NOVA CONSTANTE: Lista de tags relevantes com prioridade (mesma do worker)
 const RELEVANT_AD_TAGS_PRIORITY = [
@@ -981,93 +982,47 @@ async getAdsBySku(req, res) {
     }
   },
 
-  async corrigirPreco(req, res) {
+async corrigirPreco(req, res) {
     try {
       const { userId, items, preco, modoPrecoIndividual, removerPromocoes } = req.body;
       if (!userId || !items || !Array.isArray(items)) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
-      if (!modoPrecoIndividual && (!preco || isNaN(preco))) {
-        return res.status(400).json({ erro: 'Preço inválido.' });
-      }
-
-      const resultados = [];
-
-      for (const item of items) {
-        try {
-          const precoNum = modoPrecoIndividual ? Number(item.preco) : Number(preco);
-          if (!precoNum || isNaN(precoNum) || precoNum <= 0) {
-            resultados.push({ itemId: item.itemId, status: 'erro', mensagem: 'Preço inválido para este item' });
-            continue;
-          }
-
-          const conta = await prisma.contaML.findFirst({ where: { id: item.contaId, userId } });
-          if (!conta) {
-            resultados.push({ itemId: item.itemId, status: 'erro', mensagem: 'Conta não encontrada' });
-            continue;
-          }
-
-          const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-          const activeToken = tokenRefreshRes ? tokenRefreshRes.access_token : conta.accessToken;
-          if (tokenRefreshRes) {
-            await prisma.contaML.update({
-              where: { id: conta.id },
-              data: { accessToken: activeToken, refreshToken: tokenRefreshRes.refresh_token }
-            });
-          }
-
-          // Remove todas as promoções ativas do item antes de alterar o preço
-          if (removerPromocoes) {
-            try {
-              await axios.delete(
-                `https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`,
-                { headers: { Authorization: `Bearer ${activeToken}` } }
-              );
-            } catch (promoError) {
-              // Ignora erros de remoção (ex: item sem promoções) e continua
-              console.warn(`[corrigirPreco] Falha ao remover promoções de ${item.itemId}:`, promoError.response?.data || promoError.message);
-            }
-          }
-
-          // Busca dados atuais do anúncio para obter variações
-          const adData = await mlService.getSingleAdDetails(item.itemId, activeToken);
-          const variations = adData.variations || [];
-
-          let updateBody;
-          if (variations.length > 0) {
-            updateBody = {
-              variations: variations.map(v => ({ id: v.id, price: precoNum })),
-              available_quantity: adData.available_quantity
-            };
-          } else {
-            updateBody = { price: precoNum, available_quantity: adData.available_quantity };
-          }
-
-          const mlRes = await axios.put(
-            `https://api.mercadolibre.com/items/${item.itemId}`,
-            updateBody,
-            { headers: { Authorization: `Bearer ${activeToken}`, 'Content-Type': 'application/json' } }
-          );
-
-          // Atualiza banco local
-          await prisma.anuncioML.update({
-            where: { id: item.itemId },
-            data: { preco: precoNum, dadosML: mlRes.data }
-          });
-
-          resultados.push({ itemId: item.itemId, status: 'ok', precoFinal: precoNum });
-        } catch (itemError) {
-          const msg = itemError.response?.data?.message || itemError.message;
-          resultados.push({ itemId: item.itemId, status: 'erro', mensagem: msg });
+      // Cria a tarefa na interface para o usuário acompanhar
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId: userId,
+          tipo: 'Corrigir Preço em Massa',
+          alvo: `${items.length} anúncio(s)`,
+          conta: 'Várias Contas',
+          status: 'PENDENTE'
         }
-      }
+      });
 
-      const ok = resultados.filter(r => r.status === 'ok').length;
-      const erro = resultados.filter(r => r.status === 'erro').length;
-      res.json({ resultados, resumo: { ok, erro } });
+      // Adiciona o job na nova fila
+      const job = await priceQueue.add('update-price', {
+        tarefaId: tarefa.id,
+        userId,
+        items,
+        modoPrecoIndividual,
+        precoGeral: preco,
+        removerPromocoes
+      });
+
+      // Atualiza o ID do Job na tarefa
+      await prisma.tarefaFila.update({
+        where: { id: tarefa.id },
+        data: { jobId: job.id }
+      });
+
+      res.json({ 
+        ok: true, 
+        message: 'Lote enviado para a fila de processamento.', 
+        jobId: job.id 
+      });
     } catch (error) {
-      res.status(500).json({ erro: error.message });
+      res.status(500).json({ erro: 'Falha ao enfileirar correção de preço', detalhes: error.message });
     }
   }
 };

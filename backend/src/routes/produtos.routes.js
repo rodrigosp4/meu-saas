@@ -15,22 +15,68 @@ router.get('/api/produtos', async (req, res) => {
     if (!userId) return res.status(400).json({ erro: "userId obrigatório" });
 
     const skip = (Number(page) - 1) * Number(limit);
-    const where = { userId: userId }; 
-    
+    const where = { userId: userId };
+
     if (search) {
       where.OR = [
         { nome: { contains: search, mode: 'insensitive' } },
         { sku: { contains: search, mode: 'insensitive' } }
       ];
     }
-    if (status !== 'Todos') where.statusML = status;
+
+    // Lógica de filtro por status de anúncio
+    if (status === 'Com Anúncios' || status === 'Sem Anúncios') {
+      const skusComAnuncio = await prisma.anuncioML.findMany({
+        where: { conta: { userId: userId } },
+        distinct: ['sku'],
+        select: { sku: true }
+      });
+      const skuSet = new Set(skusComAnuncio.map(a => a.sku).filter(Boolean));
+
+      if (status === 'Com Anúncios') {
+        where.sku = { in: [...skuSet] };
+      } else { // Sem Anúncios
+        where.sku = { notIn: [...skuSet] };
+      }
+    }
 
     const [produtos, total] = await Promise.all([
       prisma.produto.findMany({ where, skip, take: Number(limit), orderBy: { updatedAt: 'desc' } }),
       prisma.produto.count({ where })
     ]);
 
-    res.json({ produtos, total });
+    // Anexar anúncios relacionados aos produtos
+    if (produtos.length > 0) {
+      const skus = produtos.map(p => p.sku).filter(Boolean);
+
+      const anunciosRelacionados = await prisma.anuncioML.findMany({
+        where: {
+          sku: { in: skus },
+          conta: { userId: userId }
+        },
+        select: {
+          id: true,
+          sku: true,
+          contaId: true,
+          dadosML: true // Contém listing_type_id
+        }
+      });
+
+      const anunciosPorSku = anunciosRelacionados.reduce((acc, ad) => {
+        if (!acc[ad.sku]) acc[ad.sku] = [];
+        acc[ad.sku].push(ad);
+        return acc;
+      }, {});
+
+      const produtosComAnuncios = produtos.map(p => ({
+        ...p,
+        anunciosML: anunciosPorSku[p.sku] || []
+      }));
+
+      res.json({ produtos: produtosComAnuncios, total });
+    } else {
+      res.json({ produtos, total });
+    }
   } catch (error) {
     res.status(500).json({ erro: "Erro ao buscar produtos no banco de dados." });
   }

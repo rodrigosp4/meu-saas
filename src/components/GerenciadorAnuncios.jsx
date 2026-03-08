@@ -367,7 +367,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     return calcularPrecoRegra(precoBaseItem, regra, tipoAnuncioML, inflar, reduzir, custoFrete);
   };
 
-  const handleEnviar = async () => {
+const handleEnviar = async () => {
     setIsLoading(true);
     setResultados(null);
     try {
@@ -394,10 +394,13 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
         body: JSON.stringify(body)
       });
       const data = await res.json();
+      
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
 
-      setResultados(data);
-      if (data.resumo?.ok > 0) onSuccess?.();
+      // COMO AGORA É VIA FILA, APENAS AVISAMOS O USUÁRIO E FECHAMOS
+      alert(`🚀 Lote enviado para a fila!\n\nAcompanhe a atualização na aba "Gerenciador de Fila".`);
+      onSuccess?.(); // Vai fechar o modal
+      
     } catch (e) {
       alert('Erro: ' + e.message);
     } finally {
@@ -569,39 +572,20 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
               <p className="text-xs text-gray-400 mt-0.5">Remove todas as promoções do item no ML (exceto Oferta do Dia e Oferta Relâmpago ativas) antes de enviar o novo preço.</p>
             </div>
           </label>
-
-          {/* Resultados */}
-          {resultados && (
-            <div className={`rounded-lg p-4 border ${resultados.resumo.erro > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-              <p className="text-sm font-bold mb-2">
-                {resultados.resumo.ok} atualizados com sucesso{resultados.resumo.erro > 0 ? `, ${resultados.resumo.erro} com erro` : ''}
-              </p>
-              <div className="space-y-1 max-h-32 overflow-y-auto">
-                {resultados.resultados.map(r => (
-                  <div key={r.itemId} className={`text-xs flex justify-between ${r.status === 'erro' ? 'text-red-700' : 'text-green-700'}`}>
-                    <span className="font-mono">{r.itemId}</span>
-                    <span>{r.status === 'ok' ? `R$ ${r.precoFinal?.toFixed(2)}` : r.mensagem}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">
-            {resultados ? 'Fechar' : 'Cancelar'}
+            Cancelar
           </button>
-          {!resultados && (
-            <button
-              onClick={handleEnviar}
-              disabled={isLoading}
-              className="px-6 py-2 text-sm font-black text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
-            >
-              {isLoading ? 'Enviando...' : `Enviar para ML (${anunciosSelecionados.length})`}
-            </button>
-          )}
+          <button
+            onClick={handleEnviar}
+            disabled={isLoading}
+            className="px-6 py-2 text-sm font-black text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
+          >
+            {isLoading ? 'Enviando para Fila...' : `Enviar para ML (${anunciosSelecionados.length})`}
+          </button>
         </div>
       </div>
 

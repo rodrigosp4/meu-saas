@@ -17,8 +17,9 @@ import { config } from '../config/env.js';
 const connection = {
   host: config.redisHost,
   port: config.redisPort,
-  password: config.redisPassword,
-  tls: {}
+  password: config.redisPassword || undefined,
+  // Tira o "tls: {}" se for ambiente local
+  ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));

@@ -32,6 +32,7 @@ model ContaML {
   expiresAt    BigInt
   logistica    String      @default("ME2")
   anuncios     AnuncioML[]
+  perguntas    PerguntaML[] // <-- ADICIONE ESTA LINHA
   user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -109,4 +110,22 @@ model TarefaFila {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PerguntaML {
+  id            String    @id // Vamos usar String pois IDs do ML são gigantes
+  contaId       String
+  itemId        String
+  compradorId   String?
+  textoPergunta String
+  textoResposta String?
+  status        String
+  dataCriacao   DateTime
+  dataResposta  DateTime?
+  dadosML       Json?     // Para guardar a resposta crua do ML por segurança
+
+  conta         ContaML   @relation(fields: [contaId], references: [id], onDelete: Cascade)
+
+  @@index([contaId, status])
+  @@index([itemId])
 }

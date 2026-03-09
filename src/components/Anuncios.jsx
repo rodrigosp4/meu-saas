@@ -4,6 +4,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
   const [produtos, setProdutos] = useState([]);
   const [totalProdutos, setTotalProdutos] = useState(0);
   const [syncProgress, setSyncProgress] = useState(null);
+  const [activeJobId, setActiveJobId] = useState(() => localStorage.getItem('tiny_sync_job_id'));
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [currentPage, setCurrentPage] = useState(1);
@@ -17,6 +18,56 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
   const [expandedProducts, setExpandedProducts] = useState(new Set());
 
   const itemsPerPage = 50;
+
+// 👇 ADICIONE ESTE BLOCO NOVO
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    // Se tem um job ativo, marca o progresso visual como 0 (ou o último conhecido) para exibir a barra
+    setSyncProgress(prev => prev ?? 0);
+
+    const interval = setInterval(async () => {
+      try {
+        const statusRes = await fetch(`/api/produtos/sync-status/${activeJobId}`);
+        
+        // Se der 404, o job não existe mais no Redis (já limpou)
+        if (statusRes.status === 404) {
+          clearInterval(interval);
+          setActiveJobId(null);
+          localStorage.removeItem('tiny_sync_job_id');
+          setSyncProgress(null);
+          return;
+        }
+
+        const statusData = await statusRes.json();
+
+        if (statusData.state === 'completed') {
+          clearInterval(interval);
+          setSyncProgress(100);
+          setTimeout(() => {
+            setSyncProgress(null);
+            setActiveJobId(null);
+            localStorage.removeItem('tiny_sync_job_id');
+            fetchProdutos(); // Atualiza a tabela
+          }, 1500);
+        } else if (statusData.state === 'failed') {
+          clearInterval(interval);
+          setSyncProgress(null);
+          setActiveJobId(null);
+          localStorage.removeItem('tiny_sync_job_id');
+          alert("❌ Erro ao sincronizar. Verifique o terminal do Worker.");
+        } else {
+          // Atualiza a barra de progresso
+          setSyncProgress(statusData.progress || 5);
+        }
+      } catch (e) {
+        console.error("Erro ao checar status da fila:", e);
+      }
+    }, 1500);
+
+    // Limpa o intervalo se o usuário sair da tela, evitando vazamento de memória
+    return () => clearInterval(interval);
+  }, [activeJobId]);
 
   // Carrega as contas ML do usuário para montar a matriz
   useEffect(() => {
@@ -69,32 +120,9 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || "Falha ao iniciar sincronização");
 
-      const jobId = data.jobId;
-
-      const interval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(`/api/produtos/sync-status/${jobId}`);
-          const statusData = await statusRes.json();
-
-          if (statusData.state === 'completed') {
-            clearInterval(interval);
-            setSyncProgress(100);
-            setTimeout(() => {
-              setSyncProgress(null);
-              fetchProdutos();
-              alert("✅ Sincronização concluída com sucesso!");
-            }, 500);
-          } else if (statusData.state === 'failed') {
-            clearInterval(interval);
-            setSyncProgress(null);
-            alert("❌ Erro ao sincronizar. Verifique o terminal do Worker.");
-          } else {
-            setSyncProgress(statusData.progress || 5);
-          }
-        } catch (e) {
-          console.error("Erro ao checar status:", e);
-        }
-      }, 1500);
+      // 👇 Salva no navegador e no estado para o useEffect assumir o controle
+      localStorage.setItem('tiny_sync_job_id', data.jobId);
+      setActiveJobId(data.jobId);
 
     } catch (error) {
       console.error(error);
@@ -179,7 +207,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         </div>
         <button 
           onClick={() => setIsSyncModalOpen(true)} 
-          disabled={syncProgress !== null} 
+          disabled={activeJobId !== null || syncProgress !== null}
           className="px-4 py-2 text-white font-semibold rounded shadow-sm transition disabled:opacity-50"
           style={{ backgroundColor: '#e67e22' }}
           onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = '#d35400'; }}

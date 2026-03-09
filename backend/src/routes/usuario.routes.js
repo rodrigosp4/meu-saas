@@ -136,6 +136,7 @@ router.post('/api/reset-password', async (req, res) => {
   }
 });
 
+
 // 5. BUSCAR CONFIGURAÇÕES DO USUÁRIO
 router.get('/api/usuario/:id/config', async (req, res) => {
   try {
@@ -143,6 +144,11 @@ router.get('/api/usuario/:id/config', async (req, res) => {
       where: { id: req.params.id },
       include: { contasMl: true, regras: true }
     });
+
+    // 👇 ADICIONE ESTAS 3 LINHAS PARA EVITAR O ERRO 500
+    if (!user) {
+      return res.status(404).json({ erro: 'Usuário não encontrado. Faça logout.' });
+    }
 
     const contasFormatadas = user.contasMl.map(c => ({
       ...c,
@@ -156,15 +162,24 @@ router.get('/api/usuario/:id/config', async (req, res) => {
   }
 });
 
+
 // 6. SALVAR TOKEN DO TINY
 router.post('/api/usuario/:id/tiny', async (req, res) => {
   try {
+    // Verifica se o usuário realmente existe antes de atualizar
+    const userExists = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!userExists) {
+      return res.status(404).json({ erro: 'Usuário não encontrado. Faça logout e entre novamente.' });
+    }
+
     await prisma.user.update({
       where: { id: req.params.id },
       data: { tinyToken: req.body.tinyToken }
     });
     res.json({ success: true });
-  } catch (error) { res.status(500).json({ erro: error.message }); }
+  } catch (error) { 
+    res.status(500).json({ erro: error.message }); 
+  }
 });
 
 // 7. SALVAR/ATUALIZAR CONTA ML
@@ -195,6 +210,12 @@ router.delete('/api/usuario/:id/contas-ml/:contaId', async (req, res) => {
 // 9. SALVAR/ATUALIZAR REGRA
 router.post('/api/usuario/:id/regras', async (req, res) => {
   try {
+    // Verifica se o usuário realmente existe antes de criar relações
+    const userExists = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!userExists) {
+      return res.status(404).json({ erro: 'Usuário não encontrado. Faça logout e entre novamente.' });
+    }
+
     const { id, nome, precoBase, variaveis } = req.body;
     const regraId = id || undefined;
 
@@ -212,7 +233,9 @@ router.post('/api/usuario/:id/regras', async (req, res) => {
       });
       return res.json(regra);
     }
-  } catch (error) { res.status(500).json({ erro: error.message }); }
+  } catch (error) { 
+    res.status(500).json({ erro: error.message }); 
+  }
 });
 
 // 10. EXCLUIR REGRA

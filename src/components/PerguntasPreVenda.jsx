@@ -288,13 +288,9 @@ export default function PerguntasPreVenda({ usuarioId }) {
   const [modalRespostas, setModalRespostas] = useState(false);
 
   // Cache de conversas/anúncios pré-carregados
-  const cacheRef = useRef({});
-  const prefetchAbortRef = useRef(null);
-  const [prefetchTotal, setPrefetchTotal] = useState(0);
-  const [prefetchDone, setPrefetchDone] = useState(0);
-  const [prefetchando, setPrefetchando] = useState(false);
-
   const conversaRef = useRef(null);
+  const cacheRef = useRef({}); // <--- ADICIONE ESTA LINHA AQUI
+  const [buscou, setBuscou] = useState(false);
 
   // Carrega contas do usuário
   useEffect(() => {
@@ -312,61 +308,49 @@ export default function PerguntasPreVenda({ usuarioId }) {
     }
   }, [conversa]);
 
-  const fetchConversaItem = async (pergunta) => {
-    const params = new URLSearchParams({ itemId: pergunta.item_id, contaId: pergunta.contaId, userId: usuarioId });
-    const adParams = new URLSearchParams({ contaId: pergunta.contaId, userId: usuarioId });
-    const [convRes, adRes] = await Promise.all([
-      fetch(`/api/ml/perguntas/item?${params}`).then(r => r.json()).catch(() => ({ questions: [] })),
-      fetch(`/api/ml/anuncio/${pergunta.item_id}?${adParams}`).then(r => r.json()).catch(() => null)
-    ]);
-    const questoes = convRes.questions || [];
-    questoes.sort((a, b) => new Date(a.date_created) - new Date(b.date_created));
-    return { conversa: questoes, itemInfo: adRes?.id ? adRes : null };
-  };
+const fetchConversaItem = async (pergunta) => {
+    const cacheKey = `${pergunta.contaId}_${pergunta.item_id}`;
 
-  const prefetchPerguntas = async (lista) => {
-    // Cancela prefetch anterior
-    if (prefetchAbortRef.current) prefetchAbortRef.current.cancelled = true;
-    const abort = { cancelled: false };
-    prefetchAbortRef.current = abort;
-    cacheRef.current = {};
-
-    // Deduplica por itemId:contaId
-    const seen = new Set();
-    const unicas = lista.filter(p => {
-      const k = `${p.item_id}:${p.contaId}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    setPrefetchTotal(unicas.length);
-    setPrefetchDone(0);
-    setPrefetchando(true);
-
-    const BATCH = 4;
-    for (let i = 0; i < unicas.length; i += BATCH) {
-      if (abort.cancelled) break;
-      const lote = unicas.slice(i, i + BATCH);
-      await Promise.all(lote.map(async (p) => {
-        if (abort.cancelled) return;
-        const k = `${p.item_id}:${p.contaId}`;
-        try {
-          const dados = await fetchConversaItem(p);
-          cacheRef.current[k] = dados;
-          // Atualiza todas as perguntas que compartilham o mesmo item
-          lista.forEach(q => {
-            if (`${q.item_id}:${q.contaId}` === k) {
-              cacheRef.current[`id:${q.id}`] = dados;
-            }
-          });
-        } catch {}
-        if (!abort.cancelled) setPrefetchDone(prev => prev + 1);
-      }));
+    if (cacheRef.current[cacheKey]) {
+      return cacheRef.current[cacheKey];
     }
 
-    if (!abort.cancelled) setPrefetchando(false);
+    const params = new URLSearchParams({
+      itemId: pergunta.item_id,
+      contaId: pergunta.contaId,
+      userId: usuarioId
+    });
+
+    const adParams = new URLSearchParams({
+      contaId: pergunta.contaId,
+      userId: usuarioId
+    });
+
+    // CORREÇÃO: Rota correta e `.catch` para evitar crash na tela
+    const [convRes, adRes] = await Promise.all([
+      fetch(`/api/ml/perguntas/item?${params}`).catch(() => ({ ok: false })),
+      fetch(`/api/ml/anuncio/${pergunta.item_id}?${adParams}`).catch(() => ({ ok: false }))
+    ]);
+
+    let convData = { questions:[] };
+    if (convRes.ok) {
+      try { convData = await convRes.json(); } catch(e) {}
+    }
+
+    let adData = null;
+    if (adRes.ok) {
+      try { adData = await adRes.json(); } catch(e) {}
+    }
+
+    const payload = {
+      conversa: convData.questions ||[],
+      itemInfo: adData
+    };
+
+    cacheRef.current[cacheKey] = payload;
+    return payload;
   };
+
 
   const carregarPerguntas = async () => {
     if (!usuarioId) return;
@@ -375,6 +359,7 @@ export default function PerguntasPreVenda({ usuarioId }) {
     setPerguntaSelecionada(null);
     setConversa([]);
     setItemInfo(null);
+    setBuscou(false); // Reseta
     try {
       const params = new URLSearchParams({ userId: usuarioId, status: statusFiltro, limit: 100 });
       const res = await fetch(`/api/ml/perguntas?${params}`);
@@ -385,8 +370,7 @@ export default function PerguntasPreVenda({ usuarioId }) {
       }
       setPerguntas(lista);
       setTotal(lista.length);
-      // Inicia pré-carregamento em background
-      prefetchPerguntas(lista);
+      setBuscou(true); // Marca que o fetch foi concluído
     } catch (e) {
       setMsgStatus('Erro ao carregar perguntas.');
     } finally {
@@ -399,32 +383,24 @@ export default function PerguntasPreVenda({ usuarioId }) {
     setResposta('');
     setMsgStatus('');
 
-    const cacheKey = `id:${pergunta.id}`;
-    const cached = cacheRef.current[cacheKey];
-
-    if (cached) {
-      setConversa(cached.conversa);
-      setItemInfo(cached.itemInfo);
-      setCarregandoConversa(false);
-      return;
-    }
-
     setConversa([]);
     setItemInfo(null);
     setCarregandoConversa(true);
+    
     try {
+      // O fetchConversaItem agora gerencia o cache e retorna os dados de forma limpa
       const dados = await fetchConversaItem(pergunta);
-      cacheRef.current[cacheKey] = dados;
       setConversa(dados.conversa);
       setItemInfo(dados.itemInfo);
     } catch (e) {
-      console.error(e);
+      console.error("Erro ao carregar conversa:", e);
     } finally {
       setCarregandoConversa(false);
     }
   };
 
   const enviarResposta = async () => {
+    if (enviando) return; // <-- ADICIONE ESTA LINHA AQUI!
     if (!resposta.trim() || !perguntaSelecionada) return;
     setEnviando(true);
     setMsgStatus('');
@@ -445,8 +421,14 @@ export default function PerguntasPreVenda({ usuarioId }) {
       }
       setMsgStatus('Resposta enviada com sucesso!');
       setResposta('');
+      
+      // CORREÇÃO: Limpa o cache para forçar a API a trazer a sua nova resposta
+      const cacheKey = `${perguntaSelecionada.contaId}_${perguntaSelecionada.item_id}`;
+      delete cacheRef.current[cacheKey];
+
       // Recarrega a conversa
       await selecionarPergunta(perguntaSelecionada);
+      
       // Remove da lista se filtro for UNANSWERED
       if (statusFiltro === 'UNANSWERED') {
         setPerguntas(prev => prev.filter(p => p.id !== perguntaSelecionada.id));
@@ -474,6 +456,11 @@ export default function PerguntasPreVenda({ usuarioId }) {
       }
       setPerguntas(prev => prev.filter(p => p.id !== perguntaSelecionada.id));
       setTotal(prev => prev - 1);
+
+      // CORREÇÃO: Limpa o cache ao excluir para não manter lixo na memória
+      const cacheKey = `${perguntaSelecionada.contaId}_${perguntaSelecionada.item_id}`;
+      delete cacheRef.current[cacheKey];
+
       setPerguntaSelecionada(null);
       setConversa([]);
       setItemInfo(null);
@@ -545,22 +532,8 @@ export default function PerguntasPreVenda({ usuarioId }) {
 
         <span style={{ fontSize: '0.8em', color: '#666' }}>Total: {total} pergunta(s) encontrada(s).</span>
 
-        {(prefetchando || prefetchDone > 0) && prefetchTotal > 0 && (
-          <span style={{ fontSize: '0.78em', color: prefetchando ? '#e67e22' : '#27ae60', display: 'flex', alignItems: 'center', gap: '5px' }}>
-            {prefetchando ? (
-              <>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}>
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                </svg>
-                Pré-carregando {prefetchDone}/{prefetchTotal}…
-              </>
-            ) : (
-              <>✓ {prefetchTotal} conversa(s) pré-carregada(s)</>
-            )}
-          </span>
-        )}
       </div>
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      
 
       {/* Painel principal */}
       <div style={{ flex: 1, display: 'flex', gap: '10px', minHeight: 0 }}>
@@ -602,10 +575,17 @@ export default function PerguntasPreVenda({ usuarioId }) {
                   </tr>
                 );
               })}
-              {perguntas.length === 0 && !carregando && (
+              {perguntas.length === 0 && !carregando && !buscou && (
                 <tr>
                   <td colSpan={4} style={{ textAlign: 'center', padding: '30px', color: '#aaa', fontSize: '0.82em' }}>
                     Clique em "Carregar Perguntas" para buscar.
+                  </td>
+                </tr>
+              )}
+              {perguntas.length === 0 && !carregando && buscou && (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '30px', color: '#888', fontSize: '0.82em', fontWeight: 'bold' }}>
+                    Nenhuma pergunta encontrada com estes filtros.
                   </td>
                 </tr>
               )}

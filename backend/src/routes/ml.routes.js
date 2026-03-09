@@ -31,4 +31,9 @@ router.get('/api/ml/perguntas/item', mlController.getItemPerguntas);
 router.post('/api/ml/responder-pergunta', mlController.responderPergunta);
 router.delete('/api/ml/excluir-pergunta/:questionId', mlController.excluirPergunta);
 
+// Webhooks do ML
+router.post('/api/ml/webhook', mlController.handleWebhook);
+// Rota de sync manual para puxar as que já existem
+router.post('/api/ml/sync-perguntas-iniciais', mlController.syncPerguntasIniciais);
+
 export default router;

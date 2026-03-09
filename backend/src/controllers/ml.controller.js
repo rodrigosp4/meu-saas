@@ -844,118 +844,273 @@ async getAdsBySku(req, res) {
     }
 },
 
-  async getPerguntas(req, res) {
-    try {
-      const { userId, status = 'UNANSWERED', offset = 0, limit = 50 } = req.query;
-      if (!userId) return res.status(400).json({ erro: 'userId é obrigatório.' });
+async getPerguntas(req, res) {
+  try {
+    const { userId, status = 'UNANSWERED', limit = 50 } = req.query;
 
-      const contas = await prisma.contaML.findMany({ where: { userId } });
-      if (contas.length === 0) return res.json({ perguntas: [], total: 0 });
+    const contas = await prisma.contaML.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        nickname: true,
+        accessToken: true,
+        refreshToken: true,
+        expiresAt: true
+      }
+    });
 
-      const todasPerguntas = [];
-      const margemSeguranca = 5 * 60 * 1000;
-      const agora = Date.now();
+    if (contas.length === 0) {
+      return res.json({ perguntas: [], total: 0 });
+    }
 
-      await Promise.all(contas.map(async (conta) => {
-        try {
-          let activeToken = conta.accessToken;
-          const expiresAtNum = Number(conta.expiresAt);
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    let todasAsPerguntas = [];
 
-          if (agora + margemSeguranca >= expiresAtNum) {
-            const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-            if (tokenRefreshRes && tokenRefreshRes.access_token) {
-              activeToken = tokenRefreshRes.access_token;
-              await prisma.contaML.update({
-                where: { id: conta.id },
-                data: {
-                  accessToken: activeToken,
-                  refreshToken: tokenRefreshRes.refresh_token,
-                  expiresAt: BigInt(Date.now() + (tokenRefreshRes.expires_in * 1000))
-                }
-              });
-            }
+    for (const conta of contas) {
+      try {
+        let activeToken = conta.accessToken;
+
+        // Renova token só se estiver perto de vencer
+        if (Date.now() + 300000 >= Number(conta.expiresAt)) {
+          const refreshed = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+
+          if (refreshed?.access_token) {
+            activeToken = refreshed.access_token;
+
+            await prisma.contaML.update({
+              where: { id: conta.id },
+              data: {
+                accessToken: activeToken,
+                refreshToken: refreshed.refresh_token,
+                expiresAt: BigInt(Date.now() + (refreshed.expires_in * 1000))
+              }
+            });
           }
-
-          const data = await mlService.getQuestions(conta.id, activeToken, status, offset, limit);
-          const perguntas = (data.questions || []).map(q => ({ ...q, contaNickname: conta.nickname, contaId: conta.id }));
-          todasPerguntas.push(...perguntas);
-        } catch (contaErr) {
-          console.error(`[getPerguntas] Erro na conta ${conta.id}:`, contaErr.message);
         }
-      }));
 
-      todasPerguntas.sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
-      res.json({ perguntas: todasPerguntas, total: todasPerguntas.length });
-    } catch (error) {
-      res.status(500).json({ erro: error.message });
-    }
-  },
+        console.log('[getPerguntas] Buscando perguntas da conta:', {
+          contaId: conta.id,
+          nickname: conta.nickname,
+          status,
+          limit
+        });
 
-  async getItemPerguntas(req, res) {
-    try {
-      const { itemId, contaId, userId } = req.query;
-      if (!itemId || !contaId || !userId) return res.status(400).json({ erro: 'Parâmetros incompletos.' });
+        const mlRes = await axios.get(
+          `https://api.mercadolibre.com/questions/search?seller_id=${conta.id}&api_version=4&status=${status}&limit=${limit}`,
+          {
+            headers: { Authorization: `Bearer ${activeToken}` },
+            timeout: 15000
+          }
+        );
 
-      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
-      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada.' });
+        const questions = mlRes.data.questions || [];
 
-      let activeToken = conta.accessToken;
-      const margemSeguranca = 5 * 60 * 1000;
-
-      if (Date.now() + margemSeguranca >= Number(conta.expiresAt)) {
-        const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-        if (tokenRefreshRes && tokenRefreshRes.access_token) {
-          activeToken = tokenRefreshRes.access_token;
-          await prisma.contaML.update({
-            where: { id: conta.id },
-            data: {
-              accessToken: activeToken,
-              refreshToken: tokenRefreshRes.refresh_token,
-              expiresAt: BigInt(Date.now() + (tokenRefreshRes.expires_in * 1000))
+        for (const q of questions) {
+          const salva = await prisma.perguntaML.upsert({
+            where: { id: String(q.id) },
+            update: {
+              status: q.status,
+              textoResposta: q.answer?.text || null,
+              dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+              dadosML: q
+            },
+            create: {
+              id: String(q.id),
+              contaId: conta.id,
+              itemId: q.item_id,
+              compradorId: String(q.from?.id || ''),
+              textoPergunta: q.text,
+              textoResposta: q.answer?.text || null,
+              status: q.status,
+              dataCriacao: new Date(q.date_created),
+              dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+              dadosML: q
             }
           });
-        }
-      }
 
-      const data = await mlService.getItemQuestions(itemId, activeToken);
-      res.json(data);
-    } catch (error) {
-      res.status(500).json({ erro: error.message });
-    }
-  },
-
-  async responderPergunta(req, res) {
-    try {
-      const { questionId, text, contaId, userId } = req.body;
-      if (!questionId || !text || !contaId || !userId) return res.status(400).json({ erro: 'Parâmetros incompletos.' });
-
-      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
-      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada.' });
-
-      let activeToken = conta.accessToken;
-      const margemSeguranca = 5 * 60 * 1000;
-
-      if (Date.now() + margemSeguranca >= Number(conta.expiresAt)) {
-        const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-        if (tokenRefreshRes && tokenRefreshRes.access_token) {
-          activeToken = tokenRefreshRes.access_token;
-          await prisma.contaML.update({
-            where: { id: conta.id },
-            data: {
-              accessToken: activeToken,
-              refreshToken: tokenRefreshRes.refresh_token,
-              expiresAt: BigInt(Date.now() + (tokenRefreshRes.expires_in * 1000))
-            }
+          todasAsPerguntas.push({
+            ...salva,
+            contaId: conta.id,
+            contaNickname: conta.nickname,
+            item_id: salva.itemId,
+            text: salva.textoPergunta,
+            date_created: salva.dataCriacao,
+            dadosML: q
           });
         }
-      }
 
-      const result = await mlService.answerQuestion(questionId, text, activeToken);
-      res.json(result);
-    } catch (error) {
-      res.status(error.response?.status || 500).json({ erro: error.response?.data?.message || error.message });
+        // pequeno respiro entre contas para reduzir 429
+        await delay(900);
+
+      } catch (e) {
+        console.error(
+          `[getPerguntas] Erro ao buscar da conta ${conta.nickname}:`,
+          e.response?.data || e.message
+        );
+
+        // espera extra quando vier rate limit
+        if (e.response?.status === 429) {
+          await delay(5000);
+        }
+      }
     }
-  },
+
+    todasAsPerguntas.sort(
+      (a, b) => new Date(b.date_created) - new Date(a.date_created)
+    );
+
+    res.json({
+      perguntas: todasAsPerguntas,
+      total: todasAsPerguntas.length
+    });
+
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+},
+
+async getItemPerguntas(req, res) {
+  try {
+    const { itemId, contaId, userId } = req.query;
+
+    const conta = await prisma.contaML.findFirst({
+      where: { id: contaId, userId }
+    });
+
+    if (!conta) {
+      return res.status(404).json({ erro: 'Conta não encontrada.' });
+    }
+
+    let activeToken = conta.accessToken;
+
+    if (Date.now() + 300000 >= Number(conta.expiresAt)) {
+      const refreshed = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+
+      if (refreshed?.access_token) {
+        activeToken = refreshed.access_token;
+
+        await prisma.contaML.update({
+          where: { id: conta.id },
+          data: {
+            accessToken: activeToken,
+            refreshToken: refreshed.refresh_token,
+            expiresAt: BigInt(Date.now() + (refreshed.expires_in * 1000))
+          }
+        });
+      }
+    }
+
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    let mlRes = null;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        mlRes = await axios.get(
+          `https://api.mercadolibre.com/questions/search?item=${itemId}&api_version=4&limit=50&sort_fields=date_created&sort_types=ASC`,
+          { headers: { Authorization: `Bearer ${activeToken}` } }
+        );
+        break;
+      } catch (error) {
+        if (error.response?.status === 429 && attempt < 3) {
+          await delay(attempt * 5000);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const formatadas = mlRes?.data?.questions || [];
+    res.json({ questions: formatadas });
+
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+},
+
+async responderPergunta(req, res) {
+  try {
+    const { questionId, text, contaId, userId } = req.body;
+
+    if (!questionId || !text || !contaId || !userId) {
+      return res.status(400).json({ erro: 'Parâmetros incompletos.' });
+    }
+
+    const conta = await prisma.contaML.findFirst({
+      where: { id: contaId, userId }
+    });
+
+    if (!conta) {
+      return res.status(404).json({ erro: 'Conta não encontrada.' });
+    }
+
+    let activeToken = conta.accessToken;
+    const margemSeguranca = 5 * 60 * 1000;
+
+    if (Date.now() + margemSeguranca >= Number(conta.expiresAt)) {
+      const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+
+      if (tokenRefreshRes?.access_token) {
+        activeToken = tokenRefreshRes.access_token;
+
+        await prisma.contaML.update({
+          where: { id: conta.id },
+          data: {
+            accessToken: activeToken,
+            refreshToken: tokenRefreshRes.refresh_token,
+            expiresAt: BigInt(Date.now() + (tokenRefreshRes.expires_in * 1000))
+          }
+        });
+      }
+    }
+
+    let result = null;
+    const maxRetries = 4;
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        result = await mlService.answerQuestion(questionId, text, activeToken);
+        break;
+      } catch (apiErr) {
+        const is429 = apiErr.response?.status === 429;
+
+        if (is429 && attempt < maxRetries) {
+          const waits = [5000, 10000, 20000];
+          const waitTime = waits[attempt - 1] || 20000;
+
+          console.warn(
+            `⏳ [responderPergunta] Rate Limit (429). Tentativa ${attempt}/${maxRetries}. Aguardando ${waitTime}ms...`
+          );
+
+          await delay(waitTime);
+          continue;
+        }
+
+        throw apiErr;
+      }
+    }
+
+    try {
+      await prisma.perguntaML.update({
+        where: { id: String(questionId) },
+        data: {
+          status: 'ANSWERED',
+          textoResposta: text,
+          dataResposta: new Date()
+        }
+      });
+    } catch (e) {
+      console.error('Aviso: falha ao atualizar banco local', e.message);
+    }
+
+    res.json(result);
+
+  } catch (error) {
+    res.status(error.response?.status || 500).json({
+      erro: error.response?.data?.message || error.message
+    });
+  }
+},
 
   async excluirPergunta(req, res) {
     try {
@@ -975,7 +1130,24 @@ async getAdsBySku(req, res) {
         });
       }
 
-      const result = await mlService.deleteQuestion(questionId, activeToken);
+      // ✅ CORREÇÃO: Retry (Backoff) para exclusão de perguntas
+      let result = null;
+      let maxRetries = 3;
+      const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          result = await mlService.deleteQuestion(questionId, activeToken);
+          break; // Sucesso
+        } catch (apiErr) {
+          if (apiErr.response?.status === 429 && attempt < maxRetries) {
+             await delay(attempt * 2000);
+          } else {
+             throw apiErr;
+          }
+        }
+      }
+
       res.json(result);
     } catch (error) {
       res.status(error.response?.status || 500).json({ erro: error.response?.data?.message || error.message });
@@ -1024,5 +1196,157 @@ async corrigirPreco(req, res) {
     } catch (error) {
       res.status(500).json({ erro: 'Falha ao enfileirar correção de preço', detalhes: error.message });
     }
+  },
+
+// Recebe notificações do Mercado Livre em tempo real
+  async handleWebhook(req, res) {
+    // O ML exige que você responda 200 imediatamente
+    res.status(200).send('OK');
+
+    const { topic, resource, user_id } = req.body;
+
+    // Só nos importamos com perguntas
+    if (topic === 'questions' || topic === 'questions_answers') {
+      try {
+        const contaId = String(user_id);
+        const conta = await prisma.contaML.findUnique({ where: { id: contaId } });
+        if (!conta) return;
+
+        // Garante token atualizado
+        let activeToken = conta.accessToken;
+        if (Date.now() + 300000 >= Number(conta.expiresAt)) {
+          const refreshed = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+          if (refreshed?.access_token) {
+            activeToken = refreshed.access_token;
+            await prisma.contaML.update({
+              where: { id: conta.id },
+              data: { accessToken: activeToken, refreshToken: refreshed.refresh_token, expiresAt: BigInt(Date.now() + (refreshed.expires_in * 1000)) }
+            });
+          }
+        }
+
+        // Busca o detalhe da pergunta no ML
+        const questionId = resource.split('/').pop();
+        const mlRes = await axios.get(`https://api.mercadolibre.com/questions/${questionId}?api_version=4`, {
+          headers: { Authorization: `Bearer ${activeToken}` }
+        });
+        const q = mlRes.data;
+
+        // Salva/Atualiza no nosso banco de dados
+        await prisma.perguntaML.upsert({
+          where: { id: String(q.id) },
+          update: {
+            textoResposta: q.answer?.text || null,
+            status: q.status,
+            dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+            dadosML: q
+          },
+          create: {
+            id: String(q.id),
+            contaId: contaId,
+            itemId: q.item_id,
+            compradorId: String(q.from?.id || ''),
+            textoPergunta: q.text,
+            textoResposta: q.answer?.text || null,
+            status: q.status,
+            dataCriacao: new Date(q.date_created),
+            dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+            dadosML: q
+          }
+        });
+
+        console.log(`✅ [Webhook] Pergunta ${q.id} salva/atualizada com sucesso!`);
+      } catch (error) {
+        console.error('❌ [Webhook] Erro ao processar pergunta:', error.message);
+      }
+    }
+  },
+
+  // Rota auxiliar para puxar as antigas (carga inicial)
+async syncPerguntasIniciais(req, res) {
+  res.json({ message: 'Iniciando sincronização de perguntas em background.' });
+
+  try {
+    const contas = await prisma.contaML.findMany();
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    for (const conta of contas) {
+      try {
+        let activeToken = conta.accessToken;
+
+        if (Date.now() + 300000 >= Number(conta.expiresAt)) {
+          const refreshed = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+
+          if (refreshed?.access_token) {
+            activeToken = refreshed.access_token;
+
+            await prisma.contaML.update({
+              where: { id: conta.id },
+              data: {
+                accessToken: activeToken,
+                refreshToken: refreshed.refresh_token,
+                expiresAt: BigInt(Date.now() + (refreshed.expires_in * 1000))
+              }
+            });
+          }
+        }
+
+        const unansRes = await axios.get(
+          `https://api.mercadolibre.com/questions/search?seller_id=${conta.nickname}&api_version=4&status=UNANSWERED&limit=50`,
+          { headers: { Authorization: `Bearer ${activeToken}` } }
+        ).catch(() => ({ data: { questions: [] } }));
+
+        await delay(800);
+
+        const ansRes = await axios.get(
+          `https://api.mercadolibre.com/questions/search?seller_id=${conta.nickname}&api_version=4&status=ANSWERED&limit=50`,
+          { headers: { Authorization: `Bearer ${activeToken}` } }
+        ).catch(() => ({ data: { questions: [] } }));
+
+        const allQ = [
+          ...(unansRes.data.questions || []),
+          ...(ansRes.data.questions || [])
+        ];
+
+        for (const q of allQ) {
+          await prisma.perguntaML.upsert({
+            where: { id: String(q.id) },
+            update: {
+              status: q.status,
+              textoResposta: q.answer?.text || null,
+              dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+              dadosML: q
+            },
+            create: {
+              id: String(q.id),
+              contaId: conta.id,
+              itemId: q.item_id,
+              compradorId: String(q.from?.id || ''),
+              textoPergunta: q.text,
+              textoResposta: q.answer?.text || null,
+              status: q.status,
+              dataCriacao: new Date(q.date_created),
+              dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+              dadosML: q
+            }
+          });
+        }
+
+        await delay(1200);
+
+      } catch (error) {
+        console.error(`[syncPerguntasIniciais] Erro na conta ${conta.nickname}:`, error.message);
+
+        if (error.response?.status === 429) {
+          await delay(5000);
+        }
+      }
+    }
+
+    console.log('✅ Sincronização inicial de perguntas concluída.');
+  } catch (error) {
+    console.error('❌ Erro na sincronização inicial de perguntas:', error.message);
   }
+},
+
 };

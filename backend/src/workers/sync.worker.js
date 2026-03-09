@@ -12,8 +12,9 @@ import { config } from '../config/env.js';
 const connection = {
   host: config.redisHost,
   port: config.redisPort,
-  password: config.redisPassword,
-  tls: {} // Obrigatório para o Upstash
+  password: config.redisPassword || undefined,
+  // Tira o "tls: {}" se for ambiente local
+  ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
 // Função auxiliar para evitar bloqueio por limite de requisições do Tiny (Rate Limit)

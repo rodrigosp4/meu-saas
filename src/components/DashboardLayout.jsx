@@ -97,12 +97,20 @@ const icons = {
       <polyline points="21 15 16 10 5 21" />
     </svg>
   ),
+  mass: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <path d="M3 9h18" />
+      <path d="M9 21V9" />
+    </svg>
+  ),
 };
 
 // Mapa de labels bonitos para o header
 const pageTitles = {
   home: 'Início',
   produtosErp: 'Produtos do ERP',
+  cadastramentoMassa: 'Cadastramento em Massa com IA', // <-- NOVA LINHA
   gerenciadorML: 'Gerenciador ML',
   criarAnuncio: 'Criar Anúncio',
   replicadorAnuncio: 'Replicador de Anúncio',
@@ -124,6 +132,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
   const menuItems = [
     { id: 'home',            label: 'Início',              icon: icons.home },
     { id: 'produtosErp',     label: 'Produtos do ERP',     icon: icons.box },
+    { id: 'cadastramentoMassa', label: 'Cadastro em Massa (IA)', icon: icons.mass }, // <-- NOVA LINHA
     { id: 'gerenciadorML',   label: 'Gerenciador ML',      icon: icons.list },
     { id: 'replicadorAnuncio', label: 'Replicador de Anúncio', icon: icons.copy },
     { id: 'compatibilidade', label: 'Compatibilidade',      icon: icons.fitment },

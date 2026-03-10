@@ -108,14 +108,37 @@ export const mlController = {
       const results = {};
       await Promise.all(items.map(async ({ itemId, contaId }) => {
         try {
-          const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
-          if (!conta) return;
+          const [conta, anuncio] = await Promise.all([
+            prisma.contaML.findFirst({ where: { id: contaId, userId } }),
+            prisma.anuncioML.findFirst({ where: { id: itemId } })
+          ]);
+          if (!conta || !anuncio) return;
+
           const tokenRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
           const token = tokenRes ? tokenRes.access_token : conta.accessToken;
           if (tokenRes) {
             await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: tokenRes.refresh_token } });
           }
-          results[itemId] = await mlService.getShippingCostByItemId(token, conta.id, itemId);
+
+          // Extrai dados do anúncio salvo para usar na simulação correta
+          const dadosML = anuncio.dadosML || {};
+          const categoryId = dadosML.category_id;
+          const listingTypeId = dadosML.listing_type_id || 'gold_pro';
+          const itemPrice = anuncio.preco || 0;
+
+          // A API ML de frete grátis exige category_id + item_price (não aceita item_id diretamente)
+          if (categoryId && itemPrice >= 79) {
+            results[itemId] = await mlService.simulateShipping({
+              accessToken: token,
+              sellerId: conta.id,
+              itemPrice,
+              categoryId,
+              listingTypeId,
+              dimensions: '20x15x10,500' // dimensões padrão como fallback
+            });
+          } else {
+            results[itemId] = 0;
+          }
         } catch (e) {
           results[itemId] = 0;
         }
@@ -181,7 +204,8 @@ export const mlController = {
 
 async syncAds(req, res) {
   try {
-    const { contaId } = req.body;
+    // ✅ RECEBE O PARÂMETRO AQUI
+    const { contaId, importarApenasNovos } = req.body; 
     const conta = await prisma.contaML.findUnique({ where: { id: contaId } });
     if (!conta) return res.status(404).json({ erro: "Conta não encontrada" });
 
@@ -228,7 +252,8 @@ async syncAds(req, res) {
     const job = await mlSyncQueue.add('sync-ml', {
       contaId,
       accessToken: activeToken,
-      refreshToken: conta.refreshToken   // ← NOVO: worker pode renovar se expirar
+      refreshToken: conta.refreshToken,
+      importarApenasNovos // ✅ PASSA PARA A FILA AQUI
     });
 
     res.json({ jobId: job.id, message: `Varredura iniciada para ${conta.nickname}` });
@@ -240,7 +265,8 @@ async syncAds(req, res) {
   // Varre TODAS as contas em um único job: coleta todos os IDs primeiro, depois baixa detalhes
   async syncAllAds(req, res) {
     try {
-      const { contaIds } = req.body;
+      // ✅ RECEBE O PARÂMETRO AQUI
+      const { contaIds, importarApenasNovos } = req.body; 
       if (!contaIds || !Array.isArray(contaIds) || contaIds.length === 0) {
         return res.status(400).json({ erro: 'contaIds deve ser um array não vazio' });
       }
@@ -290,7 +316,10 @@ async syncAds(req, res) {
         return res.status(400).json({ erro: 'Nenhuma conta válida para sincronizar', erros });
       }
 
-      const job = await mlSyncQueue.add('sync-ml', { contas });
+      const job = await mlSyncQueue.add('sync-ml', { 
+         contas, 
+         importarApenasNovos // ✅ PASSA PARA A FILA AQUI 
+      });
       res.json({ jobId: job.id, message: `Varredura iniciada para ${contas.length} conta(s)`, erros });
     } catch (e) {
       res.status(500).json({ erro: 'Falha ao enfileirar', detalhes: e.message });
@@ -521,6 +550,63 @@ async syncAds(req, res) {
     } catch (error) {
       console.error("Erro ao buscar tags:", error);
       res.status(500).json({ erro: error.message });
+    }
+  },
+
+  // ============================================================================
+  // Retorna apenas os IDs dos anúncios para "Selecionar Todos os Filtrados"
+  // ============================================================================
+  async getAdIds(req, res) {
+    try {
+      const {
+        contasIds, search = '', status = 'Todos', tag = 'Todas',
+        promo = 'Todos', precoMin = '', precoMax = '',
+      } = req.query;
+
+      const where = {};
+      if (contasIds) where.contaId = { in: contasIds.split(',') };
+      if (status !== 'Todos') where.status = status;
+
+      if (tag && tag !== 'Todas') {
+        if (tag === '_sem_tag') {
+          where.OR = [{ tagPrincipal: null }, { tagPrincipal: '' }];
+        } else {
+          where.tagPrincipal = tag;
+        }
+      }
+
+      if (promo === 'com_desconto') {
+        where.precoOriginal = { not: null };
+        where.AND = [...(where.AND || []), { precoOriginal: { gt: 0 } }];
+      } else if (promo === 'sem_desconto') {
+        where.AND = [...(where.AND || []), { OR: [{ precoOriginal: null }, { precoOriginal: 0 }] }];
+      }
+
+      if (precoMin !== '' && !isNaN(Number(precoMin))) {
+        where.preco = { ...(where.preco || {}), gte: Number(precoMin) };
+      }
+      if (precoMax !== '' && !isNaN(Number(precoMax))) {
+        where.preco = { ...(where.preco || {}), lte: Number(precoMax) };
+      }
+
+      if (search) {
+        const searchCondition = [
+          { titulo: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          { id: { contains: search, mode: 'insensitive' } },
+        ];
+        if (where.OR) {
+          where.AND = [...(where.AND || []), { OR: where.OR }, { OR: searchCondition }];
+          delete where.OR;
+        } else {
+          where.OR = searchCondition;
+        }
+      }
+
+      const anuncios = await prisma.anuncioML.findMany({ where, select: { id: true } });
+      res.json({ ids: anuncios.map(a => a.id) });
+    } catch (e) {
+      res.status(500).json({ erro: e.message });
     }
   },
 

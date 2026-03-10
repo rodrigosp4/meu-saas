@@ -31,78 +31,144 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
     });
     return { success: true, mlId: result.id };
 
+// ... dentro de export const publishWorker = new Worker(...)
+
   } catch (error) {
     let erroStr = JSON.stringify(error).toLowerCase();
     let erroObjAtual = error;
 
-    const erroVariacaoNaoPermitida = erroStr.includes('variations_not_allowed');
-    const erroTituloInvalido = erroStr.includes('invalid_fields') && erroStr.includes('title');
+    let payloadCorrigido = JSON.parse(JSON.stringify(payload)); // Clone profundo
+    let precisaTentarNovamente = false;
 
     // =========================================================================
-    // PLANO B (FALLBACK): SEPARAÇÃO DE VARIAÇÕES OU REMOÇÃO DE TÍTULO
+    // AUTO-HEALER (SISTEMA DE RECUPERAÇÃO DE ERROS)
     // =========================================================================
-    if (erroVariacaoNaoPermitida || erroTituloInvalido) {
+
+    // 1. Erro de Modo de Envio (A conta não aceita ME1 ou ME2 especificamente)
+    if (erroStr.includes('user has not mode')) {
+        console.log(`[Worker] Auto-Healer: Limpando modo de envio incompatível...`);
+        if (payloadCorrigido.shipping) {
+            delete payloadCorrigido.shipping.mode;
+        }
+        precisaTentarNovamente = true;
+    }
+
+    // 2. Erro de Dimensões (Fora do padrão exigido pela categoria)
+    if (erroStr.includes('shipping.dimensions') || erroStr.includes('dimension')) {
+        console.log(`[Worker] Auto-Healer: Removendo envio de dimensões do shipping...`);
+        if (payloadCorrigido.shipping) {
+            delete payloadCorrigido.shipping.dimensions;
+        }
+        precisaTentarNovamente = true;
+    }
+
+    // 3. Erro de Atributos do Pacote (CORRIGIDO: Força a conversão para inteiro)
+    if (erroStr.includes('seller_package_')) {
+        console.log(`[Worker] Auto-Healer: Corrigindo formato dos atributos de pacote para inteiro...`);
+        if (payloadCorrigido.attributes) {
+            // Mapeia os atributos, corrigindo os que deram problema
+            payloadCorrigido.attributes = payloadCorrigido.attributes.map(attr => {
+                if (attr.id.startsWith('SELLER_PACKAGE_')) {
+                    // Extrai apenas o número do valor (ex: "150.0 g" -> 150)
+                    const valorNumerico = Math.round(parseFloat(attr.value_name));
+                    
+                    // Reconstrói o valor no formato "NUMERO UNIDADE"
+                    const unidade = attr.id.includes('WEIGHT') ? 'g' : 'cm';
+                    const valorCorrigido = `${valorNumerico} ${unidade}`;
+
+                    console.log(`[Worker] Corrigindo atributo ${attr.id}: de "${attr.value_name}" para "${valorCorrigido}"`);
+                    
+                    // Retorna o atributo corrigido
+                    return { ...attr, value_name: valorCorrigido };
+                }
+                // Mantém os outros atributos intactos
+                return attr;
+            });
+        }
+        precisaTentarNovamente = true;
+    }
+    
+    // 4. Erro "Mandatory Free Shipping" (Briga entre boolean vs obrigatório)
+    if (erroStr.includes('mandatory free shipping')) {
+        console.log(`[Worker] Auto-Healer: Forçando frete grátis true...`);
+        if (payloadCorrigido.shipping) {
+            payloadCorrigido.shipping.free_shipping = true;
+        }
+        precisaTentarNovamente = true;
+    }
+    
+    // 5. Título Inválido (Excesso de caracteres ou formato barrado)
+    if (erroStr.includes('invalid_fields') && erroStr.includes('title')) {
+         console.log(`[Worker] Auto-Healer: Removendo Title para forçar bypass usando family_name...`);
+         delete payloadCorrigido.title;
+         precisaTentarNovamente = true;
+    }
+
+    // --- REENVIO AUTOMÁTICO SE HOUVE HIGIENIZAÇÃO (E não é um problema de variação) ---
+    if (precisaTentarNovamente && !erroStr.includes('variations_not_allowed')) {
         try {
-            console.log(`[Worker] Ajustando payload para regras rígidas do ML...`);
+            console.log(`[Worker] Re-tentando publicar com Payload higienizado...`);
+            const retryRes = await mlService.publishSmart({ accessToken, payload: payloadCorrigido, description });
             
-            if (payload.variations && payload.variations.length > 0) {
-                let idsCriados = [];
-                for (const variacao of payload.variations) {
-                    const payloadSeparado = { ...payload };
-                    
-                    delete payloadSeparado.variations; 
-                    if (erroTituloInvalido) delete payloadSeparado.title;
-                    
-                    payloadSeparado.price = variacao.price;
-                    payloadSeparado.available_quantity = variacao.available_quantity;
-                    
-                    if (variacao.picture_ids && variacao.picture_ids.length > 0) {
-                         payloadSeparado.pictures = variacao.picture_ids.map(img => typeof img === 'string' ? { source: img } : img);
-                    }
-                    
-                    const mapAtributos = new Map();
-                    [...(payload.attributes || []), ...(variacao.attributes || []), ...(variacao.attribute_combinations || [])]
-                        .forEach(attr => mapAtributos.set(attr.id, attr));
-                    payloadSeparado.attributes = Array.from(mapAtributos.values());
-                    
-                    const r = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
-                    idsCriados.push(r.id);
+            await prisma.tarefaFila.update({
+                where: { id: tarefaId },
+                data: { status: 'CONCLUIDO', detalhes: `Sucesso (Auto-Corrigido)! ID: ${retryRes.id}` }
+            });
+            return { success: true, mlId: retryRes.id };
+        } catch (e) {
+            erroObjAtual = e; 
+            erroStr = JSON.stringify(e).toLowerCase(); // Atualiza a string do erro caso falhe novamente
+        }
+    }
+    
+    // =========================================================================
+    // CASO EXTREMO: DESMEMBRAMENTO DE VARIAÇÕES
+    // =========================================================================
+    const erroVariacaoNaoPermitida = erroStr.includes('variations_not_allowed');
+    if (erroVariacaoNaoPermitida && payloadCorrigido.variations && payloadCorrigido.variations.length > 0) {
+        try {
+            console.log(`[Worker] Desmembrando variações em anúncios separados...`);
+            let idsCriados =[];
+            for (const variacao of payloadCorrigido.variations) {
+                const payloadSeparado = { ...payloadCorrigido };
+                delete payloadSeparado.variations; 
+                
+                payloadSeparado.price = variacao.price;
+                payloadSeparado.available_quantity = variacao.available_quantity;
+                
+                if (variacao.picture_ids && variacao.picture_ids.length > 0) {
+                     payloadSeparado.pictures = variacao.picture_ids.map(img => typeof img === 'string' ? { source: img } : img);
                 }
                 
-                await prisma.tarefaFila.update({
-                    where: { id: tarefaId },
-                    data: { status: 'CONCLUIDO', detalhes: `Sucesso (Desmembrado)! IDs: ${idsCriados.join(', ')}` }
-                });
-                return { success: true, mlIds: idsCriados };
+                const mapAtributos = new Map();[...(payloadCorrigido.attributes || []), ...(variacao.attributes || []), ...(variacao.attribute_combinations || [])]
+                    .forEach(attr => mapAtributos.set(attr.id, attr));
+                payloadSeparado.attributes = Array.from(mapAtributos.values());
                 
-            } else {
-                const payloadCorrigido = { ...payload };
-                if (erroTituloInvalido) delete payloadCorrigido.title;
-                
-                const retryRes = await mlService.publishSmart({ accessToken, payload: payloadCorrigido, description });
-                await prisma.tarefaFila.update({
-                    where: { id: tarefaId },
-                    data: { status: 'CONCLUIDO', detalhes: `Sucesso (Adaptado)! ID: ${retryRes.id}` }
-                });
-                return { success: true, mlId: retryRes.id };
+                const r = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
+                idsCriados.push(r.id);
             }
+            
+            await prisma.tarefaFila.update({
+                where: { id: tarefaId },
+                data: { status: 'CONCLUIDO', detalhes: `Sucesso (Desmembrado)! IDs: ${idsCriados.join(', ')}` }
+            });
+            return { success: true, mlIds: idsCriados };
+            
         } catch (e) {
             erroObjAtual = e; 
         }
     }
 
     // =========================================================================
-    // EXTRATOR DETALHADO DE ERROS DO MERCADO LIVRE (A MÁGICA ACONTECE AQUI)
+    // EXTRATOR DETALHADO DE ERROS (Mantido da versão anterior)
     // =========================================================================
     let erroTxt = "Erro desconhecido ao tentar publicar.";
     const dataML = erroObjAtual.details;
 
     if (dataML) {
-        // Se o ML mandou um array com as "causas" (os campos que deram problema)
         if (dataML.cause && Array.isArray(dataML.cause) && dataML.cause.length > 0) {
             const mensagens = dataML.cause.map(c => {
                 let msg = c.message || c.code;
-                // Se o ML indicar exatamente qual campo deu erro, nós adicionamos na tela
                 if (c.references && c.references.length > 0) {
                     msg += ` (Campo: ${c.references.join(', ')})`;
                 }
@@ -110,11 +176,9 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
             });
             erroTxt = mensagens.join(' | ');
         } 
-        // Se não tiver "cause", mas tiver uma mensagem direta (ex: token expirado)
         else if (dataML.message) {
             erroTxt = dataML.message;
         } 
-        // Em último caso, joga o JSON cru na tela formatado para caber
         else {
             erroTxt = JSON.stringify(dataML).substring(0, 200);
         }
@@ -122,7 +186,6 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
         erroTxt = erroObjAtual.message;
     }
 
-    // Tradução de termos comuns do ML para facilitar a vida:
     erroTxt = erroTxt.replace(/item.attributes.missing_required/g, "Faltou preencher um atributo obrigatório na Ficha Técnica");
     erroTxt = erroTxt.replace(/item.title.length/g, "O título é muito longo");
     erroTxt = erroTxt.replace(/item.pictures.missing/g, "O anúncio precisa de pelo menos 1 imagem válida");

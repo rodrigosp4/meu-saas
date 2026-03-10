@@ -12,6 +12,7 @@ import CentralPromocoes from './components/CentralPromocoes.jsx';
 import MonitorConcorrentes from './components/MonitorConcorrentes.jsx';
 import PerguntasPreVenda from './components/PerguntasPreVenda.jsx';
 import PosVenda from './components/PosVenda.jsx';
+import CadastramentoMassa from './components/CadastramentoMassa.jsx';
 
 function App() {
   const [usuarioLogado, setUsuarioLogado] = useState(() => {
@@ -70,6 +71,7 @@ function App() {
 
       {activePage === 'configuracoes' && <Configuracoes usuarioId={usuarioLogado.id} />}
       {activePage === 'criarAnuncio' && <CriarAnuncio produto={produtoParaAnunciar} usuarioId={usuarioLogado.id} />}
+      {activePage === 'cadastramentoMassa' && <CadastramentoMassa usuarioId={usuarioLogado.id} />}
       {activePage === 'fila' && <GerenciadorFila usuarioId={usuarioLogado.id} />}
       {activePage === 'compatibilidade' && <CompatibilidadeAutopecas usuarioId={usuarioLogado.id} />}
       {activePage === 'centralPromocoes' && <CentralPromocoes />}

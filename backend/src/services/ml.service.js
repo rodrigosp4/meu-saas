@@ -76,15 +76,6 @@ export const mlService = {
     return res.data.coverage?.all_country?.list_cost || 0;
   },
 
-  async getShippingCostByItemId(accessToken, sellerId, itemId) {
-    const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
-    const res = await axios.get(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      params: { item_id: itemId, free_shipping: true, verbose: true }
-    });
-    return res.data.coverage?.all_country?.list_cost || 0;
-  },
-
   async publishSmart({ accessToken, payload, description }) {
     try {
       const res = await axios.post('https://api.mercadolibre.com/items', payload, { 

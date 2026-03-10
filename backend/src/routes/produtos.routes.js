@@ -9,36 +9,43 @@ const router = Router();
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Substitua o início da sua rota GET /api/produtos por este trecho
 router.get('/api/produtos', async (req, res) => {
   try {
-    const { userId, search = '', status = 'Todos', page = 1, limit = 50 } = req.query;
+    const { userId, search = '', status = 'Todos', page = 1, limit = 50, skus: skusParam } = req.query;
     if (!userId) return res.status(400).json({ erro: "userId obrigatório" });
 
     const skip = (Number(page) - 1) * Number(limit);
     const where = { userId: userId };
 
-    if (search) {
-      where.OR = [
-        { nome: { contains: search, mode: 'insensitive' } },
-        { sku: { contains: search, mode: 'insensitive' } }
-      ];
-    }
+    // ✅ CORREÇÃO: Prioriza a busca por uma lista de SKUs, se fornecida
+    if (skusParam) {
+      where.sku = { in: skusParam.split(',') };
+    } else {
+      if (search) {
+        where.OR = [
+          { nome: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } }
+        ];
+      }
 
-    // Lógica de filtro por status de anúncio
-    if (status === 'Com Anúncios' || status === 'Sem Anúncios') {
-      const skusComAnuncio = await prisma.anuncioML.findMany({
-        where: { conta: { userId: userId } },
-        distinct: ['sku'],
-        select: { sku: true }
-      });
-      const skuSet = new Set(skusComAnuncio.map(a => a.sku).filter(Boolean));
+      // Lógica de filtro por status de anúncio (continua a mesma)
+      if (status === 'Com Anúncios' || status === 'Sem Anúncios') {
+        const skusComAnuncio = await prisma.anuncioML.findMany({
+          where: { conta: { userId: userId } },
+          distinct: ['sku'],
+          select: { sku: true }
+        });
+        const skuSet = new Set(skusComAnuncio.map(a => a.sku).filter(Boolean));
 
-      if (status === 'Com Anúncios') {
-        where.sku = { in: [...skuSet] };
-      } else { // Sem Anúncios
-        where.sku = { notIn: [...skuSet] };
+        if (status === 'Com Anúncios') {
+          where.sku = { in: [...skuSet] };
+        } else { // Sem Anúncios
+          where.sku = { notIn: [...skuSet] };
+        }
       }
     }
+
 
     const [produtos, total] = await Promise.all([
       prisma.produto.findMany({ where, skip, take: Number(limit), orderBy: { updatedAt: 'desc' } }),
@@ -81,6 +88,102 @@ router.get('/api/produtos', async (req, res) => {
     res.status(500).json({ erro: "Erro ao buscar produtos no banco de dados." });
   }
 });
+
+
+
+// ✅ NOVA ROTA (CORRIGIDA): Retorna todos os SKUs de produtos respeitando os filtros
+router.get('/api/produtos/skus-filtrados', async (req, res) => {
+  try {
+    const { userId, search = '', status = 'Sem Anúncios' } = req.query;
+    if (!userId) return res.status(400).json({ erro: "userId obrigatório" });
+
+    const where = { userId: userId };
+
+    if (search) {
+      where.OR = [
+        { nome: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: 'insensitive' } }
+      ];
+    }
+
+    // Lógica de filtro por status de anúncio
+    if (status === 'Com Anúncios' || status === 'Sem Anúncios') {
+      const skusComAnuncio = await prisma.anuncioML.findMany({
+        where: { conta: { userId: userId } },
+        distinct: ['sku'],
+        select: { sku: true }
+      });
+      const skuSet = new Set(skusComAnuncio.map(a => a.sku).filter(Boolean));
+
+      if (status === 'Com Anúncios') {
+        where.sku = { in: [...skuSet] };
+      } else { // Sem Anúncios
+        where.sku = { notIn: [...skuSet] };
+      }
+    }
+
+    const produtos = await prisma.produto.findMany({
+      where,
+      select: { sku: true }
+    });
+
+    const skus = produtos.map(p => p.sku).filter(Boolean);
+    res.json({ skus: [...new Set(skus)] });
+  } catch (error) {
+    res.status(500).json({ erro: "Erro ao buscar SKUs de produtos." });
+  }
+});
+
+
+
+// ✅ NOVA ROTA: Retorna apenas os IDs Tiny dos produtos que correspondem aos filtros
+router.get('/api/produtos/ids', async (req, res) => {
+  try {
+    const { userId, search = '', status = 'Todos' } = req.query;
+    if (!userId) return res.status(400).json({ erro: "userId obrigatório" });
+
+    const where = { userId: userId };
+
+    if (search) {
+      where.OR = [
+        { nome: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: 'insensitive' } }
+      ];
+    }
+
+    if (status === 'Com Anúncios' || status === 'Sem Anúncios') {
+      const skusComAnuncio = await prisma.anuncioML.findMany({
+        where: { conta: { userId: userId } },
+        distinct: ['sku'],
+        select: { sku: true }
+      });
+      const skuSet = new Set(skusComAnuncio.map(a => a.sku).filter(Boolean));
+
+      if (status === 'Com Anúncios') {
+        where.sku = { in: [...skuSet] };
+      } else { // Sem Anúncios
+        where.sku = { notIn: [...skuSet] };
+      }
+    }
+
+    const produtos = await prisma.produto.findMany({
+      where,
+      select: {
+        dadosTiny: true, // A forma mais simples de pegar o id aninhado
+      }
+    });
+
+    // Extrai o ID de 'dadosTiny' e filtra os que não o possuem
+    const ids = produtos
+      .map(p => p.dadosTiny?.id)
+      .filter(id => id !== null && id !== undefined);
+
+    res.json({ ids: [...new Set(ids)] }); // Retorna apenas IDs únicos
+  } catch (error) {
+    res.status(500).json({ erro: "Erro ao buscar IDs de produtos." });
+  }
+});
+
 
 // ===== BUSCA PREÇOS BASE DOS PRODUTOS POR SKU (para o modal Corrigir Preço) =====
 // ✅ CORRIGIDO: Lógica otimizada para buscar SKUs de pais e filhos de forma mais eficiente.
@@ -163,8 +266,8 @@ router.post('/api/produtos/precos-base', async (req, res) => {
 
 router.post('/api/produtos/sync', async (req, res) => {
   try {
-    const { mode, sku, userId, tinyToken } = req.body; 
-    const job = await syncQueue.add('sync-tiny', { mode, sku, userId, tinyToken }); 
+    const { mode, sku, userId, tinyToken, ids } = req.body; 
+    const job = await syncQueue.add('sync-tiny', { mode, sku, userId, tinyToken, ids }); 
     res.json({ jobId: job.id, message: 'Sincronização iniciada' });
   } catch (error) {
     res.status(500).json({ erro: "Falha ao colocar sincronização na fila." });

@@ -21,6 +21,8 @@ router.get('/api/ml/anuncios', mlController.getAds);
 
 // ✅ NOVO: Endpoint para listar tags únicas dos anúncios
 router.get('/api/ml/anuncios/tags', mlController.getAdTags);
+// Endpoint para retornar apenas IDs (usado no "Selecionar Todos os Filtrados")
+router.get('/api/ml/anuncios/ids', mlController.getAdIds);
 
 router.get('/api/ml/anuncio/:itemId', mlController.getAdById);
 router.post('/api/ml/anuncios-por-sku', mlController.getAdsBySku);

@@ -246,4 +246,27 @@ router.delete('/api/usuario/:id/regras/:regraId', async (req, res) => {
   } catch (error) { res.status(500).json({ erro: error.message }); }
 });
 
+// 11. CARREGAR VERIFICAÇÃO DE PREÇO SALVA
+router.get('/api/usuario/:id/verificacao-preco', async (req, res) => {
+  try {
+    const registro = await prisma.verificacaoPreco.findUnique({
+      where: { userId: req.params.id }
+    });
+    res.json({ resultados: registro?.resultados || {} });
+  } catch (error) { res.status(500).json({ erro: error.message }); }
+});
+
+// 12. SALVAR VERIFICAÇÃO DE PREÇO
+router.post('/api/usuario/:id/verificacao-preco', async (req, res) => {
+  try {
+    const { resultados } = req.body;
+    await prisma.verificacaoPreco.upsert({
+      where: { userId: req.params.id },
+      update: { resultados },
+      create: { userId: req.params.id, resultados }
+    });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ erro: error.message }); }
+});
+
 export default router;

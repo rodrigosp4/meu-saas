@@ -23,7 +23,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 console.log('⚙️  Worker de Sincronização do Tiny Iniciado e aguardando Jobs...');
 
 export const syncWorker = new Worker('sync-tiny', async (job) => {
-  const { userId, tinyToken, mode, sku } = job.data;
+  const { userId, tinyToken, mode, sku, ids } = job.data;
   
   if (!userId || !tinyToken) {
     throw new Error("Faltam credenciais (userId ou tinyToken) para executar a sincronização.");
@@ -37,7 +37,10 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
   // FASE 1: BUSCAR QUAIS IDs DEVEM SER ATUALIZADOS BASEADO NO MODO
   // =========================================================================
   try {
-    if (mode === 'sku' && sku) {
+    // ✅ NOVO MODO: Sincronizar uma lista específica de IDs
+    if (mode === 'ids' && Array.isArray(ids)) {
+      idsToFetch = ids;
+    } else if (mode === 'sku' && sku) {
       // Busca apenas um SKU específico
       const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
         new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: sku })

@@ -86,63 +86,55 @@ async function keepAlive() {
 async function batchUpsertAnuncios(items, contaId, visitsMap) {
   if (items.length === 0) return 0;
 
-  const ids = [];
-  const contaIds = [];
-  const skus = [];
-  const titulos = [];
-  const precos = [];
-  const precosOriginais = [];
-  const statuses = [];
-  const estoques = [];
-  const vendasArr = [];
-  const visitasArr = [];
-  const thumbnails = [];
-  const permalinks = [];
-  const dadosMLArr = [];
-  const tagsPrincipais = [];
+  const values = [];
+  const placeholders = [];
+  let paramIndex = 1;
 
   for (const item of items) {
     const primaryTag = getPrimaryTag(item);
     const sku = extractSellerSku(item);
 
-    ids.push(item.id);
-    contaIds.push(String(contaId));
-    skus.push(sku);
-    titulos.push(item.title || '');
-    precos.push(item.price || 0);
-    precosOriginais.push(item.original_price ?? null);
-    statuses.push(item.status || '');
-    estoques.push(item.available_quantity || 0);
-    vendasArr.push(item.sold_quantity || 0);
-    visitasArr.push(visitsMap[item.id] || 0);
-    thumbnails.push(item.thumbnail || null);
-    permalinks.push(item.permalink || null);
-    dadosMLArr.push(JSON.stringify(item));
-    tagsPrincipais.push(primaryTag);
+    // 14 Valores do banco de dados passados por parâmetro
+    values.push(
+      item.id,                                   // 1
+      String(contaId),                           // 2
+      sku || null,                               // 3
+      item.title || '',                          // 4
+      item.price || 0,                           // 5
+      item.original_price ?? null,               // 6
+      item.status || '',                         // 7
+      item.available_quantity || 0,              // 8
+      item.sold_quantity || 0,                   // 9
+      visitsMap[item.id] || 0,                   // 10
+      item.thumbnail || null,                    // 11
+      item.permalink || null,                    // 12
+      JSON.stringify(item),                      // 13
+      primaryTag || null                         // 14
+    );
+
+    const rowPlaceholders = [];
+    for (let i = 0; i < 14; i++) {
+      if (i === 12) { // Índice 12 corresponde ao 13º parâmetro (dadosML)
+        rowPlaceholders.push(`$${paramIndex}::jsonb`);
+      } else {
+        rowPlaceholders.push(`$${paramIndex}`);
+      }
+      paramIndex++;
+    }
+    
+    // 👇 A CORREÇÃO ESTÁ AQUI: Adiciona o NOW() como o 15º valor para a coluna "updatedAt"
+    rowPlaceholders.push('NOW()');
+
+    placeholders.push(`(${rowPlaceholders.join(', ')})`);
   }
 
-  await prisma.$executeRawUnsafe(`
+  const query = `
     INSERT INTO "AnuncioML" (
       "id", "contaId", "sku", "titulo", "preco", "precoOriginal",
       "status", "estoque", "vendas", "visitas", "thumbnail",
       "permalink", "dadosML", "tagPrincipal", "updatedAt"
     )
-    SELECT
-      unnest($1::text[]),
-      unnest($2::text[]),
-      unnest($3::text[]),
-      unnest($4::text[]),
-      unnest($5::double precision[]),
-      unnest($6::double precision[]),
-      unnest($7::text[]),
-      unnest($8::integer[]),
-      unnest($9::integer[]),
-      unnest($10::integer[]),
-      unnest($11::text[]),
-      unnest($12::text[]),
-      unnest($13::jsonb[]),
-      unnest($14::text[]),
-      NOW()
+    VALUES ${placeholders.join(',\n')}
     ON CONFLICT ("id") DO UPDATE SET
       "titulo"        = EXCLUDED."titulo",
       "preco"         = EXCLUDED."preco",
@@ -157,13 +149,11 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
       "dadosML"       = EXCLUDED."dadosML",
       "tagPrincipal"  = EXCLUDED."tagPrincipal",
       "updatedAt"     = NOW()
-  `,
-    ids, contaIds, skus, titulos, precos, precosOriginais,
-    statuses, estoques, vendasArr, visitasArr, thumbnails,
-    permalinks, dadosMLArr, tagsPrincipais
-  );
+  `;
 
-  return items.length; // ← RETORNA a quantidade salva
+  await prisma.$executeRawUnsafe(query, ...values);
+
+  return items.length;
 }
 
 
@@ -431,11 +421,10 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
 // Suporta dois modos:
 //   - Conta única: { contaId, accessToken, refreshToken }
 //   - Todas as contas: { contas: [{contaId, accessToken, refreshToken}, ...] }
-//     Neste modo, coleta TODOS os IDs de TODAS as contas antes de baixar detalhes,
-//     tornando a barra de progresso precisa desde o início.
 // =============================================================================
 export const mlWorker = new Worker('sync-ml', async (job) => {
-  const { contaId, accessToken: initialToken, refreshToken, contas } = job.data;
+  // ✅ RECEBE O PARÂMETRO "importarApenasNovos" DA FILA
+  const { contaId, accessToken: initialToken, refreshToken, contas, importarApenasNovos } = job.data;
 
   // ─── MODO MULTI-CONTA ───────────────────────────────────────────────────────
   if (contas && Array.isArray(contas) && contas.length > 0) {
@@ -452,7 +441,23 @@ export const mlWorker = new Worker('sync-ml', async (job) => {
       const c = contas[ci];
       const freshToken = await ensureFreshToken(c.contaId, c.accessToken, c.refreshToken);
       console.log(`  [${ci + 1}/${contas.length}] Coletando IDs da conta ${c.contaId}...`);
-      const ids = await fetchAllItemIds(c.contaId, freshToken);
+      
+      let ids = await fetchAllItemIds(c.contaId, freshToken);
+
+      // ✅ LÓGICA "APENAS NOVOS": Filtra os IDs antes de prosseguir
+      if (importarApenasNovos && ids.length > 0) {
+        const existentes = await prisma.anuncioML.findMany({
+          where: { contaId: String(c.contaId), id: { in: ids } },
+          select: { id: true }
+        });
+        const setExistentes = new Set(existentes.map(e => e.id));
+        const qtdOriginal = ids.length;
+        
+        // Mantém apenas os IDs que NÃO estão no banco de dados
+        ids = ids.filter(id => !setExistentes.has(id));
+        console.log(`  🔍 Filtro 'Apenas Novos': A conta tinha ${qtdOriginal} IDs. Ignorando ${setExistentes.size} já existentes. Novos a baixar: ${ids.length}`);
+      }
+
       contasComIds.push({ contaId: c.contaId, accessToken: freshToken, ids });
       totalIdsColetados += ids.length;
 
@@ -508,17 +513,27 @@ export const mlWorker = new Worker('sync-ml', async (job) => {
   // ─── MODO CONTA ÚNICA (comportamento original) ──────────────────────────────
   if (!contaId) throw new Error("contaId ausente no job");
 
-  // ★ CORREÇÃO: Garante token fresco NO MOMENTO do processamento
   const accessToken = await ensureFreshToken(contaId, initialToken, refreshToken);
-
   await job.updateProgress(5);
 
   // ─── ETAPA 1: Coleta TODOS os IDs ───
-  const allIds = await fetchAllItemIds(contaId, accessToken);
+  let allIds = await fetchAllItemIds(contaId, accessToken);
+
+  // ✅ LOGICA "APENAS NOVOS" PARA CONTA ÚNICA
+  if (importarApenasNovos && allIds.length > 0) {
+    const existentes = await prisma.anuncioML.findMany({
+      where: { contaId: String(contaId), id: { in: allIds } },
+      select: { id: true }
+    });
+    const setExistentes = new Set(existentes.map(e => e.id));
+    const qtdOriginal = allIds.length;
+    allIds = allIds.filter(id => !setExistentes.has(id));
+    console.log(`  🔍 Filtro 'Apenas Novos': Total ${qtdOriginal} IDs. Ignorando ${setExistentes.size} já existentes. Novos a baixar: ${allIds.length}`);
+  }
 
   if (allIds.length === 0) {
     await job.updateProgress(100);
-    return { success: true, processed: 0, saved: 0, lost: 0, message: "Nenhum anúncio encontrado" };
+    return { success: true, processed: 0, saved: 0, lost: 0, message: "Nenhum anúncio NOVO encontrado" };
   }
 
   console.log(`  🔎 Iniciando busca de detalhes para ${allIds.length} anúncios...`);

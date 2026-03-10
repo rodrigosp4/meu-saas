@@ -214,34 +214,34 @@ export default function CriarAnuncio({ produto, usuarioId }) {
 
     let historico =[{ descricao: `Preço Base (${tipoBase.toUpperCase()})`, valor: custoBase, tipo: 'valor' }];
     let valorAtualCusto = custoBase;
-    let impostosPerc = 0;
-    
+    let percVendaFatores = 1;
+
     let historicoCustos = [];
     let historicoTaxasVenda = [];
 
     (regra.variaveis ||[]).forEach(v => {
-        if (v.tipo === 'fixo_custo') { 
-            valorAtualCusto += v.valor; 
+        if (v.tipo === 'fixo_custo') {
+            valorAtualCusto += v.valor;
             historicoCustos.push({ descricao: v.nome, valor: v.valor, tipo: 'custo' });
-        } 
-        else if (v.tipo === 'perc_custo') { 
+        }
+        else if (v.tipo === 'perc_custo') {
             const calcVal = valorAtualCusto * (v.valor / 100);
-            valorAtualCusto += calcVal; 
+            valorAtualCusto += calcVal;
             historicoCustos.push({ descricao: v.nome, valor: calcVal, isPerc: true, originalPerc: v.valor, tipo: 'custo' });
-        } 
-        else if (v.tipo === 'perc_venda') { 
-            impostosPerc += v.valor; 
+        }
+        else if (v.tipo === 'perc_venda') {
+            percVendaFatores *= (1 - v.valor / 100);
             historicoTaxasVenda.push({ descricao: v.nome, originalPerc: v.valor, tipo: 'taxa_venda' });
         }
     });
 
     const tipoCalc = tipoOverride || config.tipo;
     const tarifaMLPerc = tipoCalc === 'premium' ? 16 : 11;
-    const totalTaxas = (tarifaMLPerc + impostosPerc) / 100;
-    
-    if (totalTaxas >= 1) return { precoFinal: valorAtualCusto, historico };
+    const netFactor = (1 - tarifaMLPerc / 100) * percVendaFatores;
 
-    let precoBase = (valorAtualCusto + 6) / (1 - totalTaxas);
+    if (netFactor <= 0) return { precoFinal: valorAtualCusto, historico };
+
+    let precoBase = (valorAtualCusto + 6) / netFactor;
     let precoFinal = strategy.inflar > 0 ? precoBase / (1 - (strategy.inflar / 100)) : precoBase;
     let custoFreteML = 0;
 
@@ -253,8 +253,8 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       try {
         const token = await refreshTokenIfNeeded(conta);
         const dimStr = `${Math.round(alturaEmbalagem)}x${Math.round(larguraEmbalagem)}x${Math.round(comprimentoEmbalagem)},${Math.round(pesoEmbalagem * 1000)}`;
-        
-        precoFinal = valorAtualCusto / (1 - totalTaxas);
+
+        precoFinal = valorAtualCusto / netFactor;
 
         for (let i = 0; i < 3; i++) {
           const res = await fetch('/api/ml/simulate-shipping', {
@@ -263,16 +263,16 @@ export default function CriarAnuncio({ produto, usuarioId }) {
           });
           const data = await res.json();
           custoFreteML = data.cost || 0;
-          
-          let npb = (valorAtualCusto + custoFreteML) / (1 - totalTaxas);
+
+          let npb = (valorAtualCusto + custoFreteML) / netFactor;
           let npf = strategy.inflar > 0 ? npb / (1 - (strategy.inflar / 100)) : npb;
-          
+
           if (Math.abs(npf - precoFinal) < 0.1) { precoFinal = npf; break; }
           precoFinal = npf;
         }
       } catch (e) {
-        custoFreteML = 35; 
-        precoFinal = strategy.inflar > 0 ? ((valorAtualCusto + custoFreteML) / (1 - totalTaxas)) / (1 - (strategy.inflar / 100)) : ((valorAtualCusto + custoFreteML) / (1 - totalTaxas));
+        custoFreteML = 35;
+        precoFinal = strategy.inflar > 0 ? ((valorAtualCusto + custoFreteML) / netFactor) / (1 - (strategy.inflar / 100)) : ((valorAtualCusto + custoFreteML) / netFactor);
       }
     }
 

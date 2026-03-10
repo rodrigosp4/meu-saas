@@ -188,6 +188,11 @@ router.post('/api/usuario/:id/contas-ml', async (req, res) => {
     const { id, nickname, accessToken, refreshToken, expiresAt, envioSuportado } = req.body;
     const logisticaReal = envioSuportado || 'ME2';
 
+    const userExists = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!userExists) {
+      return res.status(404).json({ erro: 'Usuário não encontrado. Faça logout e entre novamente.' });
+    }
+
     const conta = await prisma.contaML.upsert({
       where: { id: String(id) },
       // 👇 AQUI: Adicionado userId: req.params.id no update

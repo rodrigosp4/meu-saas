@@ -30,13 +30,14 @@ router.get('/api/fila', async (req, res) => {
   }
 });
 
-// 2. Limpar Fila (Excluir concluídas/falhas)
+// 2. Limpar Fila (MODIFICADO: Excluir todos os status)
 router.delete('/api/fila/limpar/:userId', async (req, res) => {
   try {
     await prisma.tarefaFila.deleteMany({
-      where: { 
+      where: {
         userId: req.params.userId,
-        status: { in: ['CONCLUIDO', 'FALHA'] }
+        // ✅ CORREÇÃO: Inclui todos os status para uma limpeza completa
+        status: { in: ['CONCLUIDO', 'FALHA', 'PROCESSANDO', 'PENDENTE'] }
       }
     });
     res.json({ success: true });

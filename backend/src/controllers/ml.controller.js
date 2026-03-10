@@ -1,7 +1,7 @@
 import { mlService } from '../services/ml.service.js';
 import { config } from '../config/env.js';
 import prisma from '../config/prisma.js';
-import { mlSyncQueue, publishQueue, priceQueue } from '../workers/queue.js';
+import { mlSyncQueue, publishQueue, priceQueue, priceCheckQueue } from '../workers/queue.js';
 import axios from 'axios';
 
 
@@ -100,49 +100,67 @@ export const mlController = {
     }
   },
 
-  async getShippingCostItems(req, res) {
+async getShippingCostItems(req, res) {
     try {
       const { userId, items } = req.body;
       if (!userId || !Array.isArray(items)) return res.status(400).json({ erro: 'Parâmetros inválidos.' });
 
       const results = {};
-      await Promise.all(items.map(async ({ itemId, contaId }) => {
-        try {
-          const [conta, anuncio] = await Promise.all([
-            prisma.contaML.findFirst({ where: { id: contaId, userId } }),
-            prisma.anuncioML.findFirst({ where: { id: itemId } })
-          ]);
-          if (!conta || !anuncio) return;
+      const contasCache = {};
+      
+      // Quebra a simulação em pacotes de 10 em 10 para não tomar bloqueio (Rate Limit 429) do ML
+      const chunkSize = 10;
+      
+      for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+        
+        await Promise.all(chunk.map(async ({ itemId, contaId }) => {
+          try {
+            if (!contasCache[contaId]) {
+               const c = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+               if (c) {
+                  const tokenRes = await mlService.refreshToken(c.refreshToken).catch(() => null);
+                  if (tokenRes) {
+                     c.accessToken = tokenRes.access_token;
+                     await prisma.contaML.update({ where: { id: c.id }, data: { accessToken: tokenRes.access_token, refreshToken: tokenRes.refresh_token }});
+                  }
+               }
+               contasCache[contaId] = c;
+            }
+            const conta = contasCache[contaId];
+            if (!conta) return;
 
-          const tokenRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-          const token = tokenRes ? tokenRes.access_token : conta.accessToken;
-          if (tokenRes) {
-            await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: tokenRes.refresh_token } });
-          }
+            const anuncio = await prisma.anuncioML.findUnique({ where: { id: itemId } });
+            if (!anuncio) return;
 
-          // Extrai dados do anúncio salvo para usar na simulação correta
-          const dadosML = anuncio.dadosML || {};
-          const categoryId = dadosML.category_id;
-          const listingTypeId = dadosML.listing_type_id || 'gold_pro';
-          const itemPrice = anuncio.preco || 0;
+            const dadosML = anuncio.dadosML || {};
+            const categoryId = dadosML.category_id;
+            const listingTypeId = dadosML.listing_type_id || 'gold_pro';
+            const itemPrice = anuncio.preco || 0;
 
-          // A API ML de frete grátis exige category_id + item_price (não aceita item_id diretamente)
-          if (categoryId && itemPrice >= 79) {
-            results[itemId] = await mlService.simulateShipping({
-              accessToken: token,
-              sellerId: conta.id,
-              itemPrice,
-              categoryId,
-              listingTypeId,
-              dimensions: '20x15x10,500' // dimensões padrão como fallback
-            });
-          } else {
+            // A API ML de frete grátis exige category_id + item_price 
+            if (categoryId && itemPrice >= 79 && conta.logistica !== 'ME1') {
+              results[itemId] = await mlService.simulateShipping({
+                accessToken: conta.accessToken,
+                sellerId: conta.id,
+                itemPrice,
+                categoryId,
+                listingTypeId,
+                dimensions: '20x15x10,500' // fallback
+              });
+            } else {
+              results[itemId] = 0;
+            }
+          } catch (e) {
             results[itemId] = 0;
           }
-        } catch (e) {
-          results[itemId] = 0;
+        }));
+        
+        // Pequena pausa entre lotes se ainda houver mais itens
+        if (i + chunkSize < items.length) {
+           await new Promise(resolve => setTimeout(resolve, 250));
         }
-      }));
+      }
 
       res.json({ custos: results });
     } catch (error) {
@@ -335,21 +353,21 @@ async syncAds(req, res) {
     } catch (e) { res.status(500).json({ erro: e.message }); }
   },
 
-  // ============================================================================
+// ============================================================================
   // ✅ ATUALIZADO: getAds agora suporta filtros de Promoção, Preço e Prazo
   // ============================================================================
   async getAds(req, res) {
     try {
-      const { 
-        contasIds, search = '', status = 'Todos', tag = 'Todas', 
+      const {
+        contasIds, search = '', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '', prazo = 'Todos',
         descontoMin = '', descontoMax = '',
-        sortBy = 'padrao',          // ← ADICIONAR AQUI
-        page = 1, limit = 50 
+        semSku = 'false',
+        sortBy = 'padrao',
+        page = 1, limit = 50
       } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
       
-      // Mapeamento de ordenação
       const SORT_MAP = {
         'vendas_desc':   { vendas: 'desc' },
         'vendas_asc':    { vendas: 'asc' },
@@ -361,14 +379,13 @@ async syncAds(req, res) {
         'estoque_asc':   { estoque: 'asc' },
       };
       const orderBy = SORT_MAP[sortBy] || { vendas: 'desc' };
-      const where = {};   // ← ESSA LINHA ESTÁ FALTANDO
+      const where = {};
+      
       if (contasIds) {
         where.contaId = { in: contasIds.split(',') };
       }
-      
       if (status !== 'Todos') where.status = status;
       
-      // Filtro por tag principal
       if (tag && tag !== 'Todas') {
         if (tag === '_sem_tag') {
           where.OR = [
@@ -380,19 +397,12 @@ async syncAds(req, res) {
         }
       }
 
-      // ✅ NOVO: Filtro de Promoção (com/sem desconto)
       if (promo === 'com_desconto') {
-        // Anúncios que têm precoOriginal definido e maior que o preco atual
         where.precoOriginal = { not: null };
         where.AND = [
           ...(where.AND || []),
-          {
-            precoOriginal: { gt: 0 }
-          }
+          { precoOriginal: { gt: 0 } }
         ];
-        // Usa raw filter via Prisma: precoOriginal > preco
-        // Como Prisma não suporta comparação entre dois campos diretamente,
-        // fazemos um filtro extra via raw condition
       } else if (promo === 'sem_desconto') {
         where.AND = [
           ...(where.AND || []),
@@ -406,7 +416,6 @@ async syncAds(req, res) {
         ];
       }
 
-      // ✅ NOVO: Filtro de Faixa de Preço
       if (precoMin !== '' && !isNaN(Number(precoMin))) {
         where.preco = { ...(where.preco || {}), gte: Number(precoMin) };
       }
@@ -414,7 +423,14 @@ async syncAds(req, res) {
         where.preco = { ...(where.preco || {}), lte: Number(precoMax) };
       }
 
-      // Filtro de busca textual
+      // ✅ CORREÇÃO: Filtro "Sem SKU" mais robusto
+      if (semSku === 'true') {
+        where.AND = [
+          ...(where.AND || []),
+          { OR: [{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] }
+        ];
+      }
+
       if (search) {
         const searchCondition = [
           { titulo: { contains: search, mode: 'insensitive' } },
@@ -442,45 +458,33 @@ async syncAds(req, res) {
         }),
         prisma.anuncioML.count({ where })
       ]);
-
-      // ✅ NOVO: Filtros pós-query (para campos JSON que Prisma não filtra nativamente)
       
-      // Filtro de Promoção (validação extra: precoOriginal > preco de fato)
       if (promo === 'com_desconto') {
         anuncios = anuncios.filter(ad => ad.precoOriginal && ad.precoOriginal > ad.preco);
-        total = anuncios.length; // Ajusta total (aproximado para esta página)
+        total = anuncios.length;
       }
 
-      // Filtro de Prazo de Fabricação (baseado no JSON dadosML.sale_terms)
       if (prazo !== 'Todos') {
         anuncios = anuncios.filter(ad => {
           const dadosML = ad.dadosML || {};
           const saleTerms = dadosML.sale_terms || [];
           const mfgTerm = saleTerms.find(t => t.id === 'MANUFACTURING_TIME');
           
-          if (prazo === 'imediato') {
-            // Sem prazo de fabricação = envio imediato
-            return !mfgTerm;
-          } else if (prazo === 'com_prazo') {
-            // Tem prazo de fabricação definido
-            return !!mfgTerm;
-          }
+          if (prazo === 'imediato') return !mfgTerm;
+          else if (prazo === 'com_prazo') return !!mfgTerm;
           return true;
         });
-        total = anuncios.length; // Ajusta total (aproximado para esta página)
+        total = anuncios.length;
       }
-      // ✅ NOVO: Filtro de % de Desconto (pós-query, pois é campo calculado)
+      
       if (descontoMin !== '' || descontoMax !== '') {
         const minDesc = descontoMin !== '' ? Number(descontoMin) : null;
         const maxDesc = descontoMax !== '' ? Number(descontoMax) : null;
 
         anuncios = anuncios.filter(ad => {
-          // Calcula o % de desconto do anúncio
           if (!ad.precoOriginal || ad.precoOriginal <= ad.preco) {
-            // Sem desconto = 0%
-            const desconto = 0;
-            if (minDesc !== null && desconto < minDesc) return false;
-            if (maxDesc !== null && desconto > maxDesc) return false;
+            if (minDesc !== null && 0 < minDesc) return false;
+            if (maxDesc !== null && 0 > maxDesc) return false;
             return true;
           }
           const desconto = Math.round(((ad.precoOriginal - ad.preco) / ad.precoOriginal) * 100);
@@ -488,9 +492,9 @@ async syncAds(req, res) {
           if (maxDesc !== null && desconto > maxDesc) return false;
           return true;
         });
-        total = anuncios.length; // Ajusta total (aproximado para esta página)
+        total = anuncios.length;
       }
-      // Ordenação por desconto (campo calculado, precisa ser pós-query)
+      
       if (sortBy === 'desconto_desc' || sortBy === 'desconto_asc') {
         anuncios.sort((a, b) => {
           const descA = (a.precoOriginal && a.precoOriginal > a.preco)
@@ -503,6 +507,7 @@ async syncAds(req, res) {
       res.json({ anuncios, total });
     } catch (error) { res.status(500).json({ erro: error.message }); }
   },
+
 
 
   // ============================================================================
@@ -553,14 +558,19 @@ async syncAds(req, res) {
     }
   },
 
+
   // ============================================================================
   // Retorna apenas os IDs dos anúncios para "Selecionar Todos os Filtrados"
+  // ============================================================================
+// ============================================================================
+  // Retorna IDs e dados mínimos para "Selecionar Todos os Filtrados"
   // ============================================================================
   async getAdIds(req, res) {
     try {
       const {
         contasIds, search = '', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
+        semSku = 'false',
       } = req.query;
 
       const where = {};
@@ -569,7 +579,7 @@ async syncAds(req, res) {
 
       if (tag && tag !== 'Todas') {
         if (tag === '_sem_tag') {
-          where.OR = [{ tagPrincipal: null }, { tagPrincipal: '' }];
+          where.OR =[{ tagPrincipal: null }, { tagPrincipal: '' }];
         } else {
           where.tagPrincipal = tag;
         }
@@ -579,7 +589,7 @@ async syncAds(req, res) {
         where.precoOriginal = { not: null };
         where.AND = [...(where.AND || []), { precoOriginal: { gt: 0 } }];
       } else if (promo === 'sem_desconto') {
-        where.AND = [...(where.AND || []), { OR: [{ precoOriginal: null }, { precoOriginal: 0 }] }];
+        where.AND =[...(where.AND || []), { OR: [{ precoOriginal: null }, { precoOriginal: 0 }] }];
       }
 
       if (precoMin !== '' && !isNaN(Number(precoMin))) {
@@ -589,8 +599,12 @@ async syncAds(req, res) {
         where.preco = { ...(where.preco || {}), lte: Number(precoMax) };
       }
 
+      if (semSku === 'true') {
+        where.AND = [...(where.AND || []), { OR:[{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] }];
+      }
+
       if (search) {
-        const searchCondition = [
+        const searchCondition =[
           { titulo: { contains: search, mode: 'insensitive' } },
           { sku: { contains: search, mode: 'insensitive' } },
           { id: { contains: search, mode: 'insensitive' } },
@@ -603,8 +617,26 @@ async syncAds(req, res) {
         }
       }
 
-      const anuncios = await prisma.anuncioML.findMany({ where, select: { id: true } });
-      res.json({ ids: anuncios.map(a => a.id) });
+      const anuncios = await prisma.anuncioML.findMany({ 
+        where, 
+        select: { id: true, contaId: true, sku: true, titulo: true, preco: true, thumbnail: true, dadosML: true } 
+      });
+
+      // Extrai apenas os dados necessários para o modal do frontend não pesar a memória
+      const formatados = anuncios.map(a => ({
+        id: a.id,
+        contaId: a.contaId,
+        sku: a.sku,
+        titulo: a.titulo,
+        preco: a.preco,
+        thumbnail: a.thumbnail,
+        dadosML: {
+            listing_type_id: a.dadosML?.listing_type_id,
+            variations: a.dadosML?.variations
+        }
+      }));
+
+      res.json({ ids: formatados.map(a => a.id), anuncios: formatados });
     } catch (e) {
       res.status(500).json({ erro: e.message });
     }
@@ -661,6 +693,86 @@ async syncAds(req, res) {
 
     } catch (error) {
       res.status(error.response?.status || 500).json({ erro: error.message, detalhes: error.response?.data });
+    }
+  },
+
+// ============================================================================
+// Sincroniza anúncios selecionados (re-busca cada item na API do ML)
+// ============================================================================
+  async syncSelectedAds(req, res) {
+    try {
+      const { itemIds, userId } = req.body;
+      if (!itemIds || !Array.isArray(itemIds) || itemIds.length === 0 || !userId) {
+        return res.status(400).json({ erro: "itemIds (array) e userId são obrigatórios." });
+      }
+
+      // Busca os anúncios no banco para descobrir o contaId de cada um
+      const anunciosBD = await prisma.anuncioML.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, contaId: true }
+      });
+
+      // Agrupa por contaId para reutilizar o token por conta
+      const porConta = {};
+      for (const a of anunciosBD) {
+        if (!porConta[a.contaId]) porConta[a.contaId] = [];
+        porConta[a.contaId].push(a.id);
+      }
+
+      // Cache de tokens por conta
+      const tokenCache = {};
+      let atualizados = 0;
+      const erros = [];
+
+      for (const [contaId, ids] of Object.entries(porConta)) {
+        // Obtém e renova token da conta
+        if (!tokenCache[contaId]) {
+          const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+          if (!conta) { erros.push(`Conta ${contaId} não encontrada.`); continue; }
+          const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+          const activeToken = tokenRefreshRes ? tokenRefreshRes.access_token : conta.accessToken;
+          if (tokenRefreshRes) {
+            await prisma.contaML.update({
+              where: { id: conta.id },
+              data: { accessToken: activeToken, refreshToken: tokenRefreshRes.refresh_token }
+            });
+          }
+          tokenCache[contaId] = activeToken;
+        }
+
+        const token = tokenCache[contaId];
+
+        for (const itemId of ids) {
+          try {
+            const adData = await mlService.getSingleAdDetails(itemId, token);
+            const primaryTag = getPrimaryTag(adData);
+            await prisma.anuncioML.upsert({
+              where: { id: adData.id },
+              update: {
+                titulo: adData.title, preco: adData.price, precoOriginal: adData.original_price,
+                status: adData.status, estoque: adData.available_quantity, vendas: adData.sold_quantity,
+                visitas: adData.visitas || 0, thumbnail: adData.thumbnail, permalink: adData.permalink,
+                sku: extractSellerSku(adData), tagPrincipal: primaryTag, dadosML: adData,
+                conta: { connect: { id: contaId } }
+              },
+              create: {
+                id: adData.id, contaId, titulo: adData.title, preco: adData.price,
+                precoOriginal: adData.original_price, status: adData.status,
+                estoque: adData.available_quantity, vendas: adData.sold_quantity,
+                visitas: adData.visitas || 0, thumbnail: adData.thumbnail, permalink: adData.permalink,
+                sku: extractSellerSku(adData), tagPrincipal: primaryTag, dadosML: adData
+              }
+            });
+            atualizados++;
+          } catch (e) {
+            erros.push(`${itemId}: ${e.message}`);
+          }
+        }
+      }
+
+      res.json({ ok: true, atualizados, erros });
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
     }
   },
 
@@ -1242,7 +1354,11 @@ async responderPergunta(req, res) {
 
 async corrigirPreco(req, res) {
     try {
-      const { userId, items, preco, modoPrecoIndividual, removerPromocoes } = req.body;
+      const { 
+        userId, items, modo, regraId, precoManual, 
+        precoBaseManual, inflar, reduzir, removerPromocoes 
+      } = req.body;
+      
       if (!userId || !items || !Array.isArray(items)) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
@@ -1258,31 +1374,74 @@ async corrigirPreco(req, res) {
         }
       });
 
-      // Adiciona o job na nova fila
+      // Adiciona o job na fila passando todas as instruções para o Worker calcular lá
       const job = await priceQueue.add('update-price', {
         tarefaId: tarefa.id,
         userId,
-        items,
-        modoPrecoIndividual,
-        precoGeral: preco,
+        items, // Apenas os IDs e dados básicos
+        modo,
+        regraId,
+        precoManual,
+        precoBaseManual,
+        inflar,
+        reduzir,
         removerPromocoes
       });
 
-      // Atualiza o ID do Job na tarefa
       await prisma.tarefaFila.update({
         where: { id: tarefa.id },
         data: { jobId: job.id }
       });
 
-      res.json({ 
-        ok: true, 
-        message: 'Lote enviado para a fila de processamento.', 
-        jobId: job.id 
-      });
+      res.json({ ok: true, message: 'Lote enviado para a fila de processamento.', jobId: job.id });
     } catch (error) {
       res.status(500).json({ erro: 'Falha ao enfileirar correção de preço', detalhes: error.message });
     }
   },
+
+
+
+  async verificarPreco(req, res) {
+    try {
+      const { userId, anuncios, modo, regraId, precoManual, precoBaseManual, inflar, reduzir } = req.body;
+      if (!userId || !anuncios || !Array.isArray(anuncios)) {
+        return res.status(400).json({ erro: 'Parâmetros incompletos.' });
+      }
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId,
+          tipo: 'Verificar Preço em Massa',
+          alvo: `${anuncios.length} anúncio(s)`,
+          conta: 'Várias Contas',
+          status: 'PENDENTE'
+        }
+      });
+
+      const job = await priceCheckQueue.add('price-check-v2', {
+        tarefaId: tarefa.id,
+        userId,
+        anuncios, // Passa a lista de anúncios completa para o worker
+        modo,
+        regraId,
+        precoManual,
+        precoBaseManual,
+        inflar,
+        reduzir
+      });
+
+      await prisma.tarefaFila.update({
+        where: { id: tarefa.id },
+        data: { jobId: job.id }
+      });
+
+      res.json({ ok: true, message: 'Verificação enviada para a fila.', jobId: job.id });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao enfileirar verificação de preço', detalhes: error.message });
+    }
+  },
+
+
 
 // Recebe notificações do Mercado Livre em tempo real
   async handleWebhook(req, res) {
@@ -1434,5 +1593,26 @@ async syncPerguntasIniciais(req, res) {
     console.error('❌ Erro na sincronização inicial de perguntas:', error.message);
   }
 },
+
+  // ─── POST /api/ml/reset-margem ───────────────────────────────────────────────
+  async resetMargem(req, res) {
+    try {
+      const { userId, ids } = req.body;
+      if (!userId) return res.status(400).json({ erro: 'userId obrigatório' });
+
+      const contas = await prisma.contaML.findMany({ where: { userId }, select: { id: true } });
+      const allowedContaIds = contas.map(c => c.id);
+
+      const where = { contaId: { in: allowedContaIds }, margemPromocional: true };
+      if (Array.isArray(ids) && ids.length > 0) {
+        where.id = { in: ids };
+      }
+
+      const { count } = await prisma.anuncioML.updateMany({ where, data: { margemPromocional: false } });
+      res.json({ ok: true, count });
+    } catch (err) {
+      res.status(500).json({ erro: 'Erro ao resetar margem', detalhes: err.message });
+    }
+  },
 
 };

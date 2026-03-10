@@ -25,8 +25,11 @@ router.get('/api/ml/anuncios/tags', mlController.getAdTags);
 router.get('/api/ml/anuncios/ids', mlController.getAdIds);
 
 router.get('/api/ml/anuncio/:itemId', mlController.getAdById);
+router.post('/api/ml/sync-selected-ads', mlController.syncSelectedAds);
 router.post('/api/ml/anuncios-por-sku', mlController.getAdsBySku);
 router.post('/api/ml/corrigir-preco', mlController.corrigirPreco);
+router.post('/api/ml/verificar-preco', mlController.verificarPreco);
+router.post('/api/ml/reset-margem', mlController.resetMargem);
 
 router.get('/api/ml/perguntas', mlController.getPerguntas);
 router.get('/api/ml/perguntas/item', mlController.getItemPerguntas);

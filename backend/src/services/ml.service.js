@@ -131,6 +131,17 @@ export const mlService = {
         adData.original_price = saleData.regular_amount || null;
     }
     
+    // ★ FALLBACK INFALÍVEL PARA VARIAÇÕES
+    if (!adData.original_price && adData.variations && adData.variations.length > 0) {
+       let maxOrig = null;
+       for (const v of adData.variations) {
+          if (v.original_price && v.original_price > (v.price || 0)) {
+             if (!maxOrig || v.original_price > maxOrig) maxOrig = v.original_price;
+          }
+       }
+       if (maxOrig) adData.original_price = maxOrig;
+    }
+    
     return adData;
   },
   

@@ -1,7 +1,8 @@
-import './ml.worker.js'; // <- LIGA O WORKER DO ML JUNTO
+import './ml.worker.js';
 
-import './publish.worker.js'; // 👇 ADICIONE ESTA LINHA PARA LIGAR O DE PUBLICAÇÃO
-import './price.worker.js'; // <-- ADICIONE ESTA LINHA
+import './publish.worker.js'; 
+import './price.worker.js';
+import './priceCheck.worker.js'; 
 
 import { Worker } from 'bullmq';
 import axios from 'axios';

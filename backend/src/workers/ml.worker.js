@@ -142,7 +142,7 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
       "status"        = EXCLUDED."status",
       "estoque"       = EXCLUDED."estoque",
       "vendas"        = EXCLUDED."vendas",
-      "visitas"       = EXCLUDED."visitas",
+      "visitas"       = CASE WHEN EXCLUDED."visitas" > 0 THEN EXCLUDED."visitas" ELSE "AnuncioML"."visitas" END,
       "thumbnail"     = EXCLUDED."thumbnail",
       "permalink"     = EXCLUDED."permalink",
       "sku"           = EXCLUDED."sku",
@@ -275,39 +275,52 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
         return { items: [], saved: 0, lost: chunkIds };
       }
 
-      // ─── 2b. Visitas em lote ───
+// ─── 2b. Visitas Individuais ───
+      // A API de visitas do ML rejeita múltiplos IDs por vez (retorna 400 Validation Error).
+      // Precisamos buscar um por um.
       let visitsMap = {};
-      try {
-        await delay(150);
-        const visRes = await axios.get(
-          `https://api.mercadolibre.com/visits/items?ids=${idsStr}`,
-          { headers, timeout: 15000 }
-        );
-        if (visRes.data) {
-          Object.entries(visRes.data).forEach(([id, qty]) => { visitsMap[id] = qty; });
+      for (const item of items) {
+        try {
+          const visRes = await axios.get(
+            `https://api.mercadolibre.com/visits/items?ids=${item.id}`,
+            { headers, timeout: 8000 }
+          );
+          if (visRes.data && visRes.data[item.id] !== undefined) {
+             visitsMap[item.id] = visRes.data[item.id];
+          }
+          await delay(35); // Pequeno delay para evitar Rate Limit (429) do Mercado Livre
+        } catch (visErr) { 
+          // Ignora o erro individual de visita para não travar o salvamento do anúncio
         }
-      } catch (_) { /* visitas são opcionais */ }
-
+      }
       // ─── 2c. Sale Price — ★ CORREÇÃO 3: SÓ para itens SEM variações ───
       // Isso replica exatamente o comportamento do Python otimizado,
       // reduzindo as chamadas API em ~50% e evitando rate limit.
+      // ─── 2c. Sale Price & Promoções (Corrigido para Variações) ───
       for (const item of items) {
-        // Se o item tem variações, o sale_price não é confiável (cada variação pode ter preço diferente)
-        // O Python pula esses itens, e nós também devemos pular.
-        const hasVariations = item.variations && item.variations.length > 0;
-        if (hasVariations) continue;
-
         try {
           const spRes = await axios.get(
             `https://api.mercadolibre.com/items/${item.id}/sale_price`,
             { headers, timeout: 8000 }
           );
-          if (spRes.status === 200 && spRes.data.amount) {
-            item.price = spRes.data.amount;
-            item.original_price = spRes.data.regular_amount || null;
+          if (spRes.status === 200 && spRes.data) {
+            if (spRes.data.amount) item.price = spRes.data.amount;
+            if (spRes.data.regular_amount) item.original_price = spRes.data.regular_amount;
           }
-          await delay(50);
-        } catch (_) { /* preço promo é opcional */ }
+          await delay(40);
+        } catch (_) { /* 400 é normal para itens com variações complexas */ }
+        
+        // ★ FALLBACK INFALÍVEL PARA VARIAÇÕES:
+        // Se a API principal não trouxer o original_price, nós vasculhamos o array de variações
+        if (!item.original_price && item.variations && item.variations.length > 0) {
+           let maxOrig = null;
+           for (const v of item.variations) {
+              if (v.original_price && v.original_price > (v.price || 0)) {
+                 if (!maxOrig || v.original_price > maxOrig) maxOrig = v.original_price;
+              }
+           }
+           if (maxOrig) item.original_price = maxOrig;
+        }
       }
 
       // ─── 2d. Upsert no banco ───
@@ -622,27 +635,13 @@ function getPrimaryTag(itemData) {
   return null;
 }
 
-function extractSellerSku(item) {
-  // 1. Campo direto seller_custom_field
-  if (item.seller_custom_field) return item.seller_custom_field;
-  
-  // 2. Busca em attributes
-  if (item.attributes) {
-    const skuAttr = item.attributes.find(a => 
-      a.id === 'SELLER_SKU' || a.id === 'GTIN' || a.id === 'MPN'
-    );
-    if (skuAttr && skuAttr.value_name) return skuAttr.value_name;
-  }
-  
-  // 3. Busca na primeira variação
-  if (item.variations && item.variations.length > 0) {
-    const v = item.variations[0];
-    if (v.seller_custom_field) return v.seller_custom_field;
-    if (v.attributes) {
-      const skuAttr = v.attributes.find(a => a.id === 'SELLER_SKU');
-      if (skuAttr && skuAttr.value_name) return skuAttr.value_name;
+// CÓDIGO CORRETO (substitua o anterior por este)
+function extractSellerSku(itemData) {
+  if (itemData.attributes && Array.isArray(itemData.attributes)) {
+    const skuAttr = itemData.attributes.find(a => a.id === 'SELLER_SKU');
+    if (skuAttr && skuAttr.value_name && skuAttr.value_name !== '-1') {
+      return skuAttr.value_name;
     }
   }
-  
-  return '';
+  return itemData.seller_custom_field || null;
 }

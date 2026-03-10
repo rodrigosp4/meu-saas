@@ -6,13 +6,16 @@ import mlRoutes from './routes/ml.routes.js';
 import produtosRoutes from './routes/produtos.routes.js';
 import usuarioRoutes from './routes/usuario.routes.js';
 import filaRoutes from './routes/fila.routes.js';
+import compatRoutes from './routes/compat.routes.js';
+import promocoesRoutes from './routes/promocoes.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+// AUMENTE O LIMITE DO JSON PARSER AQUI
+app.use(express.json({ limit: '50mb' }));
 
 // Health check para o Railway
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -21,6 +24,8 @@ app.use(mlRoutes);
 app.use(produtosRoutes);
 app.use(usuarioRoutes);
 app.use(filaRoutes);
+app.use(compatRoutes);
+app.use(promocoesRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

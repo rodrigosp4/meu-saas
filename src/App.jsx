@@ -74,7 +74,7 @@ function App() {
       {activePage === 'cadastramentoMassa' && <CadastramentoMassa usuarioId={usuarioLogado.id} />}
       {activePage === 'fila' && <GerenciadorFila usuarioId={usuarioLogado.id} />}
       {activePage === 'compatibilidade' && <CompatibilidadeAutopecas usuarioId={usuarioLogado.id} />}
-      {activePage === 'centralPromocoes' && <CentralPromocoes />}
+      {activePage === 'centralPromocoes' && <CentralPromocoes usuarioId={usuarioLogado.id} />}
       {activePage === 'monitorConcorrentes' && <MonitorConcorrentes />}
       {activePage === 'perguntasPreVenda' && <PerguntasPreVenda usuarioId={usuarioLogado.id} />}
       {activePage === 'posVenda' && <PosVenda />}

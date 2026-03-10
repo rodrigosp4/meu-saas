@@ -35,7 +35,8 @@ export default function GerenciadorFila({ usuarioId }) {
   }, [filtroStatus, filtroTipo, currentPage]); // ✅ currentPage adicionado nas dependências
 
   const limparFila = async () => {
-    if(window.confirm("Deseja limpar as tarefas concluídas e falhas da tela?")) {
+    // ✅ CORREÇÃO: Mensagem de confirmação mais clara
+    if(window.confirm("Isso removerá TODAS as tarefas da sua tela, incluindo as que estão pendentes ou em processamento. Deseja continuar?")) {
       await fetch(`/api/fila/limpar/${usuarioId}`, { method: 'DELETE' });
       setCurrentPage(1); // Volta para a página 1 após limpar
       fetchFila();

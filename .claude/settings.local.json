@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx prisma generate)"
+      "Bash(npx prisma generate)",
+      "Bash(grep -E \"\\(frontend|src\\)$\")",
+      "Bash(ls -la /c/Users/Rodrigo/meu-saas/src/components/*.jsx)",
+      "Bash(grep -v \"^$\")",
+      "Bash(tasklist)"
     ]
   }
 }

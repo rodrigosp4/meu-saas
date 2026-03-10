@@ -21,6 +21,7 @@ model User {
   produtos             Produto[]
   regras               RegraPreco[]
   tarefas              TarefaFila[]
+  regrasOrquestrador   RegraOrquestrador[]
   verificacaoPreco     VerificacaoPreco?
 }
 
@@ -41,27 +42,29 @@ model ContaML {
   expiresAt    BigInt
   logistica    String      @default("ME2")
   anuncios     AnuncioML[]
-  perguntas    PerguntaML[] // <-- ADICIONE ESTA LINHA
+  perguntas    PerguntaML[]
+  promocoes    PromoML[]
   user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AnuncioML {
-  id            String   @id
-  contaId       String
-  sku           String?
-  titulo        String
-  preco         Float
-  precoOriginal Float?
-  status        String
-  estoque       Int
-  vendas        Int      @default(0)
-  visitas       Int      @default(0)
-  thumbnail     String?
-  permalink     String?
-  dadosML       Json?
-  updatedAt     DateTime @updatedAt
-  tagPrincipal  String?
-  conta         ContaML  @relation(fields: [contaId], references: [id], onDelete: Cascade)
+  id                String   @id
+  contaId           String
+  sku               String?
+  titulo            String
+  preco             Float
+  precoOriginal     Float?
+  status            String
+  estoque           Int
+  vendas            Int      @default(0)
+  visitas           Int      @default(0)
+  thumbnail         String?
+  permalink         String?
+  dadosML           Json?
+  updatedAt         DateTime @updatedAt
+  tagPrincipal      String?
+  margemPromocional Boolean  @default(false)
+  conta             ContaML  @relation(fields: [contaId], references: [id], onDelete: Cascade)
 
   @@index([contaId])
   @@index([tagPrincipal])
@@ -137,4 +140,43 @@ model PerguntaML {
 
   @@index([contaId, status])
   @@index([itemId])
+}
+
+// prisma/schema.prisma
+
+model PromoML {
+  id            String    // ML promotion ID (e.g. P-MLB1234)
+  contaId       String
+  tipo          String
+  sub_type      String?   // ✅ NOVO: Para VOLUME, SELLER_COUPON_CAMPAIGN, etc.
+  status        String
+  nome          String?
+  startDate     DateTime?
+  finishDate    DateTime?
+  deadline_date DateTime? // ✅ NOVO: Prazo final para aderir
+  itens         Json?     // Array of items from /promotions/:id/items endpoint
+  benefits      Json?     // ✅ NOVO: Para guardar meli_percent, seller_percent, etc.
+  dadosML       Json?     // Full promotion header object
+  fetchedAt     DateTime  @default(now())
+  conta         ContaML   @relation(fields: [contaId], references: [id], onDelete: Cascade)
+
+  // ✅ CORRIGIDO: Usa ID composto para evitar erro de chave duplicada entre contas
+  @@id([id, contaId])
+  @@index([contaId])
+  @@index([tipo])
+  @@index([status])
+}
+
+model RegraOrquestrador {
+  id              String   @id @default(uuid())
+  userId          String
+  nome            String
+  tiposPermitidos String[] // ["MARKETPLACE_CAMPAIGN", "SMART", "PRICE_MATCHING"]
+  maxSellerPct    Float    // Max acceptable seller contribution %
+  tolerancia      Float    @default(0) // Accept up to this much above maxSellerPct
+  ativo           Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

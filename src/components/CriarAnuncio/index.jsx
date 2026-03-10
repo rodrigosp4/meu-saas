@@ -214,7 +214,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
 
     let historico =[{ descricao: `Preço Base (${tipoBase.toUpperCase()})`, valor: custoBase, tipo: 'valor' }];
     let valorAtualCusto = custoBase;
-    let percVendaFatores = 1;
+    let totalTaxasVendaPerc = 0;
 
     let historicoCustos = [];
     let historicoTaxasVenda = [];
@@ -230,32 +230,29 @@ export default function CriarAnuncio({ produto, usuarioId }) {
             historicoCustos.push({ descricao: v.nome, valor: calcVal, isPerc: true, originalPerc: v.valor, tipo: 'custo' });
         }
         else if (v.tipo === 'perc_venda') {
-            percVendaFatores *= (1 - v.valor / 100);
+            totalTaxasVendaPerc += v.valor;
             historicoTaxasVenda.push({ descricao: v.nome, originalPerc: v.valor, tipo: 'taxa_venda' });
         }
     });
 
     const tipoCalc = tipoOverride || config.tipo;
     const tarifaMLPerc = tipoCalc === 'premium' ? 16 : 11;
-    const netFactor = (1 - tarifaMLPerc / 100) * percVendaFatores;
+    const netFactor = 1 - ((tarifaMLPerc + totalTaxasVendaPerc) / 100);
 
     if (netFactor <= 0) return { precoFinal: valorAtualCusto, historico };
 
-    let precoBase = (valorAtualCusto + 6) / netFactor;
-    let precoFinal = strategy.inflar > 0 ? precoBase / (1 - (strategy.inflar / 100)) : precoBase;
+    let precoAlvo = (valorAtualCusto + 6) / netFactor;
+    let precoFinal = strategy.inflar > 0 ? precoAlvo / (1 - (strategy.inflar / 100)) : precoAlvo;
     let custoFreteML = 0;
-
-    if (precoFinal >= 79 && strategy.reduzir > 0) {
-        if (precoFinal * (1 - (strategy.reduzir / 100)) <= 78.99) precoFinal = 78.99;
-    }
+    let foiReduzido = false;
+    let freteAplicado = false;
 
     if (precoFinal >= 79 && conta.envioSuportado !== 'ME1') {
       try {
         const token = await refreshTokenIfNeeded(conta);
         const dimStr = `${Math.round(alturaEmbalagem)}x${Math.round(larguraEmbalagem)}x${Math.round(comprimentoEmbalagem)},${Math.round(pesoEmbalagem * 1000)}`;
 
-        precoFinal = valorAtualCusto / netFactor;
-
+        // Loop de convergência para encontrar o frete exato (o frete muda conforme o preço sobe)
         for (let i = 0; i < 3; i++) {
           const res = await fetch('/api/ml/simulate-shipping', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -264,37 +261,62 @@ export default function CriarAnuncio({ produto, usuarioId }) {
           const data = await res.json();
           custoFreteML = data.cost || 0;
 
-          let npb = (valorAtualCusto + custoFreteML) / netFactor;
-          let npf = strategy.inflar > 0 ? npb / (1 - (strategy.inflar / 100)) : npb;
+          let n_alvo = (valorAtualCusto + custoFreteML) / netFactor;
+          let n_final = strategy.inflar > 0 ? n_alvo / (1 - (strategy.inflar / 100)) : n_alvo;
 
-          if (Math.abs(npf - precoFinal) < 0.1) { precoFinal = npf; break; }
-          precoFinal = npf;
+          if (Math.abs(n_final - precoFinal) < 0.1) { 
+              precoFinal = n_final; 
+              precoAlvo = n_alvo; 
+              break; 
+          }
+          precoFinal = n_final;
+          precoAlvo = n_alvo;
         }
       } catch (e) {
         custoFreteML = 35;
-        precoFinal = strategy.inflar > 0 ? ((valorAtualCusto + custoFreteML) / netFactor) / (1 - (strategy.inflar / 100)) : ((valorAtualCusto + custoFreteML) / netFactor);
+        precoAlvo = (valorAtualCusto + custoFreteML) / netFactor;
+        precoFinal = strategy.inflar > 0 ? precoAlvo / (1 - (strategy.inflar / 100)) : precoAlvo;
       }
     }
 
-    historico = [...historico, ...historicoCustos];
-
-    if (precoFinal < 79) {
-        historico.push({ descricao: 'Custo Fixo (ML)', valor: 6.00, tipo: 'custo_ml' });
+    if (precoFinal >= 79) {
+        freteAplicado = true;
+        if (strategy.reduzir > 0 && precoFinal * (1 - (strategy.reduzir / 100)) <= 78.99) {
+           precoFinal = 78.99;
+           precoAlvo = strategy.inflar > 0 ? precoFinal * (1 - (strategy.inflar / 100)) : precoFinal;
+           foiReduzido = true;
+           freteAplicado = false;
+        }
     }
 
-    const tarifaMLValor = precoFinal * (tarifaMLPerc / 100);
-    historico.push({ descricao: `Tarifa ML (${tipoCalc === 'premium' ? 'Premium' : 'Clássico'})`, valor: tarifaMLValor, isPerc: true, originalPerc: tarifaMLPerc, tipo: 'custo_ml' });
+    precoAlvo = Math.round(precoAlvo * 100) / 100;
+    precoFinal = Math.round(precoFinal * 100) / 100;
 
+    historico = [...historico, ...historicoCustos];
+
+    if (freteAplicado && custoFreteML > 0) {
+        historico.push({ descricao: 'Frete Grátis (ML)', valor: custoFreteML, tipo: 'custo_ml' });
+    }
+    if (!freteAplicado) {
+        historico.push({ descricao: 'Custo Fixo (ML)', valor: 6.00, tipo: 'custo_ml' });
+    }
     if (conta.envioSuportado === 'ME1' && precoFinal >= 79) {
         historico.push({ descricao: 'Frete Grátis (Isento via ME1)', valor: 0, tipo: 'custo_ml' });
     }
 
-    if (custoFreteML > 0) {
-        historico.push({ descricao: 'Frete Grátis (ML)', valor: custoFreteML, tipo: 'custo_ml' });
+    if (strategy.inflar > 0 && !foiReduzido) {
+        historico.push({ descricao: `Inflado em ${strategy.inflar}% (Margem Promo)`, valor: precoFinal - precoAlvo, isPerc: true, originalPerc: strategy.inflar, tipo: 'custo' });
+    }
+    if (foiReduzido) {
+        historico.push({ descricao: `Reduzido para R$ 78,99`, valor: -(precoAlvo - 78.99), tipo: 'custo' });
     }
 
+    // A tarifa do ML incide sempre sobre o que o cliente pagou de fato
+    const tarifaMLValor = precoAlvo * (tarifaMLPerc / 100);
+    historico.push({ descricao: `Tarifa ML (${tipoCalc === 'premium' ? 'Premium' : 'Clássico'})`, valor: tarifaMLValor, isPerc: true, originalPerc: tarifaMLPerc, tipo: 'custo_ml' });
+
     historicoTaxasVenda.forEach(taxa => {
-        taxa.valor = precoFinal * (taxa.originalPerc / 100);
+        taxa.valor = precoAlvo * (taxa.originalPerc / 100);
         historico.push(taxa);
     });
 

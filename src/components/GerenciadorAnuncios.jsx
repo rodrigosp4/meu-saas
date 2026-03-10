@@ -142,12 +142,10 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
   if (!precoBase || !regra || isNaN(precoBase) || precoBase <= 0) return null;
 
   let custoBaseOriginal = precoBase;
-  let percVendaFatores = 1;
-
+  let totalTaxasVendaPerc = 0;
   let historicoCustos = [];
   let historicoTaxasVenda = [];
 
-  // Soma todas as taxas atreladas ao custo antes do ML
   (regra.variaveis || []).forEach(v => {
     if (v.tipo === 'fixo_custo') {
       custoBaseOriginal += v.valor;
@@ -157,42 +155,40 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
       custoBaseOriginal += calcVal;
       historicoCustos.push({ descricao: v.nome, valor: calcVal, isPerc: true, originalPerc: v.valor, tipo: 'custo' });
     } else if (v.tipo === 'perc_venda') {
-      percVendaFatores *= (1 - v.valor / 100);
+      totalTaxasVendaPerc += v.valor;
       historicoTaxasVenda.push({ descricao: v.nome, originalPerc: v.valor, tipo: 'taxa_venda' });
     }
   });
 
   const tarifaML = tipoML === 'premium' ? 16 : 11;
-  const netFactor = (1 - tarifaML / 100) * percVendaFatores;
+  const netFactor = 1 - ((tarifaML + totalTaxasVendaPerc) / 100);
 
   if (netFactor <= 0) return { precoFinal: Math.round(custoBaseOriginal * 100) / 100, historico: [] };
 
-  const inflarSafe = Math.min(Math.max(0, inflar), 99);
+  const inflarSafe = Math.min(Math.max(0, inflar || 0), 99);
 
-  // TENTATIVA 1: Simula como se fosse abaixo de R$ 79,00 (com custo fixo de R$ 6,00 em vez do frete)
-  let precoBaseCalc = (custoBaseOriginal + 6) / netFactor;
-  let precoFinal = inflarSafe > 0 ? precoBaseCalc / (1 - inflarSafe / 100) : precoBaseCalc;
-
+  let precoAlvo = (custoBaseOriginal + 6) / netFactor;
+  let precoFinal = inflarSafe > 0 ? precoAlvo / (1 - inflarSafe / 100) : precoAlvo;
   let freteAplicado = false;
   let foiReduzido = false;
 
-  // Se o preço final ultrapassar R$ 79,00, o ML isenta os R$ 6 e passa a cobrar o Frete Grátis
   if (precoFinal >= 79) {
      let custoComFrete = custoBaseOriginal + custoFreteGratis;
-     precoBaseCalc = custoComFrete / netFactor;
-     precoFinal = inflarSafe > 0 ? precoBaseCalc / (1 - inflarSafe / 100) : precoBaseCalc;
+     precoAlvo = custoComFrete / netFactor; 
+     precoFinal = inflarSafe > 0 ? precoAlvo / (1 - inflarSafe / 100) : precoAlvo;
      freteAplicado = true;
 
-     // Aplica estratégia de redução para tentar cravar em R$ 78,99 e fugir do frete grátis do ML
      if (reduzir > 0 && precoFinal * (1 - reduzir / 100) <= 78.99) {
        precoFinal = 78.99;
+       precoAlvo = inflarSafe > 0 ? precoFinal * (1 - inflarSafe / 100) : precoFinal;
        foiReduzido = true;
-       freteAplicado = false; // Como o preço voltou pra < 79, o frete grátis cai e volta a taxa fixa de R$ 6,00.
-       precoBaseCalc = (custoBaseOriginal + 6) / netFactor;
+       freteAplicado = false; 
      }
   }
 
-  // Monta o histórico visual para o popup na tela
+  precoAlvo = Math.round(precoAlvo * 100) / 100;
+  precoFinal = Math.round(precoFinal * 100) / 100;
+
   let historico = [{ descricao: 'Preço Base (Tiny)', valor: precoBase, tipo: 'valor' }];
   historico = [...historico, ...historicoCustos];
 
@@ -205,22 +201,22 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
   }
 
   if (inflarSafe > 0 && !foiReduzido) {
-    historico.push({ descricao: `Inflado em ${inflarSafe}%`, valor: precoFinal - precoBaseCalc, isPerc: true, originalPerc: inflarSafe, tipo: 'custo' });
+    historico.push({ descricao: `Inflado em ${inflarSafe}% (Margem Promo)`, valor: precoFinal - precoAlvo, isPerc: true, originalPerc: inflarSafe, tipo: 'custo' });
   }
 
   if (foiReduzido) {
-    historico.push({ descricao: `Reduzido para R$ 78,99`, valor: -(precoBaseCalc - 78.99), tipo: 'custo' });
+    historico.push({ descricao: `Reduzido para R$ 78,99`, valor: -(precoAlvo - 78.99), tipo: 'custo' });
   }
 
-  const tarifaMLValor = precoFinal * (tarifaML / 100);
+  const tarifaMLValor = precoAlvo * (tarifaML / 100);
   historico.push({ descricao: `Tarifa ML (${tipoML === 'premium' ? 'Premium' : 'Clássico'})`, valor: tarifaMLValor, isPerc: true, originalPerc: tarifaML, tipo: 'custo_ml' });
 
   historicoTaxasVenda.forEach(taxa => {
-    taxa.valor = precoFinal * (taxa.originalPerc / 100);
+    taxa.valor = precoAlvo * (taxa.originalPerc / 100);
     historico.push(taxa);
   });
 
-  return { precoFinal: Math.round(precoFinal * 100) / 100, historico };
+  return { precoFinal, historico };
 }
 
 function resolverPrecoBase(precosTiny, tipoBase) {
@@ -310,9 +306,15 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     }
   }, [modo, regraId, precosTinyMap, regra, temMultiplosSKUs]);
 
-// ✅ CORRIGIDO: Remove o filtro falho e busca o frete para todos os itens selecionados
+
+// ✅ Busca frete apenas de uma AMOSTRA (os 5 primeiros) para visualização rápida
   useEffect(() => {
-    if (anunciosSelecionados.length === 0) return;
+    if (anunciosSelecionados.length === 0 || modo !== 'regra') {
+      setLoadingFrete(false);
+      return;
+    }
+
+    const amostra = anunciosSelecionados.slice(0, 5); // Apenas 5 para não travar!
 
     setLoadingFrete(true);
     fetch('/api/ml/shipping-cost-items', {
@@ -320,14 +322,14 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: usuarioId,
-        items: anunciosSelecionados.map(ad => ({ itemId: ad.id, contaId: ad.contaId }))
+        items: amostra.map(ad => ({ itemId: ad.id, contaId: ad.contaId }))
       })
     })
       .then(r => r.json())
       .then(data => { if (data.custos) setCustoFreteMap(data.custos); })
       .catch(err => console.error('Erro ao buscar custo de frete:', err))
       .finally(() => setLoadingFrete(false));
-  }, [anunciosSelecionados, usuarioId]);
+  },[anunciosSelecionados, usuarioId, modo]);
 
   const calcularPrecoPorItem = (anuncio) => {
     const tipoAnuncioML = anuncio.dadosML?.listing_type_id?.includes('pro') ? 'premium' : 'classico';
@@ -367,26 +369,33 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     return calcularPrecoRegra(precoBaseItem, regra, tipoAnuncioML, inflar, reduzir, custoFrete);
   };
 
-const handleEnviar = async () => {
+  const handleEnviar = async () => {
+    // Validação: modo manual sem preço
+    if (modo === 'manual' && !precoManual) {
+      alert('⚠️ Informe o Preço Base para usar o modo manual.');
+      return;
+    }
+    // Validação: modo regra sem SKU e sem preço base manual
+    if (modo === 'regra' && skusUnicos.length === 0 && !precoBaseManual) {
+      const ok = window.confirm('⚠️ Nenhum anúncio tem SKU vinculado ao Tiny e nenhum Preço Base foi informado.\n\nSem isso o cálculo vai falhar para todos os itens. Deseja continuar mesmo assim?');
+      if (!ok) return;
+    }
+
     setIsLoading(true);
     setResultados(null);
     try {
-      const itemsPayload = anunciosSelecionados.map(ad => ({
-        itemId: ad.id,
-        contaId: ad.contaId,
-        preco: calcularPrecoPorItem(ad)
-      }));
-
-      const algumInvalido = itemsPayload.some(i => !i.preco || i.preco <= 0);
-      if (algumInvalido) {
-        const skusSemPreco = anunciosSelecionados
-          .filter((_, i) => !itemsPayload[i].preco || itemsPayload[i].preco <= 0)
-          .map(ad => ad.sku)
-          .join(', ');
-        throw new Error(`Alguns itens não puderam ser calculados. Verifique se os SKUs (${skusSemPreco}) estão sincronizados e têm preço no Tiny.`);
-      }
-
-      const body = { userId: usuarioId, items: itemsPayload, modoPrecoIndividual: true, removerPromocoes };
+      // ✅ ENVIA APENAS INSTRUÇÕES PARA A FILA, SEM CALCULAR FRETE AQUI!
+      const body = {
+        userId: usuarioId,
+        items: anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId, sku: getEfetivaSku(ad) })),
+        modo, 
+        regraId,
+        precoManual: Number(precoManual),
+        precoBaseManual: Number(precoBaseManual),
+        inflar, 
+        reduzir,
+        removerPromocoes 
+      };
 
       const res = await fetch('/api/ml/corrigir-preco', {
         method: 'POST',
@@ -397,9 +406,8 @@ const handleEnviar = async () => {
       
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
 
-      // COMO AGORA É VIA FILA, APENAS AVISAMOS O USUÁRIO E FECHAMOS
-      alert(`🚀 Lote enviado para a fila!\n\nAcompanhe a atualização na aba "Gerenciador de Fila".`);
-      onSuccess?.(); // Vai fechar o modal
+      alert(`🚀 Processamento em Massa iniciado!\n\n${anunciosSelecionados.length} anúncios enviados para a Fila.\n\nAcompanhe a atualização na aba "Gerenciador de Fila".`);
+      onSuccess?.();
       
     } catch (e) {
       alert('Erro: ' + e.message);
@@ -430,7 +438,7 @@ const handleEnviar = async () => {
           {/* Anúncios selecionados */}
           <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 max-h-36 overflow-y-auto">
             <p className="text-xs font-bold text-gray-500 uppercase mb-2">Anúncios selecionados</p>
-            {anunciosSelecionados.map(ad => (
+            {anunciosSelecionados.slice(0, 50).map(ad => (
               <div key={ad.id} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <img src={ad.thumbnail} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
@@ -445,7 +453,6 @@ const handleEnviar = async () => {
                   <span className="text-xs font-bold text-gray-400 line-through">R$ {ad.preco?.toFixed(2)}</span>
                   {(() => { const p = calcularPrecoPorItem(ad); return p ? <span className="text-xs font-bold text-green-700">R$ {p.toFixed(2)}</span> : null; })()}
                   
-                  {/* ✅ CORRIGIDO: Só mostra o botão "ver" quando a API do ML devolver o frete */}
                   {loadingFrete ? (
                     <span className="text-[10px] text-orange-500 font-bold animate-pulse px-1">Lendo Frete...</span>
                   ) : (
@@ -458,6 +465,11 @@ const handleEnviar = async () => {
                 </div>
               </div>
             ))}
+            {anunciosSelecionados.length > 50 && (
+              <div className="text-center py-2 text-xs font-bold text-indigo-600 bg-indigo-50 rounded">
+                 + {anunciosSelecionados.length - 50} anúncios selecionados (ocultados para não travar a tela). O envio será feito para TODOS.
+              </div>
+            )}
           </div>
 
           {/* Modo */}
@@ -575,6 +587,16 @@ const handleEnviar = async () => {
         </div>
 
         {/* Footer */}
+        {modo === 'manual' && !precoManual && (
+          <div className="px-6 pb-0 pt-2">
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">⚠️ Informe o Preço Base acima para continuar.</p>
+          </div>
+        )}
+        {modo === 'regra' && skusUnicos.length === 0 && !precoBaseManual && (
+          <div className="px-6 pb-0 pt-2">
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">⚠️ Nenhum anúncio tem SKU no Tiny. Insira um Preço Base acima ou o cálculo vai falhar para todos.</p>
+          </div>
+        )}
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">
             Cancelar
@@ -629,257 +651,143 @@ const handleEnviar = async () => {
 // =========================================
 
 // ===== MODAL VERIFICAR PREÇO =====
-function ModalVerificarPreco({ anunciosSelecionados, regrasPreco, usuarioId, onClose, onResult }) {
-  const [modo, setModo] = useState('manual');
+// (Substitua a função ModalVerificarPreco inteira)
+function ModalVerificarPreco({ anunciosSelecionados, regrasPreco, usuarioId, onClose, onJobStart }) {
+  const [modo, setModo] = useState('regra');
   const [precoManual, setPrecoManual] = useState('');
   const [regraId, setRegraId] = useState(regrasPreco[0]?.id || '');
   const [precoBaseManual, setPrecoBaseManual] = useState('');
   const [inflar, setInflar] = useState(0);
   const [reduzir, setReduzir] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [precosTinyMap, setPrecosTinyMap] = useState({});
-  const [precoBaseAutoPreenchido, setPrecoBaseAutoPreenchido] = useState(false);
-  const [custoFreteMap, setCustoFreteMap] = useState({});
-  const [loadingPrecos, setLoadingPrecos] = useState(true);
-  const [loadingFrete, setLoadingFrete] = useState(true);
 
-  const regra = regrasPreco.find(r => r.id === regraId);
+  const semSkus = anunciosSelecionados.every(ad => !ad.sku);
 
-  const getEfetivaSku = (ad) => {
-    if (ad.sku) return ad.sku;
-    const variations = ad.dadosML?.variations;
-    if (Array.isArray(variations)) {
-      for (const v of variations) {
-        const vSku = v.seller_custom_field
-          || (Array.isArray(v.attributes) && v.attributes.find(a => a.id === 'SELLER_SKU'))?.value_name;
-        if (vSku && vSku !== '-1') return vSku;
-      }
-    }
-    return null;
-  };
-
-  const skusUnicos = [...new Set(anunciosSelecionados.map(ad => getEfetivaSku(ad)).filter(Boolean))];
-  const temMultiplosSKUs = skusUnicos.length > 1;
-
-  useEffect(() => {
-    if (skusUnicos.length === 0) { setLoadingPrecos(false); return; }
-    setLoadingPrecos(true);
-    fetch('/api/produtos/precos-base', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: usuarioId, skus: skusUnicos })
-    })
-      .then(r => r.json())
-      .then(data => { if (data.precos) setPrecosTinyMap(data.precos); })
-      .catch(err => console.error('Erro ao buscar preços Tiny:', err))
-      .finally(() => setLoadingPrecos(false));
-  }, [anunciosSelecionados, usuarioId]);
-
-  useEffect(() => {
-    if (modo !== 'regra' || !regra || temMultiplosSKUs || skusUnicos.length === 0) {
-      setPrecoBaseAutoPreenchido(false);
-      setPrecoBaseManual('');
+  const handleVerificar = async () => {
+    // Validação: modo manual sem preço
+    if (modo === 'manual' && !precoManual) {
+      alert('⚠️ Informe o Preço Alvo para usar o modo manual.');
       return;
     }
-    const sku = skusUnicos[0];
-    const precosDoSku = precosTinyMap[sku];
-    if (precosDoSku) {
-      const tipoBase = regra.precoBase || 'promocional';
-      const preco = resolverPrecoBase(precosDoSku, tipoBase);
-      if (preco > 0) {
-        setPrecoBaseManual(String(preco));
-        setPrecoBaseAutoPreenchido(true);
-      }
-    } else {
-      setPrecoBaseAutoPreenchido(false);
-      setPrecoBaseManual('');
+    // Validação: sem regras cadastradas
+    if (modo === 'regra' && regrasPreco.length === 0) {
+      alert('❌ Nenhuma regra de precificação cadastrada. Configure uma regra em Configurações primeiro.');
+      return;
     }
-  }, [modo, regraId, precosTinyMap, regra, temMultiplosSKUs]);
-
-  useEffect(() => {
-    if (anunciosSelecionados.length === 0) return;
-    setLoadingFrete(true);
-    fetch('/api/ml/shipping-cost-items', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: usuarioId,
-        items: anunciosSelecionados.map(ad => ({ itemId: ad.id, contaId: ad.contaId }))
-      })
-    })
-      .then(r => r.json())
-      .then(data => { if (data.custos) setCustoFreteMap(data.custos); })
-      .catch(err => console.error('Erro ao buscar custo de frete:', err))
-      .finally(() => setLoadingFrete(false));
-  }, [anunciosSelecionados, usuarioId]);
-
-  const calcularDetalhePorItem = (anuncio) => {
-    const tipoAnuncioML = anuncio.dadosML?.listing_type_id?.includes('pro') ? 'premium' : 'classico';
-    const skuDoAnuncio = getEfetivaSku(anuncio);
-    if (modo === 'manual') {
-      return calcularPrecoCorrigir(Number(precoManual), inflar, reduzir);
+    // Validação: modo regra sem SKU e sem preço base
+    if (modo === 'regra' && semSkus && !precoBaseManual) {
+      const ok = window.confirm('⚠️ Nenhum anúncio tem SKU vinculado ao Tiny e nenhum Preço Base foi informado.\n\nSem isso a verificação resultará em 0 anúncios calculados. Deseja continuar?');
+      if (!ok) return;
     }
-    if (!regra) return null;
-    let precoBaseItem = Number(precoBaseManual);
-    if (precosTinyMap[skuDoAnuncio]) {
-      precoBaseItem = resolverPrecoBase(precosTinyMap[skuDoAnuncio], regra.precoBase || 'promocional');
-    }
-    if (precoBaseItem <= 0) return null;
-    const custoFrete = custoFreteMap[anuncio.id] || 0;
-    return calcularPrecoRegra(precoBaseItem, regra, tipoAnuncioML, inflar, reduzir, custoFrete);
-  };
 
-  const handleVerificar = () => {
     setIsLoading(true);
     try {
-      const results = {};
-      for (const ad of anunciosSelecionados) {
-        const detalhe = calcularDetalhePorItem(ad);
-        const precoDE = detalhe?.precoFinal; // preço "DE" (anunciado, inflado)
-        if (precoDE && precoDE > 0) {
-          // O preço POR (o que o comprador paga) é o DE descontado pela inflação
-          // ad.preco já é o preço POR (salvo do ML após promoção)
-          const precoPOR = inflar > 0 ? precoDE * (1 - inflar / 100) : precoDE;
-          const diferenca = ((ad.preco - precoPOR) / precoPOR) * 100;
-          let status;
-          if (Math.abs(diferenca) < 0.1) status = 'perfeito';
-          else if (diferenca > 0) status = 'lucro';
-          else status = 'prejuizo';
-          results[ad.id] = {
-            precoCalculado: precoPOR,  // POR — usado na comparação e exibição
-            precoDE,                   // DE — preço a anunciar no ML
-            diferenca,
-            status,
-            historico: detalhe.historico,
-            titulo: ad.titulo,
-            inflar
-          };
-        }
-      }
-      onResult(results);
-      onClose();
+      // Simplificamos: pegamos apenas os dados essenciais do anúncio para enviar ao worker
+      const anunciosPayload = anunciosSelecionados.map(ad => ({
+        id: ad.id,
+        contaId: ad.contaId,
+        sku: ad.sku,
+        titulo: ad.titulo,
+        preco: ad.preco,
+        dadosML: { listing_type_id: ad.dadosML?.listing_type_id }
+      }));
+
+      const body = {
+        userId: usuarioId,
+        anuncios: anunciosPayload,
+        modo,
+        regraId,
+        precoManual,
+        precoBaseManual,
+        inflar,
+        reduzir
+      };
+      const res = await fetch('/api/ml/verificar-preco', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error((data.erro || 'Erro no servidor') + (data.detalhes ? ` | ${data.detalhes}` : ''));
+
+      onJobStart(data.jobId); // Passa o ID do Job para o componente pai
+      onClose(); // Fecha o modal
+      alert('🚀 Verificação enviada para a fila! Os resultados aparecerão na tabela em instantes.');
+
+    } catch(e) {
+      alert("Erro ao enfileirar verificação: " + e.message);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const tipoBaseTexto = regra
-    ? (regra.precoBase === 'venda' ? 'Preço de Venda' : regra.precoBase === 'custo' ? 'Preço de Custo' : 'Preço Promocional ou Venda')
-    : '';
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        {/* Header */}
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="bg-gradient-to-r from-teal-600 to-emerald-600 px-6 py-4 flex items-center justify-between flex-shrink-0">
           <div>
-            <h2 className="text-white font-black text-base">Verificar Preço</h2>
-            <p className="text-teal-100 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) — calcula e exibe a diferença sem alterar no ML</p>
+            <h2 className="text-white font-black text-base">Verificar Preço em Segundo Plano</h2>
+            <p className="text-teal-100 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s).</p>
           </div>
-          <button onClick={onClose} className="text-white/80 hover:text-white transition-colors">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-          </button>
+          <button onClick={onClose} className="text-white/80 hover:text-white transition-colors">✕</button>
         </div>
+        <div className="overflow-y-auto flex-1 p-6 space-y-4">
+          <p className="text-xs text-gray-500 bg-gray-50 p-2 border rounded">Esta função irá calcular os preços em segundo plano e atualizar a coluna "Dif. Preço". Você pode continuar usando o sistema.</p>
 
-        <div className="overflow-y-auto flex-1 p-6 space-y-5">
-          {/* Resumo simples — sem renderizar cada anúncio para não pesar */}
-          <div className="bg-teal-50 rounded-lg px-4 py-3 border border-teal-200 flex items-center gap-3">
-            <svg className="w-5 h-5 text-teal-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-            <div>
-              <p className="text-sm font-black text-teal-800">{anunciosSelecionados.length} anúncio(s) serão verificados</p>
-              <p className="text-xs text-teal-600 mt-0.5">O resultado aparecerá na coluna <strong>Dif. Preço</strong> da listagem após clicar em Verificar.</p>
+          {semSkus && modo === 'regra' && !precoBaseManual && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
+              <span className="text-amber-500 text-sm mt-0.5 flex-shrink-0">⚠️</span>
+              <p className="text-xs text-amber-700"><strong>Nenhum anúncio tem SKU vinculado ao Tiny.</strong> Sem SKU, a verificação resultará em 0 anúncios calculados. Informe um <strong>Preço Base</strong> manualmente abaixo, ou troque para o modo <strong>Preço Manual</strong>.</p>
             </div>
-          </div>
+          )}
 
-          {/* Modo */}
           <div>
             <p className="text-xs font-bold text-gray-500 uppercase mb-2">Modo de Precificação</p>
             <div className="flex gap-2">
+              <button onClick={() => setModo('regra')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'regra' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Por Regra</button>
               <button onClick={() => setModo('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'manual' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço Manual</button>
-              <button onClick={() => setModo('regra')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'regra' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Por Regra de Precificação</button>
             </div>
           </div>
-
-          {modo === 'manual' && (
-            <div>
-              <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Preço Alvo (base) R$</label>
-              <p className="text-xs text-gray-400 mb-2">O preço correto de venda calculado. O sistema comparará com o preço atual no ML.</p>
-              <input
-                type="number" min="0" step="0.01" value={precoManual}
-                onChange={e => setPrecoManual(e.target.value)}
-                placeholder="Ex: 89.90"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-              />
-            </div>
-          )}
-
-          {modo === 'regra' && (
+          {modo === 'regra' ? (
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Regra de Precificação</label>
-                {regrasPreco.length === 0 ? <p className="text-sm text-red-500">Nenhuma regra cadastrada. Configure em Configurações.</p> : (
-                  <select value={regraId} onChange={e => setRegraId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500">
-                    {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                  </select>
-                )}
+                <select value={regraId} onChange={e => setRegraId(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500">
+                  {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Preço Base R$ ({tipoBaseTexto})</label>
-                {loadingPrecos && <p className="text-[10px] text-blue-500 mb-1">Buscando preço da Tiny...</p>}
-                {precoBaseAutoPreenchido && !loadingPrecos && <p className="text-[10px] text-green-600 mb-1">✅ Preenchido automaticamente da Tiny.</p>}
-                {temMultiplosSKUs && <p className="text-[10px] text-amber-600 mb-1">⚠️ SKUs diferentes — cada item usará seu próprio preço base da Tiny.</p>}
-                {!loadingPrecos && !temMultiplosSKUs && !precoBaseAutoPreenchido && skusUnicos.length > 0 && <p className="text-[10px] text-red-500 mb-1">❌ Produto não encontrado no banco local. Sincronize com a Tiny.</p>}
-                <input type="number" min="0" step="0.01" value={precoBaseManual}
-                  onChange={e => { setPrecoBaseManual(e.target.value); setPrecoBaseAutoPreenchido(false); }}
-                  placeholder={temMultiplosSKUs ? "Automático por SKU" : "Ex: 45.00"}
-                  disabled={temMultiplosSKUs}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 ${precoBaseAutoPreenchido ? 'border-green-400 bg-green-50' : 'border-gray-300'} ${temMultiplosSKUs ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''}`} />
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Preço Base R$ (Opcional)</label>
+                 <p className="text-[10px] text-gray-400 mb-1">Deixe em branco para usar o preço do Tiny por SKU. Preencha para forçar um valor base para todos.</p>
+                <input type="number" min="0" step="0.01" value={precoBaseManual} onChange={e => setPrecoBaseManual(e.target.value)} placeholder="Automático por SKU (Recomendado)" className="w-full px-3 py-2 border rounded-md text-sm" />
               </div>
-              <div className="bg-teal-50 rounded-lg p-3 border border-teal-200 text-center">
-                <p className="text-xs text-teal-800 font-semibold">O tipo de anúncio (Clássico/Premium) será detectado automaticamente para cada item.</p>
-              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Preço Alvo (base) R$</label>
+              <input type="number" min="0" step="0.01" value={precoManual} onChange={e => setPrecoManual(e.target.value)} placeholder="Ex: 89.90" className="w-full px-3 py-2 border rounded-md text-sm" />
             </div>
           )}
-
-          {/* Estratégia de Promoção e Frete */}
-          <div className="bg-purple-50 rounded-lg p-4 border border-purple-100">
-            <p className="text-xs font-bold text-purple-700 uppercase mb-3">Estratégia de Promoção e Frete</p>
-            <p className="text-[10px] text-purple-600 mb-3">Configure as mesmas opções que usaria ao corrigir o preço — isso garante que a comparação reflita o cenário real.</p>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-purple-700 mb-1">Inflar Preço (%)</label>
-                <p className="text-[10px] text-gray-400 mb-1.5">Aplica margem de promoção no cálculo do preço correto.</p>
-                <input type="number" min="0" max="99" step="1" value={inflar} onChange={e => setInflar(Math.min(99, Math.max(0, Number(e.target.value))))}
-                  className="w-full px-3 py-2 border border-purple-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-red-600 mb-1">Reduzir p/ fugir de Frete Grátis (%)</label>
-                <p className="text-[10px] text-gray-400 mb-1.5">Tenta cravar em R$ 78,99 no cálculo do preço correto.</p>
-                <input type="number" min="0" max="100" step="0.01" value={reduzir} onChange={e => setReduzir(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-red-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-400" />
-              </div>
-            </div>
+          <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
+             <p className="text-xs font-bold text-purple-700 uppercase mb-2">Estratégia de Promoção</p>
+             <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-purple-700 mb-1">Inflar Preço (%)</label>
+                  <input type="number" min="0" max="99" value={inflar} onChange={e => setInflar(Number(e.target.value))} className="w-full px-2 py-1.5 border-purple-200 rounded-md text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-red-600 mb-1">Reduzir p/ fugir Frete Grátis (%)</label>
+                  <input type="number" min="0" max="100" value={reduzir} onChange={e => setReduzir(Number(e.target.value))} className="w-full px-2 py-1.5 border-red-200 rounded-md text-sm" />
+                </div>
+             </div>
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            {loadingFrete && <span className="text-orange-500 font-semibold animate-pulse">Lendo custo de frete...</span>}
-            {loadingPrecos && <span className="text-blue-500 font-semibold animate-pulse">Lendo preços Tiny...</span>}
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">
-              Cancelar
-            </button>
-            <button
-              onClick={handleVerificar}
-              disabled={isLoading || loadingFrete || loadingPrecos}
-              className="px-6 py-2 text-sm font-black text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
-            >
-              {(loadingFrete || loadingPrecos) ? 'Carregando dados...' : isLoading ? 'Calculando...' : `Verificar Preços (${anunciosSelecionados.length})`}
-            </button>
-          </div>
+        <div className="px-6 py-4 bg-gray-50 border-t flex justify-between items-center">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100">Cancelar</button>
+          <button onClick={handleVerificar} disabled={isLoading} className="px-6 py-2 text-sm font-black text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50">
+            {isLoading ? 'Enviando...' : 'Verificar em Segundo Plano'}
+          </button>
         </div>
       </div>
     </div>
@@ -889,6 +797,7 @@ function ModalVerificarPreco({ anunciosSelecionados, regrasPreco, usuarioId, onC
 
 export default function GerenciadorAnuncios({ usuarioId }) {
   const [anuncios, setAnuncios] = useState([]);
+  const[allKnownAds, setAllKnownAds] = useState({});
   const [total, setTotal] = useState(0);
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
@@ -923,19 +832,25 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [precoMin, setPrecoMin] = useState('');
   const [precoMax, setPrecoMax] = useState('');
   const [prazoFilter, setPrazoFilter] = useState('Todos');       // 'Todos' | 'imediato' | 'com_prazo'
-  const [descontoMin, setDescontoMin] = useState('');            // ✅ NOVO
-  const [descontoMax, setDescontoMax] = useState('');            // ✅ NOVO
+  const [descontoMin, setDescontoMin] = useState('');
+  const [descontoMax, setDescontoMax] = useState('');
+  const [semSkuFilter, setSemSkuFilter] = useState(false);
 
   // Ordenação
   const [sortBy, setSortBy] = useState('padrao');
+
+  // Agrupamento por SKU
+  const [agrupaPorSku, setAgrupaPorSku] = useState(false);
 
   // Checkboxes / seleção em massa
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [showAcoesMassa, setShowAcoesMassa] = useState(false);
   const [isSelectingAll, setIsSelectingAll] = useState(false);
+  const [isSyncingSelected, setIsSyncingSelected] = useState(false);
 
   // Verificar Preço
   const [modalVerificarPreco, setModalVerificarPreco] = useState(false);
+  const [priceCheckJobId, setPriceCheckJobId] = useState(null); 
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
@@ -953,6 +868,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     descontoMin !== '',
     descontoMax !== '',
     priceCheckFilter !== 'Todos',
+    semSkuFilter,
   ].filter(Boolean).length;
   
   useEffect(() => {
@@ -979,7 +895,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     }
   };
 
-  const fetchAnuncios = async () => {
+const fetchAnuncios = async () => {
     setIsLoading(true);
     setSelectedIds(new Set());
     try {
@@ -989,25 +905,23 @@ export default function GerenciadorAnuncios({ usuarioId }) {
       let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
 
       const params = new URLSearchParams({
-        contasIds: queryConta,
-        page: currentPage,
-        limit: itemsPerPage,
-        search: searchTerm,
-        status: statusFilter,
-        tag: tagFilter,
-        promo: promoFilter,
-        precoMin: precoMin,
-        precoMax: precoMax,
-        prazo: prazoFilter,
-        descontoMin: descontoMin,
-        descontoMax: descontoMax,
-        sortBy: sortBy,
+        contasIds: queryConta, page: currentPage, limit: itemsPerPage, search: searchTerm,
+        status: statusFilter, tag: tagFilter, promo: promoFilter, precoMin: precoMin,
+        precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
+        descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
       });
 
       const res = await fetch(`/api/ml/anuncios?${params.toString()}`);
       const data = await res.json();
       setAnuncios(data.anuncios);
       setTotal(data.total);
+
+      // Armazena no dicionário global de memória
+      setAllKnownAds(prev => {
+        const next = { ...prev };
+        data.anuncios.forEach(ad => next[ad.id] = ad);
+        return next;
+      });
     } catch (error) {
       console.error(error);
     } finally {
@@ -1018,7 +932,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, sortBy, contasML]);
+  }, [currentPage, searchTerm, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
@@ -1034,6 +948,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     setDescontoMin('');
     setDescontoMax('');
     setPriceCheckFilter('Todos');
+    setSemSkuFilter(false);
     setCurrentPage(1);
   };
 
@@ -1043,20 +958,20 @@ export default function GerenciadorAnuncios({ usuarioId }) {
       const idsPermitidos = contasML.map(c => c.id).join(',');
       let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
       const params = new URLSearchParams({
-        contasIds: queryConta,
-        search: searchTerm,
-        status: statusFilter,
-        tag: tagFilter,
-        promo: promoFilter,
-        precoMin,
-        precoMax,
-        prazo: prazoFilter,
-        descontoMin,
-        descontoMax,
+        contasIds: queryConta, search: searchTerm, status: statusFilter,
+        tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
+        descontoMin, descontoMax, semSku: semSkuFilter,
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
       if (data.ids) setSelectedIds(new Set(data.ids));
+      if (data.anuncios) {
+         setAllKnownAds(prev => {
+           const next = { ...prev };
+           data.anuncios.forEach(ad => next[ad.id] = ad);
+           return next;
+         });
+      }
     } catch (e) {
       console.error('Erro ao selecionar todos:', e);
     } finally {
@@ -1064,6 +979,43 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     }
   };
 
+
+const handleSyncSelected = async () => {
+    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
+    
+    // ✅ TRAVA DE PROTEÇÃO CONTRA TIMEOUT
+    if (selectedIds.size > 100) {
+      return alert('Para garantir a estabilidade, sincronize no máximo 100 anúncios por vez nesta opção.\n\nPara sincronizar toda a conta de uma vez, use o botão verde "Importar Tudo" no topo da página.');
+    }
+
+    if (!window.confirm(`Sincronizar ${selectedIds.size} anúncio(s) com a API do ML?`)) return;
+    setIsSyncingSelected(true);
+    
+    try {
+      const res = await fetch('/api/ml/sync-selected-ads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemIds: Array.from(selectedIds), userId: usuarioId }),
+      });
+
+      // ✅ TRATAMENTO SEGURO DE ERROS NÃO-JSON (EVITA O UNEXPECTED TOKEN '<')
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+         throw new Error("O servidor demorou muito para responder (Timeout) ou ocorreu um erro de rede. Tente selecionar menos itens.");
+      }
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
+      
+      const msg = `${data.atualizados} anúncio(s) sincronizado(s).${data.erros?.length ? `\n\nErros:\n${data.erros.join('\n')}` : ''}`;
+      alert(msg);
+      fetchAnuncios();
+    } catch (e) {
+      alert(`Erro ao sincronizar: ${e.message}`);
+    } finally {
+      setIsSyncingSelected(false);
+    }
+  };
 // ─────────────────────────────────────────────────────────────────────────────
 // CORREÇÃO 3: Frontend — NÃO abortar no primeiro erro
 // Substitua a função iniciarSincronizacaoML no seu componente React
@@ -1140,60 +1092,119 @@ export default function GerenciadorAnuncios({ usuarioId }) {
 
 // ✅ 3. MODIFIQUE A FUNÇÃO DE INICIAR A SINCRONIZAÇÃO
 
-const iniciarSincronizacaoML = async () => {
-  if (!contaParaSincronizar) return alert("Selecione uma conta para puxar os anúncios.");
 
-  setSyncProgress(0);
 
-  const contasParaSync = contaParaSincronizar === '_TODAS_'
-    ? contasML.map(c => c.id)
-    : [contaParaSincronizar];
+  const iniciarSincronizacaoML = async () => {
+    if (!contaParaSincronizar) return alert("Selecione uma conta para puxar os anúncios.");
 
-  try {
-    let jobId;
-    const isMultiAccount = contasParaSync.length > 1;
+    setSyncProgress(0);
 
-    const endpoint = isMultiAccount ? '/api/ml/sync-all-ads' : '/api/ml/sync-ads';
-    const body = isMultiAccount
-      ? { contaIds: contasParaSync, importarApenasNovos }
-      : { contaId: contasParaSync[0], importarApenasNovos };
+    const contasParaSync = contaParaSincronizar === '_TODAS_'
+      ? contasML.map(c => c.id)
+      : [contaParaSincronizar];
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
+    try {
+      let jobId;
+      const isMultiAccount = contasParaSync.length > 1;
 
-    if (!res.ok) {
-      throw new Error(data.erro || 'Falha ao iniciar varredura');
-    }
+      const endpoint = isMultiAccount ? '/api/ml/sync-all-ads' : '/api/ml/sync-ads';
+      const body = isMultiAccount
+        ? { contaIds: contasParaSync, importarApenasNovos }
+        : { contaId: contasParaSync[0], importarApenasNovos };
 
-    if (data.erros && data.erros.length > 0) {
-      alert(`⚠️ ${data.erros.length} conta(s) com problema:\n\n${data.erros.join('\n')}`);
-    }
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
 
-    jobId = data.jobId;
+      // ✅ TRATAMENTO SEGURO DE ERROS NÃO-JSON AQUI TAMBÉM
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+         throw new Error("O servidor falhou ao iniciar a varredura. Verifique o terminal do Node.js.");
+      }
 
-    if (jobId) {
-      // A mágica acontece aqui: salvamos o ID no localStorage e no estado
-      localStorage.setItem('ml_sync_job_id', jobId);
-      setActiveJobId(jobId);
-    } else {
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.erro || 'Falha ao iniciar varredura');
+      }
+
+      if (data.erros && data.erros.length > 0) {
+        alert(`⚠️ ${data.erros.length} conta(s) com problema:\n\n${data.erros.join('\n')}`);
+      }
+
+      jobId = data.jobId;
+
+      if (jobId) {
+        localStorage.setItem('ml_sync_job_id', jobId);
+        setActiveJobId(jobId);
+      } else {
+        setSyncProgress(null);
+      }
+
+    } catch (e) {
+      alert("Erro ao disparar varredura: " + e.message);
       setSyncProgress(null);
     }
+  };
 
-  } catch (e) {
-    alert("Erro ao disparar varredura: " + e.message);
-    setSyncProgress(null);
-  }
-};
+
+  // useEffect para monitorar a sincronização principal
+  useEffect(() => {
+    if (!activeJobId) return;
+    // ... (código existente)
+  }, [activeJobId]);
+
+  // ✅ NOVO useEffect para monitorar a verificação de preço
+  useEffect(() => {
+    if (!priceCheckJobId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        // Usaremos a fila de tarefas geral para saber o status
+        const res = await fetch(`/api/fila?userId=${usuarioId}&jobId=${priceCheckJobId}`);
+        const data = await res.json();
+        const tarefa = data.tarefas?.[0];
+
+        if (!tarefa || tarefa.status === 'CONCLUIDO' || tarefa.status === 'FALHA') {
+          clearInterval(interval);
+          setPriceCheckJobId(null);
+          
+          if (tarefa?.status === 'CONCLUIDO') {
+            // Se concluiu, busca os resultados salvos no banco
+            const resultsRes = await fetch(`/api/usuario/${usuarioId}/verificacao-preco`);
+            const resultsData = await resultsRes.json();
+            if (resultsData.resultados) {
+              setPriceCheckResults(resultsData.resultados);
+              alert('✅ Verificação de preços concluída!');
+            }
+          } else {
+            alert('❌ Falha na verificação de preços. Verifique o Gerenciador de Fila.');
+          }
+        }
+      } catch (e) {
+        clearInterval(interval);
+        setPriceCheckJobId(null);
+      }
+    }, 5000); // Verifica a cada 5 segundos
+
+    return () => clearInterval(interval);
+  }, [priceCheckJobId, usuarioId]);
+
 
   const mergeAdsIntoState = (newAds) => {
-    const adMap = new Map(anuncios.map(ad => [ad.id, ad]));
+    const adMap = new Map(anuncios.map(ad =>[ad.id, ad]));
     newAds.forEach(newAd => adMap.set(newAd.id, newAd));
     setAnuncios(Array.from(adMap.values()));
     setTotal(adMap.size);
+
+    setAllKnownAds(prev => {
+        const next = { ...prev };
+        newAds.forEach(ad => next[ad.id] = ad);
+        return next;
+    });
+
     fetchAvailableTags();
   };
 
@@ -1269,6 +1280,58 @@ const handleFetchBySku = async () => {
   const displayedAnuncios = priceCheckFilter === 'Todos'
     ? anuncios
     : anuncios.filter(ad => priceCheckResults[ad.id]?.status === priceCheckFilter);
+
+  // Agrupamento por SKU: soma visitas e vendas de todos os anúncios (pai + variações) com o mesmo SKU
+  const skuGroups = React.useMemo(() => {
+    if (!agrupaPorSku) return null;
+
+    const groups = {};
+
+    displayedAnuncios.forEach(ad => {
+      // Determina SKU do anúncio pai
+      const skuPai = ad.sku || '__sem_sku__';
+
+      // Coleta SKUs de variações (podem ser iguais ao pai ou diferentes)
+      const variations = ad.dadosML?.variations || [];
+      const skusVariacoes = variations.map(v =>
+        v.seller_custom_field
+        || (v.attributes && v.attributes.find(a => a.id === 'SELLER_SKU'))?.value_name
+        || null
+      ).filter(Boolean);
+
+      // Determina o conjunto de SKUs que este anúncio representa
+      // Se todas as variações têm o mesmo SKU do pai (ou não têm SKU próprio),
+      // agrupamos sob o SKU pai. Se há variações com SKUs distintos, o anúncio
+      // ainda é contado pelo SKU pai (visitas/vendas são do listing, não por variação).
+      const skuGroup = skuPai;
+
+      if (!groups[skuGroup]) {
+        groups[skuGroup] = {
+          sku: skuGroup === '__sem_sku__' ? null : skuGroup,
+          ads: [],
+          totalVisitas: 0,
+          totalVendas: 0,
+          totalEstoque: 0,
+          contas: new Set(),
+          titulo: ad.titulo,
+          skusRelacionados: new Set(),
+        };
+      }
+
+      groups[skuGroup].ads.push(ad);
+      groups[skuGroup].totalVisitas += Number(ad.visitas || 0);
+      groups[skuGroup].totalVendas += Number(ad.vendas || 0);
+      groups[skuGroup].totalEstoque += Number(ad.estoque || 0);
+      groups[skuGroup].contas.add(ad.conta?.nickname || '?');
+
+      // Registra SKUs de variações relacionados (para exibição informativa)
+      skusVariacoes.forEach(s => {
+        if (s !== skuPai) groups[skuGroup].skusRelacionados.add(s);
+      });
+    });
+
+    return Object.values(groups).sort((a, b) => b.totalVisitas - a.totalVisitas);
+  }, [agrupaPorSku, displayedAnuncios]);
 
   return (
     <>
@@ -1396,6 +1459,17 @@ const handleFetchBySku = async () => {
             <option value="estoque_desc">↓ Mais Estoque</option>
             <option value="estoque_asc">↑ Menos Estoque</option>
           </select>
+
+          {/* Agrupar por SKU */}
+          <label className={`flex items-center gap-2 cursor-pointer select-none px-3 py-2 rounded-md border text-sm font-bold transition-colors ${agrupaPorSku ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+            <input
+              type="checkbox"
+              checked={agrupaPorSku}
+              onChange={(e) => setAgrupaPorSku(e.target.checked)}
+              className="w-4 h-4 rounded cursor-pointer accent-white"
+            />
+            Agrupar por SKU
+          </label>
         </div>
 
         {/* ✅ NOVO: Botão "Filtros Adicionais" com seta e painel expansível */}
@@ -1532,6 +1606,19 @@ const handleFetchBySku = async () => {
                   )}
                 </div>
 
+                {/* Filtro Sem SKU */}
+                <div className="flex flex-col gap-1.5 justify-end">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={semSkuFilter}
+                      onChange={(e) => { setSemSkuFilter(e.target.checked); setCurrentPage(1); }}
+                      className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-red-600 uppercase tracking-wide">Sem SKU</span>
+                  </label>
+                </div>
+
                 {/* Botão Limpar Filtros Adicionais */}
                 {activeAdvancedFiltersCount > 0 && (
                   <button
@@ -1607,6 +1694,15 @@ const handleFetchBySku = async () => {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                {/* Sincronizar Selecionados */}
+                <button
+                  onClick={handleSyncSelected}
+                  disabled={isSyncingSelected}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-purple-700 bg-purple-50 border-purple-200 hover:bg-purple-100 disabled:opacity-50"
+                >
+                  {isSyncingSelected ? '⏳ Sincronizando...' : '🔄 Sincronizar Selecionados'}
+                </button>
+
                 {/* Corrigir Preço — funcional */}
                 <button
                   onClick={() => {
@@ -1697,6 +1793,72 @@ const handleFetchBySku = async () => {
           <tbody className="bg-white divide-y divide-gray-100">
             {isLoading ? (
               <tr><td colSpan="15" className="px-6 py-10 text-center text-sm font-semibold text-gray-500">Buscando anúncios no banco local...</td></tr>
+            ) : agrupaPorSku && skuGroups ? (
+              skuGroups.length === 0 ? (
+                <tr><td colSpan="15" className="px-6 py-10 text-center text-sm text-gray-500">Nenhum anúncio encontrado para agrupar.</td></tr>
+              ) : skuGroups.map((group) => (
+                <tr key={group.sku ?? '__sem_sku__'} className="hover:bg-violet-50/30 transition-colors">
+                  {/* Expander placeholder */}
+                  <td className="px-2 py-3 w-7" />
+                  {/* Checkbox placeholder */}
+                  <td className="px-3 py-3" />
+                  {/* Thumb: imagem do primeiro ad */}
+                  <td className="px-3 py-3">
+                    <img src={group.ads[0]?.thumbnail} alt="" className="w-10 h-10 object-cover rounded shadow-sm border border-gray-200" />
+                  </td>
+                  {/* SKU */}
+                  <td className="px-3 py-3 text-sm" colSpan="2">
+                    <div className="font-black text-violet-700 font-mono text-base leading-tight">
+                      {group.sku ?? <span className="text-gray-400 italic font-normal">Sem SKU</span>}
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-0.5 truncate max-w-xs" title={group.titulo}>{group.titulo}</div>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {Array.from(group.contas).map(c => (
+                        <span key={c} className="bg-gray-100 text-gray-600 border border-gray-200 text-[10px] px-1.5 py-0.5 rounded font-semibold">{c}</span>
+                      ))}
+                      {group.skusRelacionados.size > 0 && (
+                        <span className="bg-indigo-50 text-indigo-600 border border-indigo-200 text-[10px] px-1.5 py-0.5 rounded font-semibold" title={Array.from(group.skusRelacionados).join(', ')}>
+                          +{group.skusRelacionados.size} SKU(s) variação
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  {/* Anúncios (count) */}
+                  <td className="px-3 py-3 text-center">
+                    <span className="inline-flex flex-col items-center">
+                      <span className="text-lg font-black text-gray-800">{group.ads.length}</span>
+                      <span className="text-[10px] text-gray-400 uppercase font-semibold">anúncio{group.ads.length > 1 ? 's' : ''}</span>
+                    </span>
+                  </td>
+                  {/* Preço (vazio no agrupado) */}
+                  <td className="px-3 py-3 text-center text-gray-300 text-xs">—</td>
+                  {/* % Desc vazio */}
+                  <td className="px-3 py-3 text-center text-gray-300 text-xs">—</td>
+                  {/* Estoque total */}
+                  <td className="px-3 py-3 text-center">
+                    <span className="inline-flex flex-col items-center">
+                      <span className="text-base font-black text-gray-700">{group.totalEstoque}</span>
+                      <span className="text-[10px] text-gray-400 uppercase font-semibold">estoque</span>
+                    </span>
+                  </td>
+                  {/* Total Visitas */}
+                  <td className="px-3 py-3 text-center">
+                    <span className="inline-flex flex-col items-center">
+                      <span className="text-base font-black text-blue-600">{group.totalVisitas.toLocaleString('pt-BR')}</span>
+                      <span className="text-[10px] text-blue-400 uppercase font-semibold">visitas</span>
+                    </span>
+                  </td>
+                  {/* Total Vendas */}
+                  <td className="px-3 py-3 text-center">
+                    <span className="inline-flex flex-col items-center">
+                      <span className="text-base font-black text-green-600">{group.totalVendas.toLocaleString('pt-BR')}</span>
+                      <span className="text-[10px] text-green-400 uppercase font-semibold">vendas</span>
+                    </span>
+                  </td>
+                  {/* T.Fabr, Tipo An, Tags, Dif.Preço — vazios no modo agrupado */}
+                  <td colSpan="4" />
+                </tr>
+              ))
             ) : displayedAnuncios.length > 0 ? (
               displayedAnuncios.map((ad) => {
                 const dadosML = ad.dadosML || {};
@@ -1818,16 +1980,17 @@ const handleFetchBySku = async () => {
                     {/* Coluna Dif. Preço */}
                     <td className="px-3 py-2 text-center">
                       {priceCheckResults[ad.id] ? (() => {
-                        const { status, diferenca, precoCalculado } = priceCheckResults[ad.id];
+                        const { status, diferenca, precoCalculado, precoDE } = priceCheckResults[ad.id];
                         const cfg = {
                           perfeito: { bg: 'bg-blue-50 border-blue-200 text-blue-700', label: '✓ Perfeito' },
+                          perfeito_promo: { bg: 'bg-emerald-50 border-emerald-300 text-emerald-700', label: '✓ Perf. (Promo)' },
                           lucro:    { bg: 'bg-green-50 border-green-200 text-green-700', label: `+${diferenca.toFixed(1)}%` },
                           prejuizo: { bg: 'bg-red-50 border-red-200 text-red-700', label: `${diferenca.toFixed(1)}%` },
                         }[status];
                         return (
                           <button
                             onClick={() => setPriceDetailPopup({ ad, resultado: priceCheckResults[ad.id] })}
-                            title={`Preço correto: R$ ${precoCalculado.toFixed(2)} — Clique para ver o cálculo`}
+                            title={`Correto Cheio: R$ ${precoDE?.toFixed(2) || '---'} | Correto Desconto: R$ ${precoCalculado?.toFixed(2)}`}
                             className={`inline-block text-[11px] font-black px-2 py-0.5 rounded border cursor-pointer hover:opacity-75 transition-opacity ${cfg.bg}`}>
                             {cfg.label}
                           </button>
@@ -1900,7 +2063,10 @@ const handleFetchBySku = async () => {
         {/* Paginação */}
         <div className="flex items-center justify-between p-4 border-t bg-gray-50">
           <span className="text-sm font-semibold text-gray-600">
-            Página {currentPage} — {total} anúncio(s)
+            {agrupaPorSku && skuGroups
+              ? <><span className="text-violet-700">{skuGroups.length} grupo(s) de SKU</span> · {displayedAnuncios.length} anúncio(s)</>
+              : <>Página {currentPage} — {total} anúncio(s)</>
+            }
             {tagFilter !== 'Todas' && <span className="text-blue-600 ml-2">(filtrado por tag)</span>}
             {activeAdvancedFiltersCount > 0 && <span className="text-purple-600 ml-2">(+{activeAdvancedFiltersCount} filtro(s) adicional(is))</span>}
           </span>
@@ -1916,7 +2082,7 @@ const handleFetchBySku = async () => {
 
     {modalCorrigirPreco && (
       <ModalCorrigirPreco
-        anunciosSelecionados={anuncios.filter(ad => selectedIds.has(ad.id))}
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
         regrasPreco={regrasPreco}
         usuarioId={usuarioId}
         onClose={() => setModalCorrigirPreco(false)}
@@ -1924,22 +2090,15 @@ const handleFetchBySku = async () => {
       />
     )}
 
+
     {modalVerificarPreco && (
       <ModalVerificarPreco
-        anunciosSelecionados={anuncios.filter(ad => selectedIds.has(ad.id))}
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
         regrasPreco={regrasPreco}
         usuarioId={usuarioId}
         onClose={() => setModalVerificarPreco(false)}
-        onResult={(results) => {
-          const merged = { ...priceCheckResults, ...results };
-          setPriceCheckResults(merged);
-          setModalVerificarPreco(false);
-          // Persiste no banco de dados
-          fetch(`/api/usuario/${usuarioId}/verificacao-preco`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ resultados: merged })
-          }).catch(() => {});
+        onJobStart={(jobId) => {
+          setPriceCheckJobId(jobId); // Inicia o monitoramento
         }}
       />
     )}

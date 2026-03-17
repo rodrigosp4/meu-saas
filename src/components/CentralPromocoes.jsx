@@ -629,22 +629,30 @@ function TabPromocoes({ usuarioId, contas }) {
   );
 }
 
-// ─── Tab: Criar Campanha ──────────────────────────────────────────────────────
+// ===== Substitua esta função inteira em src/components/CentralPromocoes.jsx =====
+
 function TabCriarCampanha({ usuarioId, contas }) {
   const [form, setForm] = useState({ contaId: '', nome: '', startDate: '', finishDate: '' });
   const [anuncios, setAnuncios] = useState([]);
   const [loadingAds, setLoadingAds] = useState(false);
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState({}); // { itemId: { dealPrice, topDealPrice } }
+  
+  // Novos estados para os descontos globais
+  const [descontoGeral, setDescontoGeral] = useState('');
+  const [descontoTop, setDescontoTop] = useState('');
+
+  // Estado modificado para guardar mais dados do item selecionado
+  const [selected, setSelected] = useState({}); // { itemId: { ad, dealPrice, topDealPrice } }
+
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
     if (!form.contaId) { setAnuncios([]); return; }
     setLoadingAds(true);
-    fetch(`/api/ml/anuncios?contasIds=${form.contaId}&status=active&limit=200`)
+    fetch(`/api/ml/anuncios?contasIds=${form.contaId}&status=active&limit=500`) // Aumentado o limite
       .then(r => r.json())
-      .then(data => setAnuncios(data.results || []))
+      .then(data => setAnuncios(data.anuncios || [])) // Corrigido de 'results' para 'anuncios'
       .catch(() => setAnuncios([]))
       .finally(() => setLoadingAds(false));
   }, [form.contaId]);
@@ -655,10 +663,44 @@ function TabCriarCampanha({ usuarioId, contas }) {
     !search || a.titulo?.toLowerCase().includes(search.toLowerCase()) || a.id?.toLowerCase().includes(search.toLowerCase()) || a.sku?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleSelect = (id) => {
+  // Função que calcula os preços baseados nos percentuais
+  const calculatePrices = (precoAtual, geralPct, topPct) => {
+    const pAtual = Number(precoAtual);
+    const dGeral = Number(geralPct);
+    const dTop = Number(topPct);
+    
+    const dealPrice = (dGeral > 0 && dGeral < 100) ? pAtual * (1 - dGeral / 100) : null;
+    const topDealPrice = (dTop > 0 && dTop < 100 && dTop > dGeral) ? pAtual * (1 - dTop / 100) : null;
+
+    return {
+      dealPrice: dealPrice ? dealPrice.toFixed(2) : '',
+      topDealPrice: topDealPrice ? topDealPrice.toFixed(2) : '',
+    };
+  };
+
+  // Atualiza os preços dos itens já selecionados quando o desconto global muda
+  useEffect(() => {
     setSelected(prev => {
-      if (prev[id]) { const n = { ...prev }; delete n[id]; return n; }
-      return { ...prev, [id]: { dealPrice: '', topDealPrice: '' } };
+      const next = {};
+      Object.keys(prev).forEach(id => {
+        const { ad } = prev[id];
+        const { dealPrice, topDealPrice } = calculatePrices(ad.preco, descontoGeral, descontoTop);
+        next[id] = { ...prev[id], dealPrice, topDealPrice };
+      });
+      return next;
+    });
+  }, [descontoGeral, descontoTop]);
+
+  // Adiciona ou remove um item da seleção, já calculando o preço inicial
+  const toggleSelect = (ad) => {
+    setSelected(prev => {
+      if (prev[ad.id]) {
+        const n = { ...prev };
+        delete n[ad.id];
+        return n;
+      }
+      const { dealPrice, topDealPrice } = calculatePrices(ad.preco, descontoGeral, descontoTop);
+      return { ...prev, [ad.id]: { dealPrice, topDealPrice, ad } };
     });
   };
 
@@ -669,44 +711,54 @@ function TabCriarCampanha({ usuarioId, contas }) {
   async function handleSubmit(e) {
     e.preventDefault();
     const itens = Object.entries(selected)
-      .filter(([, v]) => v.dealPrice)
+      .filter(([, v]) => v.dealPrice && parseFloat(v.dealPrice) > 0)
       .map(([itemId, v]) => ({
         itemId,
         dealPrice: parseFloat(v.dealPrice),
-        ...(v.topDealPrice ? { topDealPrice: parseFloat(v.topDealPrice) } : {}),
+        ...(v.topDealPrice && parseFloat(v.topDealPrice) > 0 ? { topDealPrice: parseFloat(v.topDealPrice) } : {}),
       }));
-    if (itens.length === 0) return alert('Selecione ao menos um item com preço de promoção.');
+
+    if (itens.length === 0) return alert('Selecione ao menos um item e defina um preço de promoção válido.');
+    if (new Date(form.finishDate) < new Date(form.startDate)) return alert('A data de fim não pode ser anterior à data de início.');
 
     setSaving(true);
     setResult(null);
     try {
+      // Formata as datas para o padrão esperado pela API do ML
+      const startDate = form.startDate ? `${form.startDate}T00:00:00` : '';
+      const finishDate = form.finishDate ? `${form.finishDate}T23:59:59` : '';
+      
       const res = await fetch('/api/promocoes/campanha-vendedor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, userId: usuarioId, itens }),
+        body: JSON.stringify({ ...form, startDate, finishDate, userId: usuarioId, itens }),
       });
       const data = await res.json();
       setResult(data);
       if (data.ok) {
+        alert(`Campanha "${form.nome}" criada com sucesso! ${itens.length} iten(s) adicionado(s).`);
         setSelected({});
         setForm(prev => ({ ...prev, nome: '', startDate: '', finishDate: '' }));
+      } else {
+        throw new Error(data.erro || JSON.stringify(data.detalhes));
       }
     } catch (e) {
       setResult({ ok: false, erro: e.message });
+      alert(`Erro ao criar campanha: ${e.message}`);
     } finally {
       setSaving(false);
     }
   }
 
   const selectedCount = Object.keys(selected).length;
-  const readyCount = Object.values(selected).filter(v => v.dealPrice).length;
+  const readyCount = Object.values(selected).filter(v => v.dealPrice && parseFloat(v.dealPrice) > 0).length;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Campaign fields */}
+      {/* Dados da Campanha */}
       <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm space-y-4">
         <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Dados da Campanha</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1">Conta ML</label>
             <select required value={form.contaId} onChange={e => setF('contaId', e.target.value)}
@@ -723,12 +775,12 @@ function TabCriarCampanha({ usuarioId, contas }) {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1">Data de Início</label>
-            <input required type="datetime-local" value={form.startDate} onChange={e => setF('startDate', e.target.value)}
+            <input required type="date" value={form.startDate} onChange={e => setF('startDate', e.target.value)}
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1">Data de Fim <span className="text-gray-400 font-normal">(máx. 14 dias)</span></label>
-            <input required type="datetime-local" value={form.finishDate} onChange={e => setF('finishDate', e.target.value)}
+            <input required type="date" value={form.finishDate} onChange={e => setF('finishDate', e.target.value)}
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
         </div>
@@ -737,13 +789,27 @@ function TabCriarCampanha({ usuarioId, contas }) {
       {/* Item selection */}
       {form.contaId && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          {/* Nova Seção de Descontos */}
+          <div className="p-4 bg-orange-50 border-b border-orange-100 flex flex-wrap items-end gap-4">
+            <h3 className="w-full text-sm font-bold text-gray-700 uppercase tracking-wide mb-1">Estratégia de Desconto (Preenchimento Rápido)</h3>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Desconto Geral (%)</label>
+              <input type="number" min="1" max="80" step="1" value={descontoGeral} onChange={e => setDescontoGeral(e.target.value)}
+                placeholder="Ex: 10" className="w-32 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Desconto Top Deal (%) <span className="text-gray-400 font-normal">(opcional)</span></label>
+              <input type="number" min="1" max="80" step="1" value={descontoTop} onChange={e => setDescontoTop(e.target.value)}
+                placeholder="Ex: 15" className="w-32 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300"/>
+            </div>
+             <p className="text-[11px] text-gray-500 max-w-sm">Preencha para calcular automaticamente os preços dos itens selecionados. Você ainda pode editar o valor final de cada um na tabela.</p>
+          </div>
+
           <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
             <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide flex-1">Selecionar Itens</h3>
             <span className="text-xs text-gray-400">{selectedCount} selecionado(s)</span>
             <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+              type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Buscar por título, ID ou SKU..."
               className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-orange-300"
             />
@@ -754,7 +820,7 @@ function TabCriarCampanha({ usuarioId, contas }) {
           ) : (
             <div className="overflow-auto max-h-[400px]">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50">
+                <thead className="sticky top-0 bg-gray-50 z-10">
                   <tr className="text-left text-gray-400 text-[11px] uppercase tracking-wide border-b border-gray-100">
                     <th className="px-3 py-2 w-8"></th>
                     <th className="px-3 py-2">Título</th>
@@ -769,7 +835,7 @@ function TabCriarCampanha({ usuarioId, contas }) {
                     return (
                       <tr key={ad.id} className={`border-b border-gray-50 hover:bg-orange-50/40 transition-colors ${isSel ? 'bg-orange-50' : ''}`}>
                         <td className="px-3 py-2">
-                          <input type="checkbox" checked={isSel} onChange={() => toggleSelect(ad.id)}
+                          <input type="checkbox" checked={isSel} onChange={() => toggleSelect(ad)}
                             className="accent-orange-500 w-4 h-4 cursor-pointer" />
                         </td>
                         <td className="px-3 py-2">
@@ -814,7 +880,6 @@ function TabCriarCampanha({ usuarioId, contas }) {
         </div>
       )}
 
-      {/* Result */}
       {result && (
         <div className={`rounded-xl px-5 py-4 text-sm border ${result.ok ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
           {result.ok ? (
@@ -823,23 +888,19 @@ function TabCriarCampanha({ usuarioId, contas }) {
               <p>ID: <span className="font-mono">{result.campanha?.id}</span> · {result.resultItens?.filter(i => i.ok).length}/{result.resultItens?.length} itens adicionados</p>
             </>
           ) : (
-            <p>❌ Erro: {result.erro || JSON.stringify(result.detalhes)}</p>
+            <p className="font-bold">❌ Erro: <span className="font-normal">{result.erro || JSON.stringify(result.detalhes)}</span></p>
           )}
         </div>
       )}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end mt-2">
         <button
           type="submit"
           disabled={saving || !form.contaId || readyCount === 0}
           className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold px-6 py-2.5 rounded-xl transition-colors"
         >
-          {saving ? (
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-          ) : (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-          )}
-          {saving ? 'Criando...' : `Criar Campanha${readyCount > 0 ? ` (${readyCount} itens)` : ''}`}
+          {saving && <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>}
+          {saving ? 'Criando...' : `Criar Campanha (${readyCount} ${readyCount === 1 ? 'item' : 'itens'})`}
         </button>
       </div>
     </form>

@@ -1,8 +1,9 @@
+// backend/src/workers/sync.worker.js
 import './ml.worker.js';
-
-import './publish.worker.js'; 
+import './publish.worker.js';
 import './price.worker.js';
-import './priceCheck.worker.js'; 
+import './priceCheck.worker.js';
+import './acoes.worker.js';
 
 import { Worker } from 'bullmq';
 import axios from 'axios';
@@ -14,11 +15,9 @@ const connection = {
   host: config.redisHost,
   port: config.redisPort,
   password: config.redisPassword || undefined,
-  // Tira o "tls: {}" se for ambiente local
   ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
-// Função auxiliar para evitar bloqueio por limite de requisições do Tiny (Rate Limit)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 console.log('⚙️  Worker de Sincronização do Tiny Iniciado e aguardando Jobs...');
@@ -30,7 +29,7 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
     throw new Error("Faltam credenciais (userId ou tinyToken) para executar a sincronização.");
   }
 
-  await job.updateProgress(5); // Inicia a barra de progresso no frontend
+  await job.updateProgress(5);
 
   let idsToFetch = [];
 
@@ -38,11 +37,9 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
   // FASE 1: BUSCAR QUAIS IDs DEVEM SER ATUALIZADOS BASEADO NO MODO
   // =========================================================================
   try {
-    // ✅ NOVO MODO: Sincronizar uma lista específica de IDs
     if (mode === 'ids' && Array.isArray(ids)) {
       idsToFetch = ids;
     } else if (mode === 'sku' && sku) {
-      // Busca apenas um SKU específico
       const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
         new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: sku })
       );
@@ -50,7 +47,6 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       idsToFetch = items.map(p => p.produto.id);
 
     } else if (mode === 'recentes') {
-      // Busca a primeira página de produtos mais recentes
       const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
         new URLSearchParams({ token: tinyToken, formato: 'JSON' })
       );
@@ -58,28 +54,24 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       idsToFetch = items.map(p => p.produto.id);
 
     } else if (mode === 'all') {
-      // Atualização completa (Varre as páginas do Tiny)
-      let page = 1;
-      let hasMore = true;
-      while (hasMore) {
-        const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
-          new URLSearchParams({ token: tinyToken, formato: 'JSON', pagina: page })
-        );
-        const items = res.data?.retorno?.produtos || [];
-        
-        if (items.length === 0) {
-          hasMore = false;
-        } else {
+      const firstRes = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
+        new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: 1 })
+      );
+      const firstItems = firstRes.data?.retorno?.produtos || [];
+      const totalPages = parseInt(firstRes.data?.retorno?.numero_paginas || '1', 10);
+      idsToFetch.push(...firstItems.map(p => p.produto.id));
+
+      for (let page = 2; page <= totalPages && page <= 500; page++) {
+        await delay(350);
+        try {
+          const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
+            new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: page })
+          );
+          const items = res.data?.retorno?.produtos || [];
           idsToFetch.push(...items.map(p => p.produto.id));
-          page++;
-          
-          // ✅ NOVO: Delay de 300ms entre as páginas para não tomar bloqueio da API da Tiny (Erro 429)
-          await delay(300);
+        } catch (pageErr) {
+          console.warn(`⚠️ Falha ao buscar página ${page}/${totalPages}: ${pageErr.message}`);
         }
-        
-        // Aumentamos a trava para 500 páginas (suporta até 50.000 produtos). 
-        // Impede apenas loops infinitos caso a API da Tiny bugue.
-        if (page > 500) break; 
       }
     }
   } catch (error) {
@@ -91,99 +83,97 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
     return { success: true, message: 'Nenhum produto encontrado no Tiny ERP.' };
   }
 
-  await job.updateProgress(15); // Lista montada
+  await job.updateProgress(15); 
 
   // =========================================================================
-  // FASE 2: BUSCAR DETALHES DE CADA PRODUTO E SALVAR NO BANCO DE DADOS (PRISMA)
+  // FASE 2: BUSCAR DETALHES DE CADA PRODUTO E SALVAR NO BANCO DE DADOS
   // =========================================================================
   const total = idsToFetch.length;
   let processed = 0;
 
   for (const idProduto of idsToFetch) {
-    try {
-      // Delay de 300ms entre as requisições para evitar erro "429 Too Many Requests" do Tiny
-      await delay(300);
+    let sucesso = false;
+    let tentativas = 0;
+    const maxTentativas = 3;
 
-      // Busca os detalhes e o estoque paralelamente
-      const [detRes, estRes] = await Promise.all([
-        axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto })),
-        axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto }))
-      ]);
+    while (tentativas < maxTentativas && !sucesso) {
+      try {
+        await delay(350);
 
-      const det = detRes.data?.retorno?.produto;
-      const est = estRes.data?.retorno?.produto;
+        // ✅ Timeout adicionado para forçar o failover caso a requisição enrosque
+        const [detRes, estRes] = await Promise.all([
+          axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto }), { timeout: 20000 }),
+          axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto }), { timeout: 20000 })
+        ]);
 
-      if (det && det.codigo) {
-        const estoqueAtual = est ? Number(est.saldo) : 0;
-        const preco = Number(det.preco) || 0;
+        const det = detRes.data?.retorno?.produto;
+        const est = estRes.data?.retorno?.produto;
 
-        // =======================================================================
-        //  ✅ INÍCIO DA CORREÇÃO: Adicione este bloco de código
-        //  Normaliza o campo 'variacoes' para ser sempre um array
-        // =======================================================================
-        if (det.variacoes && typeof det.variacoes === 'object' && !Array.isArray(det.variacoes)) {
-          console.log(`[sync.worker] Normalizando variações do SKU ${det.codigo} de Objeto para Array.`);
-          det.variacoes = Object.values(det.variacoes);
-        }
-        // =======================================================================
-        //  ✅ FIM DA CORREÇÃO
-        // =======================================================================
+        if (det && det.codigo) {
+          const estoqueAtual = est ? Number(est.saldo) : 0;
+          const preco = Number(det.preco) || 0;
 
-        const dadosCompletos = { ...det, estoque_atual: estoqueAtual };
-
-        // Usa o upsert do Prisma (Se o SKU já existe para esse usuário, ele atualiza. Se não, ele cria)
-        await prisma.produto.upsert({
-          where: {
-            // Chave composta única definida no schema.prisma (@@unique([userId, sku]))
-            userId_sku: { userId: userId, sku: det.codigo }
-          },
-          update: {
-            nome: det.nome,
-            preco: preco,
-            estoque: estoqueAtual,
-            dadosTiny: dadosCompletos // <-- 'dadosCompletos' agora terá as variações normalizadas
-          },
-          create: {
-            userId: userId,
-            sku: det.codigo,
-            nome: det.nome,
-            preco: preco,
-            estoque: estoqueAtual,
-            statusML: 'Não Publicado',
-            dadosTiny: dadosCompletos // <-- 'dadosCompletos' agora terá as variações normalizadas
+          if (det.variacoes && typeof det.variacoes === 'object' && !Array.isArray(det.variacoes)) {
+            det.variacoes = Object.values(det.variacoes);
           }
-        });
+
+          const dadosCompletos = { ...det, estoque_atual: estoqueAtual };
+
+          await prisma.produto.upsert({
+            where: { userId_sku: { userId: userId, sku: det.codigo } },
+            update: {
+              nome: det.nome,
+              preco: preco,
+              estoque: estoqueAtual,
+              dadosTiny: dadosCompletos
+            },
+            create: {
+              userId: userId,
+              sku: det.codigo,
+              nome: det.nome,
+              preco: preco,
+              estoque: estoqueAtual,
+              statusML: 'Não Publicado',
+              dadosTiny: dadosCompletos
+            }
+          });
+        }
+        
+        sucesso = true; // Registrou e saiu do loop retry
+      } catch (err) {
+        tentativas++;
+        if (tentativas >= maxTentativas) {
+          console.error(`⚠️ Erro final ao processar o Produto ID ${idProduto}:`, err.message);
+        } else {
+          // Backoff exponencial para deixar a API respirar se houver timeout
+          await delay(2500 * tentativas);
+        }
       }
-    } catch (err) {
-      console.error(`⚠️ Erro ao processar o Produto ID ${idProduto}:`, err.message);
-      // Ignora o erro deste produto específico e continua para o próximo
     }
 
     processed++;
-    // Matemática da barra de progresso: Vai de 15% até 99% baseada no andamento do loop
     const progress = 15 + Math.floor((processed / total) * 84);
     await job.updateProgress(progress);
   }
 
   // FASE 3: CONCLUSÃO
-  await job.updateProgress(100); // 100% libera a tela do frontend
+  await job.updateProgress(100); 
   return { success: true, processed };
 
 }, { 
   connection, 
-  concurrency: 1,
+  concurrency: 5,
   stalledInterval: 120000,
   lockDuration: 300000,
   drainDelay: 10
 });
 
-// Logs para monitoramento no terminal
 syncWorker.on('completed', (job) => {
-  console.log(`✅ Sincronização concluída (Job ${job.id})! Produtos processados: ${job.returnvalue.processed || 0}`);
+  console.log(`✅ Sincronização Tiny concluída (Job ${job.id})! Produtos processados: ${job.returnvalue.processed || 0}`);
 });
 
 syncWorker.on('failed', (job, err) => {
-  console.log(`❌ Falha na Sincronização (Job ${job.id}): ${err.message}`);
+  console.log(`❌ Falha na Sincronização Tiny (Job ${job.id}): ${err.message}`);
 });
 
 syncWorker.on('error', (err) => {

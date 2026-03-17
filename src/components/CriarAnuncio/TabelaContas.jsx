@@ -1,7 +1,13 @@
 import React from 'react';
 
+const REGRAS_FIXAS = [
+  { id: 'preco_venda', nome: 'Preço de Venda do ERP' },
+  { id: 'preco_promocional', nome: 'Preço de Venda ou Promocional do ERP' },
+  { id: 'manual', nome: 'Informar manualmente' },
+];
+
 export default function TabelaContas(props) {
-  const { contasML, regrasPreco, configPublicacao, setConfigPublicacao, precosCalculados, isCalculatingPrices, strategy, setStrategy } = props;
+  const { contasML, regrasPreco, configPublicacao, setConfigPublicacao, precosCalculados, isCalculatingPrices, strategy, setStrategy, configAtacado } = props;
 
   // Função auxiliar para renderizar os detalhes matemáticos
   const renderDetalhes = (calcObj, tituloBloco, corTitulo) => {
@@ -61,6 +67,54 @@ export default function TabelaContas(props) {
             <input type="number" min="0" value={strategy.reduzir} onChange={e => setStrategy(p => ({...p, reduzir: Number(e.target.value)}))} className="w-full px-3 py-2 border rounded-md" />
           </div>
         </div>
+
+        {/* Opção de preço de atacado */}
+        {configAtacado?.ativo && Array.isArray(configAtacado.faixas) && configAtacado.faixas.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                className="w-5 h-5 cursor-pointer accent-green-600"
+                checked={strategy.enviarAtacado || false}
+                onChange={e => setStrategy(p => ({ ...p, enviarAtacado: e.target.checked }))}
+              />
+              <div>
+                <span className="text-sm font-bold text-green-700">Enviar preços de atacado (B2B)</span>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Enviará {configAtacado.faixas.length} faixa(s) de desconto configurada(s) em Configurações.
+                  O desconto é aplicado sobre o preço final de venda (com promoção ativa, se houver).
+                </p>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {configAtacado.faixas.map(f => (
+                    <span key={f.id} className="text-[10px] px-2 py-0.5 rounded font-semibold bg-green-50 text-green-700 border border-green-200">
+                      {f.minQtd}+ un → -{f.desconto}%
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </label>
+          </div>
+        )}
+
+        {/* Opção de ativar promoções automaticamente */}
+        {(strategy.inflar || 0) > 0 && (
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                className="w-5 h-5 cursor-pointer accent-purple-600"
+                checked={strategy.ativarPromocoes || false}
+                onChange={e => setStrategy(p => ({ ...p, ativarPromocoes: e.target.checked }))}
+              />
+              <div>
+                <span className="text-sm font-bold text-purple-700">Ativar promoções dentro da margem inflada</span>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Após publicar, ativará automaticamente todas as campanhas candidatas onde o desconto do vendedor é ≤ {strategy.inflar}% (sua margem inflada).
+                </p>
+              </div>
+            </label>
+          </div>
+        )}
       </div>
 
       <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
@@ -77,7 +131,7 @@ export default function TabelaContas(props) {
                 {contasML.map(conta => {
                   const conf = configPublicacao[conta.id];
                   if(!conf) return null;
-                  
+
                   const handleConfig = (campo, val) => setConfigPublicacao(p => ({...p, [conta.id]: {...p[conta.id], [campo]: val}}));
 
                   const hasCalculated = conf.ativo && (conf.tipo === 'ambos' ? (precosCalculados[`${conta.id}_classico`] && precosCalculados[`${conta.id}_premium`]) : precosCalculados[`${conta.id}_${conf.tipo}`]);
@@ -88,7 +142,32 @@ export default function TabelaContas(props) {
                         <td className="p-3"><input type="checkbox" className="w-5 h-5 cursor-pointer" checked={conf.ativo} onChange={e => handleConfig('ativo', e.target.checked)} /></td>
                         <td className="p-3 font-bold">{conta.nickname}</td>
                         <td className="p-3"><select disabled={!conf.ativo} value={conf.tipo} onChange={e => handleConfig('tipo', e.target.value)} className="border rounded p-1 text-sm w-full"><option value="classico">Clássico</option><option value="premium">Premium</option><option value="ambos">Ambos</option></select></td>
-                        <td className="p-3"><select disabled={!conf.ativo} value={conf.regraId} onChange={e => handleConfig('regraId', e.target.value)} className="border rounded p-1 text-sm w-full">{regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}</select></td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            <select disabled={!conf.ativo} value={conf.regraId || ''} onChange={e => handleConfig('regraId', e.target.value)} className="border rounded p-1 text-sm flex-1">
+                              {regrasPreco.length > 0 && (
+                                <optgroup label="Regras Personalizadas">
+                                  {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                                </optgroup>
+                              )}
+                              <optgroup label="Opções Fixas">
+                                {REGRAS_FIXAS.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                              </optgroup>
+                            </select>
+                            {conf.regraId === 'manual' && (
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="R$ 0,00"
+                                disabled={!conf.ativo}
+                                value={conf.precoManual || ''}
+                                onChange={e => handleConfig('precoManual', e.target.value)}
+                                className="border rounded p-1 text-sm w-28"
+                              />
+                            )}
+                          </div>
+                        </td>
                         <td className="p-3 text-right font-black text-green-700">
                           {conf.tipo === 'ambos' ? (
                             <div className="text-sm">

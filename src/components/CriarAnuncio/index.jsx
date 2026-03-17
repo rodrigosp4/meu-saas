@@ -39,6 +39,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [alturaEmbalagem, setAlturaEmbalagem] = useState(10);
   const [larguraEmbalagem, setLarguraEmbalagem] = useState(10);
   const [comprimentoEmbalagem, setComprimentoEmbalagem] = useState(15);
+  const [posicaoPeca, setPosicaoPeca] = useState(''); // ADICIONE ESTA LINHA
   const [imagemAmpliada, setImagemAmpliada] = useState(null);
 
   // Categorias e Ficha
@@ -48,12 +49,13 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [valoresAtributos, setValoresAtributos] = useState({});
 
   // Estrategia e Contas
-  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0 });
+  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false });
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
   const [configPublicacao, setConfigPublicacao] = useState({});
   const [precosCalculados, setPrecosCalculados] = useState({});
   const [isCalculatingPrices, setIsCalculatingPrices] = useState(false);
+  const [configAtacado, setConfigAtacado] = useState(null);
 
   // 2. CORRIGIDO O USEEFFECT PARA BUSCAR DADOS DO BANCO DE DADOS (ONLINE)
   useEffect(() => {
@@ -67,10 +69,11 @@ export default function CriarAnuncio({ produto, usuarioId }) {
 
         setContasML(contas);
         setRegrasPreco(regras);
+        if (data.configAtacado) setConfigAtacado(data.configAtacado);
 
         const configInicial = {};
         contas.forEach(c => {
-          configInicial[c.id] = { ativo: false, tipo: 'classico', regraId: regras[0]?.id || '' }
+          configInicial[c.id] = { ativo: false, tipo: 'classico', regraId: regras[0]?.id || 'preco_venda', precoManual: 0 }
         });
         setConfigPublicacao(configInicial);
       } catch (error) {
@@ -93,10 +96,12 @@ export default function CriarAnuncio({ produto, usuarioId }) {
     setIsLoading(true);
     setFetchError(null);
     try {
+      const userDb = JSON.parse(localStorage.getItem('saas_usuario'));
+      const tinyToken = userDb?.tinyToken;
       const res = await fetch('/api/tiny-produto-detalhes', {
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ id: produto.id })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: produto.id, tinyToken })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || "O Tiny ERP rejeitou a requisição.");
@@ -193,33 +198,60 @@ export default function CriarAnuncio({ produto, usuarioId }) {
     if (!detalhesProduto || !categoriaSelecionada) return null;
     const config = configPublicacao[conta.id];
     if (!config || !config.regraId) return null;
-    const regra = regrasPreco.find(r => r.id === config.regraId);
-    if (!regra) return null;
 
-    const tipoBase = regra.precoBase || 'promocional';
+    const regraId = config.regraId;
+
+    // Opção fixa: Preço Manual — retorna diretamente sem cálculo
+    if (regraId === 'manual') {
+      const precoFinal = Number(config.precoManual || 0);
+      if (precoFinal <= 0) return null;
+      return {
+        precoFinal,
+        historico: [{ descricao: 'Preço Manual Informado', valor: precoFinal, tipo: 'valor' }]
+      };
+    }
+
     const pVenda = Number(detalhesProduto.preco || 0);
     const pPromo = Number(detalhesProduto.preco_promocional || 0);
     const pCusto = Number(detalhesProduto.preco_custo || 0);
 
     let custoBase = 0;
-    if (tipoBase === 'venda') {
-      custoBase = pVenda;
-    } else if (tipoBase === 'promocional') {
-      custoBase = pPromo > 0 ? pPromo : pVenda;
-    } else if (tipoBase === 'custo') {
-      custoBase = pCusto > 0 ? pCusto : pVenda;
+    let tipoBase = '';
+
+    // Opções fixas — retornam o preço do ERP diretamente, sem tarifas ou cálculos
+    if (regraId === 'preco_venda') {
+      return {
+        precoFinal: pVenda,
+        historico: [{ descricao: 'Preço de Venda (ERP)', valor: pVenda, tipo: 'valor' }]
+      };
+    } else if (regraId === 'preco_promocional') {
+      const precoFinal = pPromo > 0 ? pPromo : pVenda;
+      const label = pPromo > 0 ? 'Preço Promocional (ERP)' : 'Preço de Venda (ERP)';
+      return {
+        precoFinal,
+        historico: [{ descricao: label, valor: precoFinal, tipo: 'valor' }]
+      };
     } else {
-      custoBase = pPromo > 0 ? pPromo : pVenda;
+      // Regra customizada do usuário
+      const regra = regrasPreco.find(r => r.id === regraId);
+      if (!regra) return null;
+      tipoBase = regra.precoBase || 'promocional';
+      if (tipoBase === 'venda') custoBase = pVenda;
+      else if (tipoBase === 'promocional') custoBase = pPromo > 0 ? pPromo : pVenda;
+      else if (tipoBase === 'custo') custoBase = pCusto > 0 ? pCusto : pVenda;
+      else custoBase = pPromo > 0 ? pPromo : pVenda;
     }
 
-    let historico =[{ descricao: `Preço Base (${tipoBase.toUpperCase()})`, valor: custoBase, tipo: 'valor' }];
+    let historico = [{ descricao: `Preço Base (${tipoBase.toUpperCase()})`, valor: custoBase, tipo: 'valor' }];
     let valorAtualCusto = custoBase;
     let totalTaxasVendaPerc = 0;
 
     let historicoCustos = [];
     let historicoTaxasVenda = [];
 
-    (regra.variaveis ||[]).forEach(v => {
+    // Variáveis da regra customizada (não se aplica às opções fixas)
+    const regraCustomizada = regrasPreco.find(r => r.id === regraId);
+    (regraCustomizada?.variaveis || []).forEach(v => {
         if (v.tipo === 'fixo_custo') {
             valorAtualCusto += v.valor;
             historicoCustos.push({ descricao: v.nome, valor: v.valor, tipo: 'custo' });
@@ -362,6 +394,11 @@ const publicarAnuncios = async () => {
     attrFinais.push({ id: 'SELLER_PACKAGE_WIDTH', value_name: `${Math.round(larguraEmbalagem)} cm` });
     attrFinais.push({ id: 'SELLER_PACKAGE_WEIGHT', value_name: `${Math.round(pesoEmbalagem * 1000)} g` });
 
+    // ✅ CORRIGIDO: Usar a variável correta "posicaoGlobal"
+    if (posicaoGlobal && !attrFinais.some(a => a.id === 'POSITION')) {
+      attrFinais.push({ id: 'POSITION', value_name: posicaoGlobal });
+    }
+
     if (produto?.sku && (!detalhesProduto.filhos || detalhesProduto.filhos.length === 0)) {
       attrFinais.push({ id: 'SELLER_SKU', value_name: String(produto.sku) });
     }
@@ -394,19 +431,21 @@ const publicarAnuncios = async () => {
     const defaultVarAttr = allowedVarAttrs.length > 0 ? allowedVarAttrs[0].id : 'COLOR';
 
     const enviarParaFilaBackend = async (payload, token, descricao, nomeDaConta) => {
-        let res = await fetch('/api/ml/publish', { 
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify({ 
-              userId: usuarioId,              
-              contaNome: nomeDaConta,      
-              sku: produto?.sku || 'S/ SKU',  
-              accessToken: token, 
-              payload, 
-              description: descricao 
-            }) 
+        const res = await fetch('/api/ml/publish', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: usuarioId,
+              contaNome: nomeDaConta,
+              sku: produto?.sku || 'S/ SKU',
+              accessToken: token,
+              payload,
+              description: descricao,
+              enviarAtacado: strategy.enviarAtacado || false,
+              inflar: strategy.inflar || 0,
+              ativarPromocoes: strategy.ativarPromocoes || false,
+            })
         });
-        let data = await res.json();
-        return { ok: res.ok, data };
+        return { ok: res.ok, data: await res.json() };
     };
 
     for (const conta of contasML) {
@@ -568,7 +607,7 @@ const publicarAnuncios = async () => {
 
       <div className="bg-white p-6 rounded-b-lg shadow-sm border border-t-0 border-gray-200 mb-6">
         {activeTab === 'pai' && (
-          <FormularioBasico tituloAnuncio={tituloAnuncio} setTituloAnuncio={setTituloAnuncio} descricaoAnuncio={descricaoAnuncio} setDescricaoAnuncio={setDescricaoAnuncio} prazoFabricacao={prazoFabricacao} setPrazoFabricacao={setPrazoFabricacao} pesoEmbalagem={pesoEmbalagem} setPesoEmbalagem={setPesoEmbalagem} alturaEmbalagem={alturaEmbalagem} setAlturaEmbalagem={setAlturaEmbalagem} larguraEmbalagem={larguraEmbalagem} setLarguraEmbalagem={setLarguraEmbalagem} comprimentoEmbalagem={comprimentoEmbalagem} setComprimentoEmbalagem={setComprimentoEmbalagem} detalhesProduto={detalhesProduto} setImagemAmpliada={setImagemAmpliada} />
+          <FormularioBasico tituloAnuncio={tituloAnuncio} setTituloAnuncio={setTituloAnuncio} descricaoAnuncio={descricaoAnuncio} setDescricaoAnuncio={setDescricaoAnuncio} prazoFabricacao={prazoFabricacao} setPrazoFabricacao={setPrazoFabricacao} pesoEmbalagem={pesoEmbalagem} setPesoEmbalagem={setPesoEmbalagem} alturaEmbalagem={alturaEmbalagem} setAlturaEmbalagem={setAlturaEmbalagem} larguraEmbalagem={larguraEmbalagem} setLarguraEmbalagem={setLarguraEmbalagem} comprimentoEmbalagem={comprimentoEmbalagem} setComprimentoEmbalagem={setComprimentoEmbalagem} detalhesProduto={detalhesProduto} setImagemAmpliada={setImagemAmpliada} posicaoPeca={posicaoPeca} setPosicaoPeca={setPosicaoPeca} />
         )}
 
         {typeof activeTab === 'number' && filhos[activeTab] && (() => {
@@ -642,8 +681,15 @@ const publicarAnuncios = async () => {
       <h3 className="text-xl font-black text-gray-800 mt-10 mb-4 px-2 border-l-4 border-blue-600">Configurações Globais do Anúncio</h3>
       
       <SeletorCategoria categoriaSelecionada={categoriaSelecionada} setCategoriaSelecionada={setCategoriaSelecionada} categoriasSugeridas={categoriasSugeridas} contasML={contasML} refreshTokenIfNeeded={refreshTokenIfNeeded} />
-      <FormularioAtributos atributosCategoria={atributosCategoria} valoresAtributos={valoresAtributos} handleAtributoChange={handleAtributoChange} />
-      <TabelaContas contasML={contasML} regrasPreco={regrasPreco} configPublicacao={configPublicacao} setConfigPublicacao={setConfigPublicacao} precosCalculados={precosCalculados} isCalculatingPrices={isCalculatingPrices} strategy={strategy} setStrategy={setStrategy} />
+      <FormularioAtributos
+        atributosCategoria={atributosCategoria}
+        valoresAtributos={valoresAtributos}
+        handleAtributoChange={handleAtributoChange}
+        tituloAnuncio={tituloAnuncio}
+        descricaoAnuncio={descricaoAnuncio}
+        fotosUrls={(detalhesProduto?.anexos || []).map(img => img.anexo || img.url || img).filter(u => typeof u === 'string')}
+      />
+      <TabelaContas contasML={contasML} regrasPreco={regrasPreco} configPublicacao={configPublicacao} setConfigPublicacao={setConfigPublicacao} precosCalculados={precosCalculados} isCalculatingPrices={isCalculatingPrices} strategy={strategy} setStrategy={setStrategy} configAtacado={configAtacado} />
 
       <div className="flex justify-end gap-4 mt-6">
         <button onClick={publicarAnuncios} disabled={isPublishing || isCalculatingPrices} className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white text-lg font-black uppercase rounded-lg shadow-lg disabled:opacity-50 transition-all transform hover:scale-105">

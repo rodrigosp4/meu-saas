@@ -24,9 +24,11 @@ export const mlSyncQueue = new Queue('sync-ml', defaultOpts);
 export const publishQueue = new Queue('publish-ml', defaultOpts);
 export const priceQueue = new Queue('update-price', defaultOpts); 
 export const priceCheckQueue = new Queue('price-check-v2', defaultOpts);
+export const acoesMassaQueue = new Queue('acoes-massa', defaultOpts);
 
 syncQueue.on('error', (err) => console.error('❌ Erro na Queue sync-tiny:', err.message));
 mlSyncQueue.on('error', (err) => console.error('❌ Erro na Queue sync-ml:', err.message));
 publishQueue.on('error', (err) => console.error('❌ Erro na Queue publish-ml:', err.message));
 priceQueue.on('error', (err) => console.error('❌ Erro na Queue update-price:', err.message));
 priceCheckQueue.on('error', (err) => console.error('❌ Erro na Queue price-check:', err.message));
+acoesMassaQueue.on('error', (err) => console.error('❌ Erro na Queue acoes-massa:', err.message));

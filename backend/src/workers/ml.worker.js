@@ -1,18 +1,32 @@
 // =============================================================================
-// ml.worker.js — VERSÃO CORRIGIDA
-// 
+// ml.worker.js — VERSÃO OTIMIZADA (v3 - Mesclada)
+//
 // CORREÇÕES APLICADAS:
-// 1. Retry com backoff para chunks que falham (em vez de perder silenciosamente)
-// 2. Sale_price só para itens SEM variações (reduz chamadas em ~50%)
-// 3. Contagem real de itens SALVOS no banco (não apenas "processados")
-// 4. Log detalhado de itens perdidos para diagnóstico
-// 5. Chunks aumentados para 20 (igual ao Python) com delay inteligente
+// 1. Connection Pooling (Keep-Alive): Evita ENOTFOUND e ECONNRESET reciclando conexões TCP.
+// 2. Retries aumentados (3 → 5) com backoff elástico para erros de rede.
+// 3. Retry com backoff para chunks que falham (em vez de perder silenciosamente)
+// 4. Sale_price corrigido para itens com variações (fallback infalível)
+// 5. Contagem real de itens SALVOS no banco (não apenas "processados")
+// 6. Log detalhado de itens perdidos para diagnóstico
+// 7. Chunks de 20 com delay inteligente
 // =============================================================================
 
 import { Worker } from 'bullmq';
 import axios from 'axios';
+import https from 'https';
+import http from 'http';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
+
+// ✅ Connection Pooling: Evita exaustão de DNS (ENOTFOUND) e portas (ECONNRESET)
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 10 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 10 });
+
+const mlClient = axios.create({
+  httpAgent,
+  httpsAgent,
+  timeout: 40000
+});
 
 const connection = {
   host: config.redisHost,
@@ -24,7 +38,7 @@ const connection = {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-console.log('⚙️  Worker de Sincronização do ML Iniciado (v2 - Corrigido)...');
+console.log('⚙️  Worker de Sincronização do ML Iniciado (v3 - Mesclado)...');
 
 
 // =============================================================================
@@ -183,9 +197,9 @@ async function fetchAllItemIds(contaId, accessToken) {
           break;
         }
 
-        const res = await axios.get(
+        const res = await mlClient.get(
           `https://api.mercadolibre.com/users/${contaId}/items/search`,
-          { headers, params, timeout: 40000 }
+          { headers, params }
         );
 
         const batchIds = res.data.results || [];
@@ -223,9 +237,9 @@ async function fetchIdsByOffset(contaId, accessToken, status, idsSet) {
 
   while (true) {
     try {
-      const res = await axios.get(
+      const res = await mlClient.get(
         `https://api.mercadolibre.com/users/${contaId}/items/search`,
-        { headers, params: { status, limit, offset }, timeout: 20000 }
+        { headers, params: { status, limit, offset } }
       );
       const batchIds = res.data.results || [];
       if (batchIds.length === 0) break;
@@ -252,7 +266,7 @@ async function fetchIdsByOffset(contaId, accessToken, status, idsSet) {
 // Se falhar, tenta de novo até 3 vezes com backoff exponencial.
 // Isso evita perder lotes inteiros silenciosamente.
 // =============================================================================
-async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries = 3) {
+async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries = 5) {
   const idsStr = chunkIds.join(',');
   const headers = { Authorization: `Bearer ${accessToken}` };
 
@@ -261,10 +275,10 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
       // ─── 2a. Multiget de detalhes ───
       // ★ CORREÇÃO 2: NÃO mistura include_attributes=all com attributes=...
       // O Python usa UM ou OUTRO. Usar ambos gera payloads enormes e timeouts.
-      const attrs = 'id,title,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health';
-      const detRes = await axios.get(
+      const attrs = 'id,title,category_id,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health,pictures';
+      const detRes = await mlClient.get(
         `https://api.mercadolibre.com/items?ids=${idsStr}&attributes=${attrs}`,
-        { headers, timeout: 30000 }
+        { headers }
       );
       const items = detRes.data
         .filter(d => d.code === 200 && d.body && d.body.id)
@@ -281,7 +295,7 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
       let visitsMap = {};
       for (const item of items) {
         try {
-          const visRes = await axios.get(
+          const visRes = await mlClient.get(
             `https://api.mercadolibre.com/visits/items?ids=${item.id}`,
             { headers, timeout: 8000 }
           );
@@ -299,7 +313,7 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
       // ─── 2c. Sale Price & Promoções (Corrigido para Variações) ───
       for (const item of items) {
         try {
-          const spRes = await axios.get(
+          const spRes = await mlClient.get(
             `https://api.mercadolibre.com/items/${item.id}/sale_price`,
             { headers, timeout: 8000 }
           );
@@ -339,9 +353,11 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
 
     } catch (chunkError) {
       const isRateLimit = chunkError.response?.status === 429;
-      const waitTime = isRateLimit
-        ? 10000  // Rate limit: espera 10 segundos
-        : attempt * 3000; // Outros erros: backoff crescente
+      const isNetworkFail = chunkError.code === 'ENOTFOUND' || chunkError.code === 'ECONNRESET' || chunkError.code === 'ETIMEDOUT';
+
+      let waitTime = attempt * 3000;
+      if (isRateLimit) waitTime = 10000;
+      if (isNetworkFail) waitTime = attempt * 6000; // Punição de rede: pausa maior para a placa limpar
 
       if (attempt < maxRetries) {
         console.log(`    🔄 Chunk falhou (tentativa ${attempt}/${maxRetries}). ` +
@@ -380,7 +396,7 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
 
   try {
     // Teste rápido: o token ainda é válido?
-    const test = await axios.get(
+    const test = await mlClient.get(
       `https://api.mercadolibre.com/users/${contaId}`,
       { headers, timeout: 5000 }
     );
@@ -402,7 +418,7 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
 
   try {
     // Usa o mesmo mlService.refreshToken ou faz a chamada direta:
-    const res = await axios.post('https://api.mercadolibre.com/oauth/token', {
+    const res = await mlClient.post('https://api.mercadolibre.com/oauth/token', {
       grant_type: 'refresh_token',
       client_id: process.env.ML_CLIENT_ID || config.mlClientId,
       client_secret: process.env.ML_CLIENT_SECRET || config.mlClientSecret,

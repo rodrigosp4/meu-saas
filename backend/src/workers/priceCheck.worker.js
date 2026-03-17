@@ -10,6 +10,9 @@ const connection = {
   ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
+// 👇 ADICIONE ESTA LINHA 👇
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 console.log('⚙️ Worker de Verificação de Preço Iniciado (v3 - Math Corrigida)...');
 
 function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0) {
@@ -138,9 +141,11 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
   await prisma.tarefaFila.update({ where: { id: tarefaId }, data: { status: 'PROCESSANDO', detalhes: `Preparando ${totalAnuncios} itens...` } });
 
   try {
-    const [regras] = await Promise.all([
+    const [regras, userConfig] = await Promise.all([
       prisma.regraPreco.findMany({ where: { userId } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true } }),
     ]);
+    const cepOrigem = userConfig?.cepOrigem || '01001000';
     const regra = regras.find(r => r.id === regraId);
     const skus =[...new Set(anuncios.map(ad => ad.sku).filter(Boolean))];
     const precosTinyRes = await prisma.produto.findMany({ where: { userId, sku: { in: skus } }, select: { sku: true, preco: true, dadosTiny: true } });
@@ -148,7 +153,7 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
       acc[p.sku] = p.dadosTiny || { preco: p.preco };
       return acc;
     }, {});
-    
+
     const contasCache = {};
     const finalResults = {};
     let processedCount = 0;
@@ -183,14 +188,22 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         }
         
         if (precoBaseItem > 0) {
-          let custoFrete = 0;
-          if (conta && conta.logistica !== 'ME1') {
-             custoFrete = await mlService.simulateShipping({
-                accessToken: conta.accessToken, sellerId: conta.id, itemPrice: precoBaseItem * 2, 
-                categoryId: ad.dadosML?.category_id || 'MLB1144', listingTypeId: ad.dadosML?.listing_type_id || 'gold_pro', dimensions: '20x15x10,500'
-             }).catch(() => 0);
-             await new Promise(r => setTimeout(r, 200));
-          }
+        let custoFrete = 0;
+        if (conta.logistica !== 'ME1') {
+          // Pequeno delay para evitar Rate Limit
+          await delay(250);
+          const adDadosML = ad.dadosML || {};
+          custoFrete = await mlService.simulateShipping({
+            accessToken: conta.accessToken,
+            sellerId: conta.id,
+            itemPrice: precoBaseItem * 2,
+            categoryId: adDadosML.category_id,
+            listingTypeId: adDadosML.listing_type_id || 'gold_pro',
+            zipCode: cepOrigem,
+            itemId: ad.id,
+            dimensions: '20x15x10,500'
+          }).catch(() => 0);
+        }
           resultadoCalculo = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar, reduzir, custoFrete);
         }
       }

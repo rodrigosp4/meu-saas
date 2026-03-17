@@ -236,8 +236,90 @@ export const compatController = {
   },
 
   // ==================================================================
-  // 9. DELETE /api/compat/perfis/:id?userId=xxx
-  //    Deleta um perfil de compatibilidade
+  // 9. POST /api/compat/posicoes
+  //    Retorna os valores de posição (POSITION restriction) para um domínio
+  //    Body: { contaId, userId, mainDomainId, secondaryDomainId }
+  // ==================================================================
+  async getPosicoes(req, res) {
+    try {
+      const { contaId, userId, mainDomainId, secondaryDomainId } = req.body;
+      if (!contaId || !userId) {
+        return res.status(400).json({ erro: 'contaId e userId obrigatórios' });
+      }
+      const token = await getActiveToken(contaId, userId);
+      const result = await compatService.getPositionValues(token, mainDomainId, secondaryDomainId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
+    }
+  },
+
+// ==================================================================
+  // 10. POST /api/compat/aplicar-lote
+  //     Aplica compatibilidades de um perfil a múltiplos itens ML
+  // ==================================================================
+  async aplicarPerfilEmLote(req, res) {
+    try {
+      const { contaId, userId, itemIds, compatibilities } = req.body;
+      if (!userId || !Array.isArray(itemIds) || !Array.isArray(compatibilities)) {
+        return res.status(400).json({ erro: 'Parâmetros obrigatórios: userId, itemIds[], compatibilities[]' });
+      }
+      if (itemIds.length === 0) return res.status(400).json({ erro: 'Nenhum item informado.' });
+      if (compatibilities.length === 0) return res.status(400).json({ erro: 'Nenhuma compatibilidade informada.' });
+
+      // 1. Descobre a qual conta cada anúncio pertence consultando o banco local
+      const anunciosBD = await prisma.anuncioML.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, contaId: true }
+      });
+
+      // 2. Agrupa os itens por Conta (para pegar o token só uma vez por conta)
+      const porConta = {};
+      for (const id of itemIds) {
+        const ad = anunciosBD.find(a => a.id === id);
+        // Se não achar no banco, usa a conta enviada pelo front como fallback
+        const targetConta = ad ? ad.contaId : contaId; 
+        if (!targetConta) continue;
+
+        if (!porConta[targetConta]) porConta[targetConta] = [];
+        porConta[targetConta].push(id);
+      }
+
+      const results = [];
+
+      // 3. Executa a aplicação usando o Token correto para cada grupo de itens
+      for (const [cId, ids] of Object.entries(porConta)) {
+        try {
+          const token = await getActiveToken(cId, userId);
+          for (const itemId of ids) {
+            try {
+              const r = await compatService.applyItemCompatibilities(token, itemId, compatibilities);
+              results.push({ itemId, success: true, message: r.message });
+            } catch (err) {
+              results.push({ itemId, success: false, erro: err.response?.data?.message || err.message });
+            }
+          }
+        } catch (tokenErr) {
+          // Se o token da conta falhar, marca erro para todos os itens dessa conta
+          for (const itemId of ids) {
+            results.push({ itemId, success: false, erro: 'Falha de autenticação na conta deste anúncio.' });
+          }
+        }
+      }
+
+      const sucessos = results.filter(r => r.success).length;
+      const erros = results.filter(r => !r.success).length;
+      res.json({ results, sucessos, erros });
+
+    } catch (error) {
+      console.error('[compat] aplicarPerfilEmLote error:', error.message);
+      res.status(500).json({ erro: error.message });
+    }
+  },
+
+  // ==================================================================
+  // 11. DELETE /api/compat/perfis/:id?userId=xxx
+  //     Deleta um perfil de compatibilidade
   // ==================================================================
   async deletarPerfil(req, res) {
     try {
@@ -250,6 +332,29 @@ export const compatController = {
 
       await prisma.perfilCompatibilidade.delete({ where: { id } });
       res.json({ success: true, message: 'Perfil deletado' });
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
+    }
+  },
+
+  // ==================================================================
+  // 12. PUT /api/compat/perfis/:id
+  //     Renomeia um perfil de compatibilidade
+  //     Body: { userId, nome }
+  // ==================================================================
+  async renomearPerfil(req, res) {
+    try {
+      const { id } = req.params;
+      const { userId, nome } = req.body;
+      console.log('[renomearPerfil] id:', id, 'userId:', userId, 'nome:', nome);
+      if (!userId || !nome) return res.status(400).json({ erro: 'userId e nome obrigatórios' });
+
+      const perfil = await prisma.perfilCompatibilidade.findFirst({ where: { id, userId } });
+      console.log('[renomearPerfil] perfil encontrado:', perfil ? perfil.nome : 'null');
+      if (!perfil) return res.status(404).json({ erro: 'Perfil não encontrado' });
+
+      const updated = await prisma.perfilCompatibilidade.update({ where: { id }, data: { nome: nome.trim() } });
+      res.json({ id: updated.id, nome: updated.nome });
     } catch (error) {
       res.status(500).json({ erro: error.message });
     }

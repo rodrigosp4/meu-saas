@@ -13,6 +13,9 @@ import MonitorConcorrentes from './components/MonitorConcorrentes.jsx';
 import PerguntasPreVenda from './components/PerguntasPreVenda.jsx';
 import PosVenda from './components/PosVenda.jsx';
 import CadastramentoMassa from './components/CadastramentoMassa.jsx';
+import Catalogo from './components/Catalogo.jsx';
+import QualidadePublicacoes from './components/QualidadePublicacoes.jsx';
+import OtimizadorImagens from './components/OtimizadorImagens.jsx';
 
 function App() {
   const [usuarioLogado, setUsuarioLogado] = useState(() => {
@@ -78,37 +81,9 @@ function App() {
       {activePage === 'monitorConcorrentes' && <MonitorConcorrentes />}
       {activePage === 'perguntasPreVenda' && <PerguntasPreVenda usuarioId={usuarioLogado.id} />}
       {activePage === 'posVenda' && <PosVenda />}
-      {activePage === 'qualidadePublicacoes' && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: '16px', color: '#7f8c8d' }}>
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#bdc3c7" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 11l3 3L22 4" />
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-          </svg>
-          <h2 style={{ margin: 0, fontSize: '1.4em', fontWeight: 600, color: '#95a5a6' }}>Qualidade das Publicações</h2>
-          <p style={{ margin: 0, fontSize: '0.95em' }}>Em breve. Esta funcionalidade está em desenvolvimento.</p>
-        </div>
-      )}
-      {activePage === 'otimizadorImagens' && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: '16px', color: '#7f8c8d' }}>
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#bdc3c7" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-          </svg>
-          <h2 style={{ margin: 0, fontSize: '1.4em', fontWeight: 600, color: '#95a5a6' }}>Otimizador de Imagens</h2>
-          <p style={{ margin: 0, fontSize: '0.95em' }}>Em breve. Esta funcionalidade está em desenvolvimento.</p>
-        </div>
-      )}
-      {activePage === 'catalogo' && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: '16px', color: '#7f8c8d' }}>
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#bdc3c7" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-          </svg>
-          <h2 style={{ margin: 0, fontSize: '1.4em', fontWeight: 600, color: '#95a5a6' }}>Catálogo</h2>
-          <p style={{ margin: 0, fontSize: '0.95em' }}>Em breve. Esta funcionalidade está em desenvolvimento.</p>
-        </div>
-      )}
+      {activePage === 'catalogo' && <Catalogo usuarioId={usuarioLogado.id} />}
+      {activePage === 'qualidadePublicacoes' && <QualidadePublicacoes usuarioId={usuarioLogado.id} />}
+      {activePage === 'otimizadorImagens' && <OtimizadorImagens usuarioId={usuarioLogado.id} />}
     </DashboardLayout>
   );
 }

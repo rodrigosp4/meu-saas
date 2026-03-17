@@ -9,6 +9,10 @@ router.post('/api/ml/refresh-token', mlController.refreshToken);
 router.get('/api/ml/categories', mlController.getCategories);
 router.get('/api/ml/categories-all', mlController.getAllCategories);
 router.get('/api/ml/category-attributes/:categoryId', mlController.getAttributes);
+router.get('/api/ml/item-category/:itemId', mlController.getItemCategory);
+router.get('/api/ml/item-description/:itemId', mlController.getItemDescription);
+router.get('/api/ml/item-pictures/:itemId', mlController.getItemPictures);
+router.post('/api/ml/gerar-descricao-ia', mlController.gerarDescricaoIA);
 router.get('/api/ml/predict-category', mlController.predictCategory);
 router.post('/api/ml/simulate-shipping', mlController.simulateShipping);
 router.post('/api/ml/shipping-cost-items', mlController.getShippingCostItems);
@@ -25,11 +29,13 @@ router.get('/api/ml/anuncios/tags', mlController.getAdTags);
 router.get('/api/ml/anuncios/ids', mlController.getAdIds);
 
 router.get('/api/ml/anuncio/:itemId', mlController.getAdById);
+router.get('/api/ml/item-performance/:itemId', mlController.getItemPerformance);
 router.post('/api/ml/sync-selected-ads', mlController.syncSelectedAds);
 router.post('/api/ml/anuncios-por-sku', mlController.getAdsBySku);
 router.post('/api/ml/corrigir-preco', mlController.corrigirPreco);
 router.post('/api/ml/verificar-preco', mlController.verificarPreco);
 router.post('/api/ml/reset-margem', mlController.resetMargem);
+router.post('/api/ml/atacado-preco', mlController.enviarPrecoAtacado);
 
 router.get('/api/ml/perguntas', mlController.getPerguntas);
 router.get('/api/ml/perguntas/item', mlController.getItemPerguntas);
@@ -41,4 +47,5 @@ router.post('/api/ml/webhook', mlController.handleWebhook);
 // Rota de sync manual para puxar as que já existem
 router.post('/api/ml/sync-perguntas-iniciais', mlController.syncPerguntasIniciais);
 
+router.post('/api/ml/acoes-massa', mlController.acoesMassa);
 export default router;

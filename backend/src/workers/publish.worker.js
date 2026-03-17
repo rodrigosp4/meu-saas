@@ -1,138 +1,260 @@
 import { Worker } from 'bullmq';
+import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
+
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+const TIPOS_SEM_PROMOTION_ID = new Set(['DOD', 'LIGHTNING']);
+const TIPOS_COM_OFFER_ID = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
+const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
+
+// ✅ AGORA RETORNA STRING DE LOG PARA SALVAR NA FILA
+async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal) {
+  try {
+    console.log(`[Promos Auto] Buscando promoções para o item ${itemId}...`);
+    const res = await axios.get(
+      `https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 10000 }
+    );
+    
+    const lista = Array.isArray(res.data) ? res.data : (res.data ? [res.data] : []);
+    
+    if (lista.length === 0) {
+      return "0 campanhas candidatas retornadas pelo ML.";
+    }
+
+    const candidatos = lista.filter(p => p && p.status === 'candidate' && p.type !== 'PRICE_DISCOUNT');
+    if (candidatos.length === 0) {
+      return `O item retornou ${lista.length} campanha(s), mas nenhuma estava como 'candidate'.`;
+    }
+
+    const inflarNum = Number(inflar) || 0;
+    const precoAlvo = inflarNum > 0 ? precoFinal / (1 + inflarNum / 100) : precoFinal;
+    let ativadas = 0;
+    let erros = [];
+
+    for (const promo of candidatos) {
+      const sellerPct = typeof promo.seller_percentage === 'number' ? promo.seller_percentage : null;
+      const maxPrice = promo.max_discounted_price || 0;
+      const origPrice = promo.original_price || 0;
+
+      let deveAtivar = false;
+      if (inflarNum === 0) {
+        deveAtivar = true;
+      } else if (sellerPct !== null) {
+        deveAtivar = sellerPct <= inflarNum;
+      } else if (maxPrice > 0 && origPrice > 0) {
+        const minDescontoPct = ((origPrice - maxPrice) / origPrice) * 100;
+        deveAtivar = minDescontoPct <= inflarNum;
+      } else {
+        deveAtivar = true;
+      }
+
+      if (!deveAtivar) continue;
+
+      try {
+        const body = { promotion_type: promo.type };
+
+        if (!TIPOS_SEM_PROMOTION_ID.has(promo.type) && promo.id) body.promotion_id = promo.id;
+        
+        const offerId = promo.offer_id || promo.offerId || promo.ref_id || null;
+        if (offerId && TIPOS_COM_OFFER_ID.has(promo.type)) body.offer_id = offerId;
+
+        if (TIPOS_COM_PRECO.has(promo.type) && precoFinal > 0) {
+          let dealPrice = sellerPct !== null ? precoFinal * (1 - sellerPct / 100) : precoAlvo;
+          if (maxPrice > 0 && dealPrice > maxPrice) dealPrice = maxPrice;
+          const minPrice = promo.min_discounted_price || 0;
+          if (minPrice > 0 && dealPrice < minPrice) dealPrice = minPrice;
+          body.deal_price = Math.round(dealPrice * 100) / 100;
+        }
+
+        if (promo.type === 'LIGHTNING' && promo.stock?.min) {
+          body.stock = Number(promo.stock.min);
+        }
+
+        console.log(`[Promos Auto] Enviando payload para ${promo.type}:`, JSON.stringify(body));
+
+        await axios.post(
+          `https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`,
+          body,
+          { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, timeout: 10000 }
+        );
+        ativadas++;
+        await delay(500);
+      } catch (e) {
+        const msgErro = e.response?.data?.message || e.response?.data?.cause?.[0]?.error_message || e.message;
+        erros.push(`[${promo.type}]: ${msgErro}`);
+      }
+    }
+
+    if (erros.length > 0) return `Ativadas: ${ativadas}. Erros: ${erros.join(' | ')}`;
+    return `Sucesso! ${ativadas} promoções ativadas.`;
+
+  } catch (e) {
+    return `Falha crítica ao buscar promoções: ${e.response?.data?.message || e.message}`;
+  }
+}
+
+// ✅ AGORA RETORNA STRING DE LOG PARA SALVAR NA FILA
+async function enviarPrecosAtacado(itemId, accessToken, precoAlvo, faixas) {
+  try {
+    let keepNodes = [];
+    console.log(`[Atacado] Buscando preços padrão para ${itemId}...`);
+
+    for (let i = 0; i < 5; i++) {
+      const precosRes = await axios.get(`https://api.mercadolibre.com/items/${itemId}/prices`, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'show-all-prices': 'true' }
+      }).catch(() => ({ data: { prices: [] } }));
+      
+      const allPrices = Array.isArray(precosRes.data?.prices) ? precosRes.data.prices : [];
+      keepNodes = allPrices.filter(p => !p.conditions?.min_purchase_unit).map(p => ({ id: p.id }));
+      
+      if (keepNodes.length > 0) break;
+      await delay(3000); // Tenta de novo se o ML ainda não indexou o preço
+    }
+
+    if (keepNodes.length === 0) {
+      return "Ignorado: ML não retornou o preço base a tempo.";
+    }
+
+    const b2bNodes = [];
+    for (const faixa of faixas.slice(0, 5)) {
+      const minQtd = Number(faixa.minQtd ?? faixa.quantity ?? faixa.min_purchase_unit);
+      const desconto = Number(faixa.desconto ?? faixa.percent ?? faixa.discount);
+      if (!Number.isFinite(minQtd) || minQtd <= 1 || !Number.isFinite(desconto)) continue;
+      
+      const tierPrice = Math.round(precoAlvo * (1 - desconto / 100) * 100) / 100;
+      if (tierPrice <= 0) continue;
+      
+      b2bNodes.push({
+        amount: tierPrice,
+        currency_id: 'BRL',
+        conditions: {
+          context_restrictions: ['channel_marketplace', 'user_type_business'],
+          min_purchase_unit: minQtd
+        }
+      });
+    }
+
+    if (b2bNodes.length > 0) {
+      console.log(`[Atacado] Enviando payload PxQ:`, JSON.stringify(b2bNodes));
+      await axios.post(
+        `https://api.mercadolibre.com/items/${itemId}/prices/standard/quantity`,
+        { prices: [...keepNodes, ...b2bNodes] },
+        { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+      );
+      return `Enviado com sucesso (${b2bNodes.length} faixas).`;
+    }
+    return "Nenhuma faixa válida calculada.";
+  } catch (e) {
+    const errObj = e.response?.data || e.message;
+    return `Erro ML: ${JSON.stringify(errObj)}`;
+  }
+}
 
 const connection = {
   host: config.redisHost,
   port: config.redisPort,
   password: config.redisPassword || undefined,
-  // Tira o "tls: {}" se for ambiente local
   ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
 console.log('⚙️ Worker de Publicação ML Iniciado...');
 
 export const publishWorker = new Worker('publish-ml', async (job) => {
-  const { tarefaId, accessToken, payload, description } = job.data;
+  const { tarefaId, accessToken: initialToken, contaNome, payload, description, enviarAtacado, inflar, userId, ativarPromocoes } = job.data;
 
-  await prisma.tarefaFila.update({
+  await prisma.tarefaFila.updateMany({
     where: { id: tarefaId },
     data: { status: 'PROCESSANDO' }
   });
 
-  try {
-    // TENTATIVA 1: Tenta publicar
-    const result = await mlService.publishSmart({ accessToken, payload, description });
-
-    await prisma.tarefaFila.update({
-      where: { id: tarefaId },
-      data: { status: 'CONCLUIDO', detalhes: `Sucesso! ID ML: ${result.id}` }
-    });
-    return { success: true, mlId: result.id };
-
-// ... dentro de export const publishWorker = new Worker(...)
-
-  } catch (error) {
-    let erroStr = JSON.stringify(error).toLowerCase();
-    let erroObjAtual = error;
-
-    let payloadCorrigido = JSON.parse(JSON.stringify(payload)); // Clone profundo
-    let precisaTentarNovamente = false;
-
-    // =========================================================================
-    // AUTO-HEALER (SISTEMA DE RECUPERAÇÃO DE ERROS)
-    // =========================================================================
-
-    // 1. Erro de Modo de Envio (A conta não aceita ME1 ou ME2 especificamente)
-    if (erroStr.includes('user has not mode')) {
-        console.log(`[Worker] Auto-Healer: Limpando modo de envio incompatível...`);
-        if (payloadCorrigido.shipping) {
-            delete payloadCorrigido.shipping.mode;
+  // Renova token antes de usar — evita falhas por token expirado na fila
+  let accessToken = initialToken;
+  if (userId && contaNome) {
+    try {
+      // CadastramentoMassa envia "NickName (classico/premium)" — extrai só o nickname
+      const nicknamePuro = contaNome.split(' (')[0].trim();
+      const conta = await prisma.contaML.findFirst({ where: { userId, nickname: nicknamePuro } });
+      if (conta) {
+        const tRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+        if (tRes?.access_token) {
+          accessToken = tRes.access_token;
+          await prisma.contaML.update({
+            where: { id: conta.id },
+            data: { accessToken: tRes.access_token, refreshToken: tRes.refresh_token || conta.refreshToken }
+          });
         }
-        precisaTentarNovamente = true;
-    }
+      }
+    } catch (_) { /* usa token original se refresh falhar */ }
+  }
 
-    // 2. Erro de Dimensões (Fora do padrão exigido pela categoria)
-    if (erroStr.includes('shipping.dimensions') || erroStr.includes('dimension')) {
-        console.log(`[Worker] Auto-Healer: Removendo envio de dimensões do shipping...`);
-        if (payloadCorrigido.shipping) {
-            delete payloadCorrigido.shipping.dimensions;
-        }
-        precisaTentarNovamente = true;
-    }
+// ✅ CORREÇÃO CHAVE: Variável para armazenar os IDs criados (mesmo se passar pelo Auto-Healer)
+let idsCriados = [];
+let logCriacao = "";
 
-    // 3. Erro de Atributos do Pacote (CORRIGIDO: Força a conversão para inteiro)
-    if (erroStr.includes('seller_package_')) {
-        console.log(`[Worker] Auto-Healer: Corrigindo formato dos atributos de pacote para inteiro...`);
-        if (payloadCorrigido.attributes) {
-            // Mapeia os atributos, corrigindo os que deram problema
-            payloadCorrigido.attributes = payloadCorrigido.attributes.map(attr => {
-                if (attr.id.startsWith('SELLER_PACKAGE_')) {
-                    // Extrai apenas o número do valor (ex: "150.0 g" -> 150)
-                    const valorNumerico = Math.round(parseFloat(attr.value_name));
-                    
-                    // Reconstrói o valor no formato "NUMERO UNIDADE"
-                    const unidade = attr.id.includes('WEIGHT') ? 'g' : 'cm';
-                    const valorCorrigido = `${valorNumerico} ${unidade}`;
+try {
+  // TENTATIVA 1: Tenta publicar
+  const result = await mlService.publishSmart({ accessToken, payload, description });
+  idsCriados.push(result.id);
+  logCriacao = `Sucesso! ID: ${result.id}`;
+} catch (error) {
+  let erroStr = JSON.stringify(error).toLowerCase();
+  let erroObjAtual = error;
+  let payloadCorrigido = JSON.parse(JSON.stringify(payload)); 
+  let precisaTentarNovamente = false;
 
-                    console.log(`[Worker] Corrigindo atributo ${attr.id}: de "${attr.value_name}" para "${valorCorrigido}"`);
-                    
-                    // Retorna o atributo corrigido
-                    return { ...attr, value_name: valorCorrigido };
-                }
-                // Mantém os outros atributos intactos
-                return attr;
-            });
-        }
+  // --- AUTO-HEALER ---
+  if (erroStr.includes('user has not mode')) {
+      if (payloadCorrigido.shipping) delete payloadCorrigido.shipping.mode;
+      precisaTentarNovamente = true;
+  }
+  if (erroStr.includes('shipping.dimensions') || erroStr.includes('dimension')) {
+      if (payloadCorrigido.shipping) delete payloadCorrigido.shipping.dimensions;
+      precisaTentarNovamente = true;
+  }
+  if (erroStr.includes('seller_package_')) {
+      if (payloadCorrigido.attributes) {
+          payloadCorrigido.attributes = payloadCorrigido.attributes.map(attr => {
+              if (attr.id.startsWith('SELLER_PACKAGE_')) {
+                  const valorNumerico = Math.round(parseFloat(attr.value_name));
+                  const unidade = attr.id.includes('WEIGHT') ? 'g' : 'cm';
+                  return { ...attr, value_name: `${valorNumerico} ${unidade}` };
+              }
+              return attr;
+          });
+      }
+      precisaTentarNovamente = true;
+  }
+  if (erroStr.includes('mandatory free shipping')) {
+      if (payloadCorrigido.shipping) payloadCorrigido.shipping.free_shipping = true;
+      precisaTentarNovamente = true;
+  }
+  if (erroStr.includes('invalid_fields') && erroStr.includes('title')) {
+        delete payloadCorrigido.title;
         precisaTentarNovamente = true;
-    }
+  }
+
+  if (precisaTentarNovamente && !erroStr.includes('variations_not_allowed')) {
+      try {
+          const retryRes = await mlService.publishSmart({ accessToken, payload: payloadCorrigido, description });
+          idsCriados.push(retryRes.id);
+          logCriacao = `Sucesso (Auto-Corrigido)! ID: ${retryRes.id}`;
+      } catch (e) {
+          erroObjAtual = e; 
+          erroStr = JSON.stringify(e).toLowerCase(); 
+      }
+  }
     
-    // 4. Erro "Mandatory Free Shipping" (Briga entre boolean vs obrigatório)
-    if (erroStr.includes('mandatory free shipping')) {
-        console.log(`[Worker] Auto-Healer: Forçando frete grátis true...`);
-        if (payloadCorrigido.shipping) {
-            payloadCorrigido.shipping.free_shipping = true;
-        }
-        precisaTentarNovamente = true;
-    }
-    
-    // 5. Título Inválido (Excesso de caracteres ou formato barrado)
-    if (erroStr.includes('invalid_fields') && erroStr.includes('title')) {
-         console.log(`[Worker] Auto-Healer: Removendo Title para forçar bypass usando family_name...`);
-         delete payloadCorrigido.title;
-         precisaTentarNovamente = true;
-    }
-
-    // --- REENVIO AUTOMÁTICO SE HOUVE HIGIENIZAÇÃO (E não é um problema de variação) ---
-    if (precisaTentarNovamente && !erroStr.includes('variations_not_allowed')) {
-        try {
-            console.log(`[Worker] Re-tentando publicar com Payload higienizado...`);
-            const retryRes = await mlService.publishSmart({ accessToken, payload: payloadCorrigido, description });
-            
-            await prisma.tarefaFila.update({
-                where: { id: tarefaId },
-                data: { status: 'CONCLUIDO', detalhes: `Sucesso (Auto-Corrigido)! ID: ${retryRes.id}` }
-            });
-            return { success: true, mlId: retryRes.id };
-        } catch (e) {
-            erroObjAtual = e; 
-            erroStr = JSON.stringify(e).toLowerCase(); // Atualiza a string do erro caso falhe novamente
-        }
-    }
-    
-    // =========================================================================
-    // CASO EXTREMO: DESMEMBRAMENTO DE VARIAÇÕES
-    // =========================================================================
+    // --- DESMEMBRAMENTO DE VARIAÇÕES ---
     const erroVariacaoNaoPermitida = erroStr.includes('variations_not_allowed');
-    if (erroVariacaoNaoPermitida && payloadCorrigido.variations && payloadCorrigido.variations.length > 0) {
+    if (idsCriados.length === 0 && erroVariacaoNaoPermitida && payloadCorrigido.variations && payloadCorrigido.variations.length > 0) {
         try {
-            console.log(`[Worker] Desmembrando variações em anúncios separados...`);
-            let idsCriados =[];
             for (const variacao of payloadCorrigido.variations) {
                 const payloadSeparado = { ...payloadCorrigido };
                 delete payloadSeparado.variations; 
-                
                 payloadSeparado.price = variacao.price;
                 payloadSeparado.available_quantity = variacao.available_quantity;
                 
@@ -140,67 +262,79 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
                      payloadSeparado.pictures = variacao.picture_ids.map(img => typeof img === 'string' ? { source: img } : img);
                 }
                 
-                const mapAtributos = new Map();[...(payloadCorrigido.attributes || []), ...(variacao.attributes || []), ...(variacao.attribute_combinations || [])]
-                    .forEach(attr => mapAtributos.set(attr.id, attr));
+                const mapAtributos = new Map();
+                [...(payloadCorrigido.attributes || []), ...(variacao.attributes || []), ...(variacao.attribute_combinations || [])].forEach(attr => mapAtributos.set(attr.id, attr));
                 payloadSeparado.attributes = Array.from(mapAtributos.values());
                 
                 const r = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
                 idsCriados.push(r.id);
             }
-            
-            await prisma.tarefaFila.update({
-                where: { id: tarefaId },
-                data: { status: 'CONCLUIDO', detalhes: `Sucesso (Desmembrado)! IDs: ${idsCriados.join(', ')}` }
-            });
-            return { success: true, mlIds: idsCriados };
-            
+            logCriacao = `Sucesso (Desmembrado)! IDs: ${idsCriados.join(', ')}`;
         } catch (e) {
             erroObjAtual = e; 
         }
     }
 
-    // =========================================================================
-    // EXTRATOR DETALHADO DE ERROS (Mantido da versão anterior)
-    // =========================================================================
-    let erroTxt = "Erro desconhecido ao tentar publicar.";
-    const dataML = erroObjAtual.details;
-
-    if (dataML) {
-        if (dataML.cause && Array.isArray(dataML.cause) && dataML.cause.length > 0) {
-            const mensagens = dataML.cause.map(c => {
-                let msg = c.message || c.code;
-                if (c.references && c.references.length > 0) {
-                    msg += ` (Campo: ${c.references.join(', ')})`;
-                }
-                return msg;
-            });
-            erroTxt = mensagens.join(' | ');
-        } 
-        else if (dataML.message) {
-            erroTxt = dataML.message;
-        } 
-        else {
-            erroTxt = JSON.stringify(dataML).substring(0, 200);
-        }
-    } else if (erroObjAtual.message) {
-        erroTxt = erroObjAtual.message;
+    // Se falhou mesmo com os healers, lança o erro
+    if (idsCriados.length === 0) {
+      let erroTxt = "Erro desconhecido ao tentar publicar.";
+      const dataML = erroObjAtual.details;
+      if (dataML?.cause && Array.isArray(dataML.cause) && dataML.cause.length > 0) {
+          erroTxt = dataML.cause.map(c => c.message || c.code).join(' | ');
+      } else if (dataML?.message) {
+          erroTxt = dataML.message;
+      } else if (erroObjAtual.message) {
+          erroTxt = erroObjAtual.message;
+      }
+      await prisma.tarefaFila.updateMany({
+          where: { id: tarefaId },
+          data: { status: 'FALHA', detalhes: erroTxt, tentativas: { increment: 1 } }
+      });
+      throw new Error(erroTxt);
     }
-
-    erroTxt = erroTxt.replace(/item.attributes.missing_required/g, "Faltou preencher um atributo obrigatório na Ficha Técnica");
-    erroTxt = erroTxt.replace(/item.title.length/g, "O título é muito longo");
-    erroTxt = erroTxt.replace(/item.pictures.missing/g, "O anúncio precisa de pelo menos 1 imagem válida");
-
-    await prisma.tarefaFila.update({
-        where: { id: tarefaId },
-        data: {
-          status: 'FALHA',
-          detalhes: erroTxt,
-          tentativas: { increment: 1 }
-        }
-    });
-
-    throw new Error(erroTxt);
   }
+
+  // ✅ CORREÇÃO CHAVE: Fase 2 - Processar Atacado e Promoções para os IDs criados
+  let logAtacadoPromo = "";
+  
+  if (idsCriados.length > 0 && (enviarAtacado || ativarPromocoes)) {
+    // ⚠️ CRUCIAL: Esperar a indexação do ML. Aumentei para 12s para garantir.
+    await delay(12000); 
+
+    const configAtacado = enviarAtacado ? await prisma.configAtacado.findUnique({ where: { userId } }) : null;
+    const faixas = configAtacado?.ativo && Array.isArray(configAtacado.faixas) ? configAtacado.faixas : [];
+
+    for (const id of idsCriados) {
+      let l = `\n-> Item ${id}:`;
+      
+      if (enviarAtacado && faixas.length > 0) {
+         const precoFinal = payload.price || 0;
+         const inflarSafe = Math.min(Math.max(0, inflar || 0), 99);
+         const precoAlvo = inflarSafe > 0 ? Math.round(precoFinal * (1 - inflarSafe / 100) * 100) / 100 : precoFinal;
+         const respA = await enviarPrecosAtacado(id, accessToken, precoAlvo, faixas);
+         l += `\n   📦 Atacado: ${respA}`;
+         await delay(1500);
+      } else if (enviarAtacado) {
+         l += `\n   📦 Atacado: Nenhuma faixa configurada no painel.`;
+      }
+
+      if (ativarPromocoes) {
+         const respP = await ativarPromocoesAuto(id, accessToken, inflar || 0, payload.price || 0);
+         l += `\n   🏷️ Promos: ${respP}`;
+      }
+
+      logAtacadoPromo += l;
+    }
+  }
+
+  // Atualiza a Fila com a string completa de logs
+  await prisma.tarefaFila.updateMany({
+    where: { id: tarefaId },
+    data: { status: 'CONCLUIDO', detalhes: `${logCriacao}${logAtacadoPromo}` }
+  });
+
+  return { success: true, mlIds: idsCriados };
+
 }, {
   connection,
   concurrency: 1,
@@ -209,6 +343,4 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
   drainDelay: 10
 });
 
-publishWorker.on('error', (err) => {
-  console.error('❌ Erro no Worker de Publicação (Redis):', err.message);
-});
+publishWorker.on('error', (err) => console.error('❌ Erro no Worker de Publicação:', err.message));

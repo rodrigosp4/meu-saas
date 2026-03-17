@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 // ✅ Mapa de tradução das tags do ML para labels amigáveis e cores
-const TAG_DISPLAY_MAP = {
+export const TAG_DISPLAY_MAP = {
   incomplete_compatibilities:           { label: 'Compat. Incompleta',    color: 'bg-orange-100 text-orange-800 border-orange-200' },
   incomplete_position_compatibilities:  { label: 'Posição Compat. Inc.',  color: 'bg-orange-100 text-orange-800 border-orange-200' },
   poor_quality_picture:                 { label: 'Foto Ruim',            color: 'bg-red-100 text-red-800 border-red-200' },
@@ -13,7 +13,7 @@ const TAG_DISPLAY_MAP = {
   waiting_for_patch:                    { label: 'Aguardando Patch',     color: 'bg-blue-100 text-blue-800 border-blue-200' },
 };
 
-function getTagBadge(tagValue) {
+export function getTagBadge(tagValue) {
   const mapped = TAG_DISPLAY_MAP[tagValue];
   if (mapped) {
     return <span className={`${mapped.color} border text-[9px] px-1.5 py-0.5 rounded font-bold`}>{mapped.label}</span>;
@@ -116,6 +116,545 @@ function ModalFichaTecnica({ anuncio, onClose }) {
   );
 }
 // =========================================
+
+// ===== MODAL PRAZO DE FABRICAÇÃO =====
+function ModalPrazoFabricacao({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  const [dias, setDias] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSalvar = async () => {
+    const diasNum = dias === '' ? 0 : Number(dias);
+    if (isNaN(diasNum) || diasNum < 0 || diasNum > 60) return alert('Digite um valor entre 0 e 60 dias (0 para remover o prazo).');
+    setIsLoading(true);
+    try {
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'prazo_fabricacao', valor: diasNum })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert('✅ Ação enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      onSuccess();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">Prazo de Fabricação</h2>
+            <p className="text-violet-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-700">
+            Define quantos dias o produto leva para ser disponibilizado. Máximo: <strong>60 dias</strong>. Digite <strong>0</strong> para remover o prazo.
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Dias de Fabricação (0–60)</label>
+            <input
+              type="number" min="0" max="60"
+              value={dias}
+              onChange={e => setDias(e.target.value)}
+              placeholder="Ex: 7 (ou 0 para remover)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+            />
+          </div>
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleSalvar} disabled={isLoading || dias === ''} className="px-5 py-2 text-sm font-black text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : 'Aplicar em Massa'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL EDITAR TÍTULO =====
+function ModalEditarTitulo({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  const [titulo, setTitulo] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const comVendas = anunciosSelecionados.filter(ad => Number(ad.vendas || 0) > 0);
+  const semVendas = anunciosSelecionados.filter(ad => Number(ad.vendas || 0) === 0);
+
+  const handleSalvar = async () => {
+    if (!titulo.trim()) return alert('Digite um título.');
+    if (semVendas.length === 0) return alert('Nenhum anúncio elegível (todos têm histórico de vendas).');
+    setIsLoading(true);
+    try {
+      const items = semVendas.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'editar_titulo', valor: titulo.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert(`✅ Ação enviada para a fila!${comVendas.length > 0 ? `\n\n⚠️ ${comVendas.length} anúncio(s) com vendas foram ignorados.` : ''}\n\nAcompanhe na aba "Gerenciador de Fila".`);
+      onSuccess();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-sky-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">Editar Título</h2>
+            <p className="text-sky-200 text-xs mt-0.5">{semVendas.length} de {anunciosSelecionados.length} elegível(is) — sem vendas</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          {comVendas.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-xs font-bold text-amber-700">⚠️ {comVendas.length} anúncio(s) com vendas serão ignorados — o ML não permite alterar o título de anúncios com histórico de vendas.</p>
+            </div>
+          )}
+          {semVendas.length === 0 ? (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-xs font-bold text-red-700">Todos os anúncios selecionados possuem vendas. Não é possível editar o título.</p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Novo Título</label>
+              <input
+                type="text"
+                value={titulo}
+                onChange={e => setTitulo(e.target.value)}
+                maxLength={60}
+                placeholder="Digite o novo título do anúncio..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
+              />
+              <p className="text-xs text-gray-400 mt-1">{titulo.length}/60 caracteres</p>
+            </div>
+          )}
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleSalvar} disabled={isLoading || !titulo.trim() || semVendas.length === 0} className="px-5 py-2 text-sm font-black text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : `Aplicar em ${semVendas.length} anúncio(s)`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL EDITAR DESCRIÇÃO =====
+function ModalEditarDescricao({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  const [descricao, setDescricao] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSalvar = async () => {
+    if (!descricao.trim()) return alert('Digite uma descrição.');
+    setIsLoading(true);
+    try {
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'editar_descricao', valor: descricao.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert('✅ Ação enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      onSuccess();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">Editar Descrição</h2>
+            <p className="text-emerald-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+            Somente <strong>texto simples</strong>. Use <code className="bg-blue-100 px-1 rounded">\n</code> para quebra de linha. Sem formatação, negrito ou HTML.
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Descrição (Texto Simples)</label>
+            <textarea
+              value={descricao}
+              onChange={e => setDescricao(e.target.value)}
+              rows={8}
+              placeholder="Digite a descrição do produto aqui..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 resize-y font-mono"
+            />
+            <p className="text-xs text-gray-400 mt-1">{descricao.length} caracteres</p>
+          </div>
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleSalvar} disabled={isLoading || !descricao.trim()} className="px-5 py-2 text-sm font-black text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : 'Salvar Descrição'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL EXCLUIR PUBLICAÇÃO =====
+function ModalExcluir({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  const [confirmInput, setConfirmInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const temVendas = anunciosSelecionados.some(ad => Number(ad.vendas || 0) > 0);
+  const confirmado = !temVendas || confirmInput === 'CONFIRMAR';
+
+  const handleExcluir = async () => {
+    if (!confirmado) return;
+    setIsLoading(true);
+    try {
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'excluir', valor: null })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert('🗑️ Exclusão enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      onSuccess();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-red-600 to-rose-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">⚠️ Excluir Publicações</h2>
+            <p className="text-red-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
+            <p className="text-sm font-black text-red-700">ATENÇÃO: Esta ação é IRREVERSÍVEL!</p>
+            <p className="text-xs text-red-600 mt-1">Os anúncios serão encerrados e deletados permanentemente do Mercado Livre. Não será possível reativá-los.</p>
+          </div>
+          <div className="max-h-40 overflow-y-auto space-y-1">
+            {anunciosSelecionados.map(ad => (
+              <div key={ad.id} className="flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded">
+                <span className="font-mono text-gray-400 flex-shrink-0">{ad.id}</span>
+                <span className="truncate flex-1">{ad.titulo}</span>
+                {Number(ad.vendas || 0) > 0 && <span className="text-red-500 font-bold flex-shrink-0">{ad.vendas} venda(s)</span>}
+              </div>
+            ))}
+          </div>
+          {temVendas && (
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-red-700">Um ou mais anúncios possuem histórico de vendas. Digite <strong>CONFIRMAR</strong> para prosseguir:</p>
+              <input
+                type="text"
+                value={confirmInput}
+                onChange={e => setConfirmInput(e.target.value)}
+                placeholder="Digite: CONFIRMAR"
+                className="w-full px-3 py-2 border-2 border-red-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-400 font-mono"
+              />
+            </div>
+          )}
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleExcluir} disabled={isLoading || !confirmado} className="px-5 py-2 text-sm font-black text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition">
+            {isLoading ? 'Processando...' : `🗑️ Excluir ${anunciosSelecionados.length} Anúncio(s)`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL COMPATIBILIDADE — Aplicar Perfil nos Anúncios Selecionados =====
+export function ModalCompatibilidade({ anunciosSelecionados, onClose, usuarioId, onSuccess }) {
+  const [contasML, setContasML] = useState([]);
+  const [contaSelecionada, setContaSelecionada] = useState('');
+  const [perfis, setPerfis] = useState([]);
+  const [perfilSelecionado, setPerfilSelecionado] = useState('');
+  const [perfilData, setPerfilData] = useState(null);
+  const [loadingPerfil, setLoadingPerfil] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Carrega contas e perfis ao abrir
+  useEffect(() => {
+    const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
+    setContasML(contas);
+    if (contas.length > 0) setContaSelecionada(contas[0].id);
+    if (usuarioId) {
+      fetch(`/api/compat/perfis?userId=${usuarioId}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(data => setPerfis(data))
+        .catch(() => {});
+    }
+  }, [usuarioId]);
+
+  // Carrega dados do perfil ao selecionar
+  const handlePerfilChange = async (id) => {
+    setPerfilSelecionado(id);
+    setPerfilData(null);
+    if (!id || !usuarioId) return;
+    setLoadingPerfil(true);
+    try {
+      const res = await fetch(`/api/compat/perfis/${id}?userId=${usuarioId}`);
+      if (res.ok) setPerfilData(await res.json());
+    } catch (_) {}
+    setLoadingPerfil(false);
+  };
+
+  // Aplica o perfil aos anúncios selecionados via fila
+  const LIMITE_ML = 200;
+  const handleAplicar = async () => {
+    if (!perfilData) return;
+    const totalVeiculos = (perfilData.compatibilities || []).length;
+    const foiLimitado = totalVeiculos > LIMITE_ML;
+    const compatToApply = (perfilData.compatibilities || []).slice(0, LIMITE_ML);
+    const msgLimite = foiLimitado
+      ? `\n\n⚠️ O perfil tem ${totalVeiculos} veículos, mas a API do ML limita a ${LIMITE_ML}. Serão enviados apenas os primeiros ${LIMITE_ML}.`
+      : '';
+    if (!window.confirm(`Enviar para a fila: perfil "${perfilData.nome}" (${foiLimitado ? `${LIMITE_ML} de ${totalVeiculos}` : totalVeiculos} veículos) em ${anunciosSelecionados.length} anúncio(s)?${msgLimite}`)) return;
+
+    setLoading(true);
+    try {
+      const items = anunciosSelecionados.map(a => ({ id: a.id, contaId: a.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'compatibilidade', valor: compatToApply }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro ao enfileirar');
+      alert('✅ Compatibilidade enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      if (onSuccess) onSuccess(anunciosSelecionados.map(a => a.id));
+      onClose();
+    } catch (err) {
+      alert(`Erro: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="bg-gradient-to-r from-amber-600 to-orange-500 px-6 py-4 flex items-center justify-between rounded-t-xl flex-shrink-0">
+          <div>
+            <h2 className="text-white font-black text-base">🚗 Aplicar Compatibilidade de Veículos</h2>
+            <p className="text-amber-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">  
+
+          {/* Perfil */}
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Perfil de Compatibilidade</label>
+            {perfis.length === 0 ? (
+              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                Nenhum perfil salvo. Acesse a aba <strong>Compatibilidade</strong> no menu lateral para criar perfis de veículos.
+              </p>
+            ) : (
+              <select value={perfilSelecionado} onChange={e => handlePerfilChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-400">
+                <option value="">-- Selecione um perfil --</option>
+                {perfis.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+              </select>
+            )}
+          </div>
+
+          {/* Preview do perfil selecionado */}
+          {loadingPerfil && <p className="text-sm text-gray-400">⏳ Carregando perfil...</p>}
+          {perfilData && !loadingPerfil && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                {(perfilData.compatibilities || []).length} veículos neste perfil
+              </p>
+              {(perfilData.compatibilities || []).length > LIMITE_ML && (
+                <div className="mb-2 px-2 py-1.5 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700 font-semibold">
+                  ⚠️ Este perfil tem {(perfilData.compatibilities || []).length} veículos — serão enviados apenas os primeiros {LIMITE_ML} (limite da API do ML).
+                </div>
+              )}
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {(perfilData.compatibilities || []).slice(0, 50).map((v, i) => {
+                  // Extrai posições
+                  const posAttr = Array.isArray(v.restrictions) ? v.restrictions.find(r => r.attribute_id === 'POSITION') : null;
+                  const posStr = posAttr ? (posAttr.attribute_values || []).map(av => (av.values || []).map(x => x.value_name).join('+')).join(' | ') : '';
+                  return (
+                    <div key={i} className="flex items-start gap-2 text-xs">
+                      <span className="text-gray-400 font-mono w-5 flex-shrink-0">{i + 1}.</span>
+                      <div>
+                        <span className="text-gray-800 font-medium">{v.name || v.catalog_product_id}</span>
+                        {v.note && <span className="text-gray-500 ml-1">— {v.note}</span>}
+                        {posStr && <span className="ml-1 inline-block bg-green-100 text-green-800 rounded px-1">{posStr}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(perfilData.compatibilities || []).length > 50 && (
+                  <p className="text-xs text-gray-400 text-center pt-1">+ {(perfilData.compatibilities || []).length - 50} mais...</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Anúncios que receberão */}
+          <div>
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Anúncios que receberão a compatibilidade</p>
+            <div className="max-h-28 overflow-y-auto space-y-1">
+              {anunciosSelecionados.map(a => (
+                <div key={a.id} className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-100 rounded px-2 py-1">
+                  <span className="font-mono text-blue-700 font-bold">{a.id}</span>
+                  <span className="text-gray-600 truncate">{a.titulo}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 flex gap-3 border-t border-gray-100 pt-4 flex-shrink-0">
+          <button onClick={onClose} className="flex-1 px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">
+            Cancelar
+          </button>
+          <button
+            onClick={handleAplicar}
+            disabled={loading || !perfilData}
+            className="flex-1 px-4 py-2 text-sm font-black text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? '⏳ Enfileirando...' : `🚀 Enviar para Fila (${anunciosSelecionados.length} anúncio(s))`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL POSIÇÃO (AUTOPEÇA) =====
+const POSICOES_AUTOPECA =[
+  'Dianteira', 'Traseira', 'Esquerda', 'Direita', 
+  'Superior', 'Inferior', 'Interno', 'Externo', 'Central',
+  // ✅ Adicionadas as variações combinadas para evitar erro "Missing request parameter"
+  'Dianteira Esquerda', 'Dianteira Direita', 'Traseira Esquerda', 'Traseira Direita'
+];
+
+export function ModalPosicao({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  // Voltamos para o SET (múltiplas escolhas permitidas)
+  const [selecionadas, setSelecionadas] = useState(new Set());
+  const [isLoading, setIsLoading] = useState(false);
+
+  const toggle = (pos) => setSelecionadas(prev => {
+    const next = new Set(prev);
+    next.has(pos) ? next.delete(pos) : next.add(pos);
+    return next;
+  });
+
+  const handleSalvar = async () => {
+    if (selecionadas.size === 0) return alert('Selecione pelo menos uma posição.');
+    setIsLoading(true);
+    
+    // ✅ CORREÇÃO: Agora enviamos um ARRAY puro, não mais um texto com barras " / "
+    const valorPosicaoArray = Array.from(selecionadas);
+    
+    try {
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'posicao', valor: valorPosicaoArray })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert('✅ Posições enviadas para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      onSuccess(anunciosSelecionados.map(a => a.id));
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-cyan-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">Posição da Peça</h2>
+            <p className="text-cyan-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+
+        <div className="bg-cyan-50 border-b border-cyan-200 px-6 py-2.5 flex items-center gap-2">
+          <span className="text-cyan-700 text-xs font-semibold">Você pode selecionar múltiplas posições.</span>
+        </div>
+
+        <div className="p-6 space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {POSICOES_AUTOPECA.map(pos => (
+              <label
+                key={pos}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition select-none text-xs font-semibold ${
+                  selecionadas.has(pos)
+                    ? 'border-cyan-500 bg-cyan-50 text-cyan-800'
+                    : 'border-gray-200 bg-white text-gray-700 hover:border-cyan-300 hover:bg-cyan-50/50'
+                }`}
+              >
+                <input 
+                  type="checkbox" 
+                  checked={selecionadas.has(pos)} 
+                  onChange={() => toggle(pos)} 
+                  className="w-4 h-4 rounded border-gray-400 text-cyan-600 cursor-pointer" 
+                />
+                {pos}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="px-6 pb-5 flex items-center justify-end gap-3 border-t border-gray-100 pt-4">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleSalvar} disabled={isLoading || selecionadas.size === 0} className="px-5 py-2 text-sm font-black text-white bg-cyan-600 rounded-lg hover:bg-cyan-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : 'Aplicar Posição'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ===== MODAL CORRIGIR PREÇO DETALHADO =====
 function calcularPrecoCorrigir(precoBase, inflar, reduzir) {
@@ -230,7 +769,7 @@ function resolverPrecoBase(precosTiny, tipoBase) {
   return pPromo > 0 ? pPromo : pVenda;
 }
 
-function ModalCorrigirPreco({ anunciosSelecionados, regrasPreco, usuarioId, onClose, onSuccess }) {
+function ModalCorrigirPreco({ anunciosSelecionados, regrasPreco, usuarioId, configAtacado, onClose, onSuccess }) {
   const [modo, setModo] = useState('manual');
   const [precoManual, setPrecoManual] = useState('');
   const [regraId, setRegraId] = useState(regrasPreco[0]?.id || '');
@@ -241,6 +780,8 @@ function ModalCorrigirPreco({ anunciosSelecionados, regrasPreco, usuarioId, onCl
   const [resultados, setResultados] = useState(null);
   const [detalheAberto, setDetalheAberto] = useState(null); // { ad, resultado }
   const [removerPromocoes, setRemoverPromocoes] = useState(false);
+  const [enviarAtacado, setEnviarAtacado] = useState(false);
+  const [ativarPromocoes, setAtivarPromocoes] = useState(false);
 
 const [precosTinyMap, setPrecosTinyMap] = useState({});
   const [loadingPrecos, setLoadingPrecos] = useState(true);
@@ -388,13 +929,15 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
       const body = {
         userId: usuarioId,
         items: anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId, sku: getEfetivaSku(ad) })),
-        modo, 
+        modo,
         regraId,
         precoManual: Number(precoManual),
         precoBaseManual: Number(precoBaseManual),
-        inflar, 
+        inflar,
         reduzir,
-        removerPromocoes 
+        removerPromocoes,
+        enviarAtacado,
+        ativarPromocoes,
       };
 
       const res = await fetch('/api/ml/corrigir-preco', {
@@ -582,6 +1125,52 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
             <div>
               <span className="text-sm font-bold text-gray-700">Excluir campanhas promocionais ativas antes de alterar o preço</span>
               <p className="text-xs text-gray-400 mt-0.5">Remove todas as promoções do item no ML (exceto Oferta do Dia e Oferta Relâmpago ativas) antes de enviar o novo preço.</p>
+            </div>
+          </label>
+
+          {/* Enviar preços de atacado (B2B) */}
+          {configAtacado?.ativo && Array.isArray(configAtacado.faixas) && configAtacado.faixas.length > 0 && (
+            <label className="flex items-start gap-3 cursor-pointer select-none mt-1">
+              <input
+                type="checkbox"
+                checked={enviarAtacado}
+                onChange={e => setEnviarAtacado(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-green-600 cursor-pointer flex-shrink-0"
+              />
+              <div>
+                <span className="text-sm font-bold text-green-700">Enviar preços de atacado (B2B) junto com a atualização</span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Aplicará {configAtacado.faixas.length} faixa(s) configurada(s) sobre o preço final de venda
+                  {inflar > 0 ? ` (preço com promoção ativa, descontando os ${inflar}% de inflação)` : ''}.
+                </p>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {configAtacado.faixas.map(f => (
+                    <span key={f.id} className="text-[10px] px-2 py-0.5 rounded font-semibold bg-green-50 text-green-700 border border-green-200">
+                      {f.minQtd}+ un → -{f.desconto}%
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </label>
+          )}
+
+          {/* Ativar promoções automaticamente */}
+          <label className="flex items-start gap-3 cursor-pointer select-none mt-1">
+            <input
+              type="checkbox"
+              checked={ativarPromocoes}
+              onChange={e => setAtivarPromocoes(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-purple-600 cursor-pointer flex-shrink-0"
+            />
+            <div>
+              <span className="text-sm font-bold text-purple-700">
+                Ativar promoções automaticamente{inflar > 0 ? ` (margem ${inflar}%)` : ''}
+              </span>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {inflar > 0
+                  ? `Ativará campanhas candidatas onde o desconto do vendedor é ≤ ${inflar}%.`
+                  : 'Ativará todas as campanhas candidatas disponíveis no item.'}
+              </p>
             </div>
           </label>
         </div>
@@ -801,6 +1390,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [total, setTotal] = useState(0);
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
+  const [configAtacado, setConfigAtacado] = useState(null);
   const [fichaTecnicaModal, setFichaTecnicaModal] = useState(null);
   const [modalCorrigirPreco, setModalCorrigirPreco] = useState(false);
   const [expandedAds, setExpandedAds] = useState(new Set());
@@ -820,6 +1410,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
 
   // Filtros principais
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchType, setSearchType] = useState('todos');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [contaFilter, setContaFilter] = useState('Todas');
   const [tagFilter, setTagFilter] = useState('Todas');
@@ -835,6 +1426,8 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [descontoMin, setDescontoMin] = useState('');
   const [descontoMax, setDescontoMax] = useState('');
   const [semSkuFilter, setSemSkuFilter] = useState(false);
+  const [palavrasExcluir, setPalavrasExcluir] = useState([]);
+  const [palavrasExcluirInput, setPalavrasExcluirInput] = useState('');
 
   // Ordenação
   const [sortBy, setSortBy] = useState('padrao');
@@ -850,7 +1443,13 @@ export default function GerenciadorAnuncios({ usuarioId }) {
 
   // Verificar Preço
   const [modalVerificarPreco, setModalVerificarPreco] = useState(false);
-  const [priceCheckJobId, setPriceCheckJobId] = useState(null); 
+  const [priceCheckJobId, setPriceCheckJobId] = useState(null);
+  const [modalPrazoFabricacao, setModalPrazoFabricacao] = useState(false);
+  const [modalEditarTitulo, setModalEditarTitulo] = useState(false);
+  const [modalEditarDescricao, setModalEditarDescricao] = useState(false);
+  const [modalExcluir, setModalExcluir] = useState(false);
+  const [modalCompatibilidade, setModalCompatibilidade] = useState(false);
+  const [modalPosicao, setModalPosicao] = useState(false);
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
@@ -869,6 +1468,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     descontoMax !== '',
     priceCheckFilter !== 'Todos',
     semSkuFilter,
+    palavrasExcluir.length > 0,
   ].filter(Boolean).length;
   
   useEffect(() => {
@@ -877,6 +1477,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
       .then(data => {
         if (data.contasML) setContasML(data.contasML);
         if (data.regrasPreco) setRegrasPreco(data.regrasPreco);
+        if (data.configAtacado) setConfigAtacado(data.configAtacado);
       });
   }, [usuarioId]);
 
@@ -905,7 +1506,11 @@ const fetchAnuncios = async () => {
       let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
 
       const params = new URLSearchParams({
-        contasIds: queryConta, page: currentPage, limit: itemsPerPage, search: searchTerm,
+        contasIds: queryConta,
+        page: agrupaPorSku ? 1 : currentPage,
+        limit: agrupaPorSku ? 99999 : itemsPerPage,
+        search: searchTerm,
+        searchType: searchType,
         status: statusFilter, tag: tagFilter, promo: promoFilter, precoMin: precoMin,
         precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
         descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
@@ -932,7 +1537,7 @@ const fetchAnuncios = async () => {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML]);
+  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
@@ -949,28 +1554,42 @@ const fetchAnuncios = async () => {
     setDescontoMax('');
     setPriceCheckFilter('Todos');
     setSemSkuFilter(false);
+    setPalavrasExcluir([]);
+    setPalavrasExcluirInput('');
     setCurrentPage(1);
   };
 
-  const handleSelectAllFiltered = async () => {
+const handleSelectAllFiltered = async () => {
     setIsSelectingAll(true);
     try {
       const idsPermitidos = contasML.map(c => c.id).join(',');
       let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
       const params = new URLSearchParams({
-        contasIds: queryConta, search: searchTerm, status: statusFilter,
+        contasIds: queryConta, search: searchTerm, searchType: searchType, status: statusFilter,
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
         descontoMin, descontoMax, semSku: semSkuFilter,
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
-      if (data.ids) setSelectedIds(new Set(data.ids));
+      
       if (data.anuncios) {
-         setAllKnownAds(prev => {
-           const next = { ...prev };
-           data.anuncios.forEach(ad => next[ad.id] = ad);
-           return next;
-         });
+        // Varre os anúncios e coleta IDs dos pais e filhos
+        const allIds = new Set();
+        data.anuncios.forEach(ad => {
+          allIds.add(ad.id); // Id do Pai
+          
+          if (ad.dadosML?.variations?.length > 0) {
+            ad.dadosML.variations.forEach(v => allIds.add(v.id)); // Ids das Variações (Filhos)
+          }
+        });
+        
+        setSelectedIds(allIds);
+
+        setAllKnownAds(prev => {
+          const next = { ...prev };
+          data.anuncios.forEach(ad => next[ad.id] = ad);
+          return next;
+        });
       }
     } catch (e) {
       console.error('Erro ao selecionar todos:', e);
@@ -1075,6 +1694,7 @@ const handleSyncSelected = async () => {
       .then(data => {
         if (data.contasML) setContasML(data.contasML);
         if (data.regrasPreco) setRegrasPreco(data.regrasPreco);
+        if (data.configAtacado) setConfigAtacado(data.configAtacado);
       });
   }, [usuarioId]);
 
@@ -1090,10 +1710,103 @@ const handleSyncSelected = async () => {
       .catch(() => {});
   }, [usuarioId]);
 
+const getSelectedItemsData = () => {
+    return Array.from(selectedIds).map(id => {
+      const ad = allKnownAds[id];
+      const variations = ad.dadosML?.variations || [];
+      return {
+        id: ad.id,
+        contaId: ad.contaId,
+        hasVariations: variations.length > 0,
+        variationsIds: variations.map(v => v.id)
+      };
+    });
+  };
+
+  const handleAcaoMassa = async (acao) => {
+    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
+
+    let valor = null;
+    if (acao === 'estoque') {
+      const input = window.prompt('Digite a nova quantidade de ESTOQUE para aplicar em todos os selecionados:');
+      if (input === null) return;
+      valor = Number(input);
+      if (isNaN(valor) || valor < 0) return alert('Valor de estoque inválido.');
+    } else {
+      const nomeAcao = {
+        'ativar': 'ATIVAR',
+        'pausar': 'PAUSAR',
+        'flex': 'ativar MERCADO ENVIOS FLEX em',
+        'remover_flex': 'DESATIVAR o Envios Flex em',
+        'turbo': 'ativar ENVIOS TURBO em'
+      }[acao];
+      if (!window.confirm(`Tem certeza que deseja ${nomeAcao} ${selectedIds.size} anúncio(s)?\n\nIsso será processado em segundo plano.`)) return;
+    }
+
+    setIsSyncingSelected(true);
+    try {
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: usuarioId,
+          items: getSelectedItemsData(),
+          acao,
+          valor
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+
+      alert(`🚀 Ação enviada para a fila com sucesso!\n\nAs alterações em ${selectedIds.size} anúncio(s) serão processadas em segundo plano.\n\nAcompanhe o status e veja os LOGS DE ERRO na aba "Gerenciador de Fila".`);
+      setSelectedIds(new Set());
+    } catch (e) {
+      alert(`Erro ao enviar para fila: ${e.message}`);
+    } finally {
+      setIsSyncingSelected(false);
+    }
+  };
+
+  const handleAtivarDesconto = async () => {
+    const input = window.prompt('Digite o desconto máximo (%) para ativar:\n\nTodos os anúncios candidatos com desconto do vendedor até esse valor serão ativados nas promoções disponíveis.');
+    if (input === null) return;
+    const maxPct = parseFloat(input);
+    if (isNaN(maxPct) || maxPct <= 0) return alert('Percentual inválido.');
+
+    if (!window.confirm(`Ativar todos os anúncios candidatos com desconto do vendedor até ${maxPct}%?\n\nIsso usará as promoções salvas localmente (execute a sincronização de promoções antes, se necessário).`)) return;
+
+    setIsSyncingSelected(true);
+    try {
+      const contaId = contaFilter !== 'Todas' ? contaFilter : undefined;
+      const res = await fetch('/api/orquestrador/executar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: usuarioId,
+          ...(contaId ? { contaId } : {}),
+          regras: [
+            {
+              nome: 'Ativar Desconto Manual',
+              tiposPermitidos: ['MARKETPLACE_CAMPAIGN', 'SELLER_CAMPAIGN', 'DEAL'],
+              maxSellerPct: maxPct,
+              tolerancia: 0,
+              ativo: true,
+            },
+          ],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
+      alert(`✅ Desconto ativado!\n\nAtivados: ${data.joined}\nIgnorados: ${data.skipped}\nErros: ${data.errors}${data.detalhes?.errors?.length ? '\n\nVer erros no console.' : ''}`);
+      if (data.detalhes?.errors?.length) console.error('[AtivarDesconto] Erros:', data.detalhes.errors);
+    } catch (e) {
+      alert('Erro ao ativar desconto: ' + e.message);
+    } finally {
+      setIsSyncingSelected(false);
+    }
+  };
+
 // ✅ 3. MODIFIQUE A FUNÇÃO DE INICIAR A SINCRONIZAÇÃO
-
-
-
   const iniciarSincronizacaoML = async () => {
     if (!contaParaSincronizar) return alert("Selecione uma conta para puxar os anúncios.");
 
@@ -1276,10 +1989,14 @@ const handleFetchBySku = async () => {
     return Math.round(((precoOriginal - preco) / precoOriginal) * 100);
   };
 
-  // Filtragem client-side pelo resultado do Verificar Preço
-  const displayedAnuncios = priceCheckFilter === 'Todos'
-    ? anuncios
-    : anuncios.filter(ad => priceCheckResults[ad.id]?.status === priceCheckFilter);
+  // Filtragem client-side pelo resultado do Verificar Preço + palavras excluídas
+  const displayedAnuncios = anuncios
+    .filter(ad => priceCheckFilter === 'Todos' || priceCheckResults[ad.id]?.status === priceCheckFilter)
+    .filter(ad => {
+      if (palavrasExcluir.length === 0) return true;
+      const titulo = (ad.titulo || '').toLowerCase();
+      return !palavrasExcluir.some(p => titulo.includes(p.toLowerCase()));
+    });
 
   // Agrupamento por SKU: soma visitas e vendas de todos os anúncios (pai + variações) com o mesmo SKU
   const skuGroups = React.useMemo(() => {
@@ -1330,8 +2047,17 @@ const handleFetchBySku = async () => {
       });
     });
 
-    return Object.values(groups).sort((a, b) => b.totalVisitas - a.totalVisitas);
-  }, [agrupaPorSku, displayedAnuncios]);
+    const sorters = {
+      visitas_desc: (a, b) => b.totalVisitas - a.totalVisitas,
+      visitas_asc:  (a, b) => a.totalVisitas - b.totalVisitas,
+      vendas_desc:  (a, b) => b.totalVendas - a.totalVendas,
+      vendas_asc:   (a, b) => a.totalVendas - b.totalVendas,
+      estoque_desc: (a, b) => b.totalEstoque - a.totalEstoque,
+      estoque_asc:  (a, b) => a.totalEstoque - b.totalEstoque,
+    };
+    const sorter = sorters[sortBy] || sorters['visitas_desc'];
+    return Object.values(groups).sort(sorter);
+  }, [agrupaPorSku, displayedAnuncios, sortBy]);
 
   return (
     <>
@@ -1411,7 +2137,25 @@ const handleFetchBySku = async () => {
       {/* ✅ Barra de Filtros Principais */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="flex flex-wrap gap-4 p-4">
-          <input type="text" placeholder="Buscar por Título, MLB ou SKU..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <div className="flex flex-1 min-w-[200px]">
+            <select
+              value={searchType}
+              onChange={(e) => { setSearchType(e.target.value); setCurrentPage(1); }}
+              className="px-2 py-2 border border-r-0 border-gray-300 rounded-l-md text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-10"
+            >
+              <option value="todos">Todos</option>
+              <option value="titulo">Título</option>
+              <option value="mlb">MLB</option>
+              <option value="sku">SKU</option>
+            </select>
+            <input
+              type="text"
+              placeholder={{ todos: 'Buscar por Título, MLB ou SKU...', titulo: 'Buscar por título...', mlb: 'Buscar por MLB (ex: MLB123...)...', sku: 'Buscar por SKU...' }[searchType]}
+              value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
           
           <select value={contaFilter} onChange={(e) => { setContaFilter(e.target.value); setCurrentPage(1); }} className="w-48 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white">
             <option value="Todas">Todas as Contas</option>
@@ -1499,7 +2243,7 @@ const handleFetchBySku = async () => {
           {/* Painel de Filtros Adicionais (Expansível) */}
           <div
             className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showAdvancedFilters ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+              showAdvancedFilters ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
             }`}
           >
             <div className="px-4 pb-4 pt-2 border-t border-gray-100 bg-gray-50/50">
@@ -1619,6 +2363,52 @@ const handleFetchBySku = async () => {
                   </label>
                 </div>
 
+                {/* Filtro: Excluir por Palavras-chave */}
+                <div className="flex flex-col gap-1.5 w-full mt-2 border-t border-gray-200 pt-3">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    Excluir resultados com as seguintes palavras-chave
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Digite uma palavra e pressione Enter..."
+                      value={palavrasExcluirInput}
+                      onChange={e => setPalavrasExcluirInput(e.target.value)}
+                      onKeyDown={e => {
+                        if ((e.key === 'Enter' || e.key === ',') && palavrasExcluirInput.trim()) {
+                          e.preventDefault();
+                          const nova = palavrasExcluirInput.trim().replace(/,$/, '');
+                          if (nova && !palavrasExcluir.includes(nova.toLowerCase())) {
+                            setPalavrasExcluir(prev => [...prev, nova.toLowerCase()]);
+                          }
+                          setPalavrasExcluirInput('');
+                        } else if (e.key === 'Backspace' && !palavrasExcluirInput && palavrasExcluir.length > 0) {
+                          setPalavrasExcluir(prev => prev.slice(0, -1));
+                        }
+                      }}
+                      className="flex-1 min-w-[220px] px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                    />
+                  </div>
+                  {palavrasExcluir.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {palavrasExcluir.map(palavra => (
+                        <span
+                          key={palavra}
+                          className="inline-flex items-center gap-1 bg-red-100 text-red-700 border border-red-200 text-xs font-semibold px-2 py-0.5 rounded-full"
+                        >
+                          {palavra}
+                          <button
+                            onClick={() => setPalavrasExcluir(prev => prev.filter(p => p !== palavra))}
+                            className="hover:text-red-900 transition-colors ml-0.5 leading-none"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* Botão Limpar Filtros Adicionais */}
                 {activeAdvancedFiltersCount > 0 && (
                   <button
@@ -1725,22 +2515,108 @@ const handleFetchBySku = async () => {
                   🔍 Verificar Preço
                 </button>
 
-                {[
-                  { label: '▶ Ativar Selecionados',   color: 'text-green-700 bg-green-50 border-green-200 hover:bg-green-100' },
-                  { label: '⏸ Pausar Selecionados',    color: 'text-yellow-700 bg-yellow-50 border-yellow-200 hover:bg-yellow-100' },
-                  { label: '🏷️ Aplicar Desconto (%)',  color: 'text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100' },
-                  { label: '✕ Remover Desconto',       color: 'text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100' },
-                  { label: '📋 Exportar CSV',           color: 'text-gray-700 bg-white border-gray-300 hover:bg-gray-100' },
-                ].map(({ label, color }) => (
-                  <button
-                    key={label}
-                    disabled
-                    title="Funcionalidade em desenvolvimento"
-                    className={`px-4 py-2 text-sm font-semibold border rounded-md cursor-not-allowed opacity-50 transition-colors ${color}`}
-                  >
-                    {label}
-                  </button>
-                ))}
+                <button
+                  onClick={handleAtivarDesconto}
+                  disabled={isSyncingSelected}
+                  title="Ativa todos os anúncios candidatos nas promoções do ML com desconto do vendedor até o % informado"
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-pink-700 bg-pink-50 border-pink-200 hover:bg-pink-100 disabled:opacity-50"
+                >
+                  🏷️ Ativar Desconto
+                </button>
+
+              <button
+                  onClick={() => handleAcaoMassa('ativar')}
+                  disabled={isSyncingSelected}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-green-700 bg-green-50 border-green-200 hover:bg-green-100 disabled:opacity-50"
+                >
+                  ▶ Ativar
+                </button>
+
+                <button
+                  onClick={() => handleAcaoMassa('pausar')}
+                  disabled={isSyncingSelected}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-yellow-700 bg-yellow-50 border-yellow-200 hover:bg-yellow-100 disabled:opacity-50"
+                >
+                  ⏸ Pausar
+                </button>
+
+                <button
+                  onClick={() => handleAcaoMassa('estoque')}
+                  disabled={isSyncingSelected}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 disabled:opacity-50"
+                >
+                  📦 Alterar Estoque
+                </button>
+
+                <button
+                  onClick={() => handleAcaoMassa('flex')}
+                  disabled={isSyncingSelected}
+                  title="Seu endereço precisa estar habilitado para Envios Flex"
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50"
+                >
+                  ⚡ Ativar Flex
+                </button>
+
+                {/* 👇 NOVO BOTÃO ADICIONADO AQUI 👇 */}
+                <button
+                  onClick={() => handleAcaoMassa('remover_flex')}
+                  disabled={isSyncingSelected}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-red-700 bg-red-50 border-red-200 hover:bg-red-100 disabled:opacity-50"
+                >
+                  ❌ Desativar Flex
+                </button>
+
+                <button
+                  onClick={() => handleAcaoMassa('turbo')}
+                  disabled={isSyncingSelected}
+                  title="O Turbo é ativado automaticamente pelo ML caso sua reputação e embalagem permitam (Requer Flex Habilitado)."
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 disabled:opacity-50"
+                >
+                  🚀 Ativar Turbo
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalPrazoFabricacao(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-violet-700 bg-violet-50 border-violet-200 hover:bg-violet-100"
+                >
+                  🕐 Prazo de Fabricação
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalEditarTitulo(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-sky-700 bg-sky-50 border-sky-200 hover:bg-sky-100"
+                >
+                  ✏️ Editar Título
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalEditarDescricao(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                >
+                  📝 Editar Descrição
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalExcluir(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-red-700 bg-red-50 border-red-200 hover:bg-red-100"
+                >
+                  🗑️ Excluir
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalCompatibilidade(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100 flex items-center gap-1.5"
+                >
+                  🚗 Compatibilidade
+                  <span className="text-[9px] font-bold bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded">Em breve</span>
+                </button>
+
+                <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalPosicao(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-cyan-700 bg-cyan-50 border-cyan-200 hover:bg-cyan-100 flex items-center gap-1.5"
+                >
+                  📍 Posição da Peça
+                </button>
               </div>
             </div>
           </div>
@@ -1759,19 +2635,28 @@ const handleFetchBySku = async () => {
                   className="w-4 h-4 rounded border-gray-400 text-indigo-600 cursor-pointer"
                   checked={displayedAnuncios.length > 0 && displayedAnuncios.every(ad => selectedIds.has(ad.id))}
                   onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedIds(prev => {
-                        const next = new Set(prev);
-                        displayedAnuncios.forEach(ad => next.add(ad.id));
-                        return next;
+                    setSelectedIds(prev => {
+                      const next = new Set(prev);
+                      const isChecked = e.target.checked;
+                      
+                      displayedAnuncios.forEach(ad => {
+                        if (isChecked) {
+                          next.add(ad.id);
+                          // Adiciona as variações, se houverem
+                          if (ad.dadosML?.variations?.length > 0) {
+                            ad.dadosML.variations.forEach(v => next.add(v.id));
+                          }
+                        } else {
+                          next.delete(ad.id);
+                          // Remove as variações, se houverem
+                          if (ad.dadosML?.variations?.length > 0) {
+                            ad.dadosML.variations.forEach(v => next.delete(v.id));
+                          }
+                        }
                       });
-                    } else {
-                      setSelectedIds(prev => {
-                        const next = new Set(prev);
-                        displayedAnuncios.forEach(ad => next.delete(ad.id));
-                        return next;
-                      });
-                    }
+                      
+                      return next;
+                    });
                   }}
                 />
               </th>
@@ -1796,12 +2681,31 @@ const handleFetchBySku = async () => {
             ) : agrupaPorSku && skuGroups ? (
               skuGroups.length === 0 ? (
                 <tr><td colSpan="15" className="px-6 py-10 text-center text-sm text-gray-500">Nenhum anúncio encontrado para agrupar.</td></tr>
-              ) : skuGroups.map((group) => (
-                <tr key={group.sku ?? '__sem_sku__'} className="hover:bg-violet-50/30 transition-colors">
+              ) : skuGroups.map((group) => {
+                const groupIds = group.ads.map(a => a.id);
+                const allSelected = groupIds.length > 0 && groupIds.every(id => selectedIds.has(id));
+                const someSelected = !allSelected && groupIds.some(id => selectedIds.has(id));
+                return (
+                <tr key={group.sku ?? '__sem_sku__'} className={`hover:bg-violet-50/30 transition-colors ${someSelected || allSelected ? 'bg-indigo-50/40' : ''}`}>
                   {/* Expander placeholder */}
                   <td className="px-2 py-3 w-7" />
-                  {/* Checkbox placeholder */}
-                  <td className="px-3 py-3" />
+                  {/* Checkbox grupo */}
+                  <td className="px-3 py-3">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-400 text-indigo-600 cursor-pointer"
+                      checked={allSelected}
+                      ref={el => { if (el) el.indeterminate = someSelected; }}
+                      onChange={(e) => {
+                        setSelectedIds(prev => {
+                          const next = new Set(prev);
+                          if (e.target.checked) groupIds.forEach(id => next.add(id));
+                          else groupIds.forEach(id => next.delete(id));
+                          return next;
+                        });
+                      }}
+                    />
+                  </td>
                   {/* Thumb: imagem do primeiro ad */}
                   <td className="px-3 py-3">
                     <img src={group.ads[0]?.thumbnail} alt="" className="w-10 h-10 object-cover rounded shadow-sm border border-gray-200" />
@@ -1858,7 +2762,7 @@ const handleFetchBySku = async () => {
                   {/* T.Fabr, Tipo An, Tags, Dif.Preço — vazios no modo agrupado */}
                   <td colSpan="4" />
                 </tr>
-              ))
+              ); })
             ) : displayedAnuncios.length > 0 ? (
               displayedAnuncios.map((ad) => {
                 const dadosML = ad.dadosML || {};
@@ -1898,8 +2802,23 @@ const handleFetchBySku = async () => {
                         onChange={(e) => {
                           setSelectedIds(prev => {
                             const next = new Set(prev);
-                            if (e.target.checked) next.add(ad.id);
-                            else next.delete(ad.id);
+                            const isChecked = e.target.checked;
+                            
+                            if (isChecked) {
+                              // Adiciona o pai
+                              next.add(ad.id);
+                              // Adiciona automaticamente todas as variações (filhos)
+                              if (hasVariations) {
+                                variations.forEach(v => next.add(v.id));
+                              }
+                            } else {
+                              // Remove o pai
+                              next.delete(ad.id);
+                              // Remove automaticamente todas as variações (filhos)
+                              if (hasVariations) {
+                                variations.forEach(v => next.delete(v.id));
+                              }
+                            }
                             return next;
                           });
                         }}
@@ -2070,10 +2989,12 @@ const handleFetchBySku = async () => {
             {tagFilter !== 'Todas' && <span className="text-blue-600 ml-2">(filtrado por tag)</span>}
             {activeAdvancedFiltersCount > 0 && <span className="text-purple-600 ml-2">(+{activeAdvancedFiltersCount} filtro(s) adicional(is))</span>}
           </span>
-          <div className="flex gap-2">
-            <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>Anterior</button>
-            <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={anuncios.length < itemsPerPage} onClick={() => setCurrentPage(p => p + 1)}>Próxima</button>
-          </div>
+          {!agrupaPorSku && (
+            <div className="flex gap-2">
+              <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>Anterior</button>
+              <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={anuncios.length < itemsPerPage} onClick={() => setCurrentPage(p => p + 1)}>Próxima</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -2085,6 +3006,7 @@ const handleFetchBySku = async () => {
         anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
         regrasPreco={regrasPreco}
         usuarioId={usuarioId}
+        configAtacado={configAtacado}
         onClose={() => setModalCorrigirPreco(false)}
         onSuccess={() => { fetchAnuncios(); setModalCorrigirPreco(false); }}
       />
@@ -2100,6 +3022,59 @@ const handleFetchBySku = async () => {
         onJobStart={(jobId) => {
           setPriceCheckJobId(jobId); // Inicia o monitoramento
         }}
+      />
+    )}
+
+    {modalPrazoFabricacao && (
+      <ModalPrazoFabricacao
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalPrazoFabricacao(false)}
+        onSuccess={() => { setModalPrazoFabricacao(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalEditarTitulo && (
+      <ModalEditarTitulo
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalEditarTitulo(false)}
+        onSuccess={() => { setModalEditarTitulo(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalEditarDescricao && (
+      <ModalEditarDescricao
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalEditarDescricao(false)}
+        onSuccess={() => { setModalEditarDescricao(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalExcluir && (
+      <ModalExcluir
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalExcluir(false)}
+        onSuccess={() => { fetchAnuncios(); setModalExcluir(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalCompatibilidade && (
+      <ModalCompatibilidade
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        onClose={() => setModalCompatibilidade(false)}
+        usuarioId={usuarioId}
+      />
+    )}
+
+    {modalPosicao && (
+      <ModalPosicao
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalPosicao(false)}
+        onSuccess={() => { setModalPosicao(false); setSelectedIds(new Set()); }}
       />
     )}
 

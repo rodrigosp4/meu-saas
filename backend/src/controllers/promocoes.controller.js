@@ -68,47 +68,6 @@ async function fetchPromoItems(promoId, tipo, token) {
     }
   }
   return allItems;
-}async function fetchPromoItems(promoId, tipo, token) {
-  const headers = { Authorization: `Bearer ${token}` };
-  const allItems = [];
-  let searchAfter = null;
-  let offset = 0;
-
-  for (let page = 0; page < 100; page++) { // max 100 pages = 5000 items
-    try {
-      const params = new URLSearchParams({ promotion_type: tipo, app_version: 'v2', limit: '50' });
-      if (searchAfter) {
-        params.set('search_after', searchAfter);
-      } else if (offset > 0) {
-        params.set('offset', offset.toString());
-      }
-
-      const res = await axios.get(
-        `https://api.mercadolibre.com/seller-promotions/promotions/${promoId}/items?${params}`,
-        { headers, timeout: 15000 }
-      );
-
-      const items = res.data.results || [];
-      if (items.length > 0) allItems.push(...items);
-
-      const paging = res.data.paging || {};
-      searchAfter = paging.searchAfter || paging.search_after || null;
-
-      if (searchAfter) {
-        if (items.length === 0) break;
-      } else {
-        offset += 50;
-        if (offset >= (paging.total || 0) || items.length === 0) break;
-      }
-
-      await delay(200);
-    } catch (err) {
-      if (err.response?.status === 500 || err.response?.status === 404) break; 
-      console.error(`[PromoML] Erro ao buscar itens de ${promoId}:`, err.response?.data?.message || err.message);
-      break;
-    }
-  }
-  return allItems;
 }
 
 
@@ -285,61 +244,6 @@ export const promocoesController = {
               errors.push({ promoId: promo.id, erro: promoErr.message });
             }
           }
-          // ── Backfill: busca candidatos via endpoint por item ──────────────
-          // O endpoint /promotions/{id}/items não retorna candidatos em DEAL/SELLER_CAMPAIGN.
-          // Usamos /seller-promotions/items/{itemId} para descobri-los e inserir no banco.
-          try {
-            const anunciosDB = await prisma.anuncioML.findMany({
-              where: { contaId: conta.id },
-              select: { id: true },
-            });
-
-            for (const anuncio of anunciosDB) {
-              try {
-                const itemRes = await axios.get(
-                  `https://api.mercadolibre.com/seller-promotions/items/${anuncio.id}?app_version=v2`,
-                  { headers, timeout: 10000 }
-                );
-                const memberships = Array.isArray(itemRes.data)
-                  ? itemRes.data
-                  : (itemRes.data?.results || []);
-
-                for (const m of memberships) {
-                  // ✅ CORREÇÃO: A API de itens envia 'id' em vez de 'promotion_id' para os Cupons
-                  const promoId = m.promotion_id || m.id;
-                  if (!promoId) continue;
-
-                  const promoRecord = await prisma.promoML.findUnique({
-                    where: { id_contaId: { id: promoId, contaId: conta.id } },
-                  });
-
-                  if (promoRecord && Array.isArray(promoRecord.itens)) {
-                    const jaExiste = promoRecord.itens.some(i => i.id === anuncio.id);
-                    if (!jaExiste) {
-                      await prisma.promoML.update({
-                        where: { id_contaId: { id: promoId, contaId: conta.id } },
-                        data: {
-                          itens: [...promoRecord.itens, {
-                            id: anuncio.id,
-                            status: m.status || 'candidate',
-                            original_price: m.original_price ?? null,
-                            deal_price: m.deal_price ?? null,
-                            top_deal_price: m.top_deal_price ?? null,
-                            seller_percentage: m.seller_percentage ?? null,
-                            meli_percentage: m.meli_percentage ?? null,
-                            offer_id: m.offer_id ?? null,
-                          }],
-                        },
-                      });
-                      console.log(`[PromoML] Candidato ${anuncio.id} adicionado à promo ${promoId}`);
-                    }
-                  }
-                }
-                await delay(300);
-              } catch (_) { /* item sem promoções — ignorar */ }
-            }
-          } catch (_) { /* backfill falhou — não bloqueia resposta */ }
-
         } catch (contaErr) {
           errors.push({ contaId: conta.id, erro: contaErr.message });
         }

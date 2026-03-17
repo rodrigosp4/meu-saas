@@ -8,6 +8,7 @@ import usuarioRoutes from './routes/usuario.routes.js';
 import filaRoutes from './routes/fila.routes.js';
 import compatRoutes from './routes/compat.routes.js';
 import promocoesRoutes from './routes/promocoes.routes.js';
+import catalogoRoutes from './routes/catalogo.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +27,7 @@ app.use(usuarioRoutes);
 app.use(filaRoutes);
 app.use(compatRoutes);
 app.use(promocoesRoutes);
+app.use(catalogoRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

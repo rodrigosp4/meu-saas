@@ -52,7 +52,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
           localStorage.removeItem('tiny_sync_job_id');
           alert("❌ Erro ao sincronizar. Verifique o terminal do Worker.");
         } else {
-          setSyncProgress(statusData.progress || 5);
+          setSyncProgress(statusData.progress === 0 ? "Fila" : (statusData.progress || 5));
         }
       } catch (e) {
         console.error("Erro ao checar status da fila:", e);
@@ -216,17 +216,27 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         <div>
           <h3 className="text-xl font-medium" style={{ color: '#2c3e50' }}>Produtos do ERP (Catálogo Local)</h3>
           <p className="text-sm mb-4" style={{ color: '#7f8c8d' }}>{totalProdutos} produtos no banco de dados.</p>
-          {syncProgress !== null && (
-            <div className="w-full max-w-md">
-              <div className="flex justify-between mb-1">
-                <span className="text-xs font-medium" style={{ color: '#e67e22' }}>Sincronizando com o Tiny...</span>
-                <span className="text-xs font-medium" style={{ color: '#e67e22' }}>{syncProgress}%</span>
+            {syncProgress !== null && (
+              <div className="w-full max-w-md">
+                <div className="flex justify-between mb-1">
+                  <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
+                    {syncProgress === "Fila" ? "Aguardando na fila..." : "Sincronizando com o Tiny..."}
+                  </span>
+                  <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
+                    {syncProgress === "Fila" ? "..." : `${syncProgress}%`}
+                  </span>
+                </div>
+                <div className="w-full rounded-full h-2" style={{ backgroundColor: '#e0e0e0' }}>
+                  <div className="h-2 rounded-full transition-all duration-500" 
+                      style={{ 
+                        width: syncProgress === "Fila" ? '100%' : `${syncProgress}%`, 
+                        backgroundColor: syncProgress === "Fila" ? '#f39c12' : '#e67e22',
+                        opacity: syncProgress === "Fila" ? 0.5 : 1
+                      }}>
+                  </div>
+                </div>
               </div>
-              <div className="w-full rounded-full h-2" style={{ backgroundColor: '#e0e0e0' }}>
-                <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${syncProgress}%`, backgroundColor: '#e67e22' }}></div>
-              </div>
-            </div>
-          )}
+            )}
         </div>
         <button 
           onClick={() => {

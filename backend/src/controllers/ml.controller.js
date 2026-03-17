@@ -1,7 +1,7 @@
 import { mlService } from '../services/ml.service.js';
 import { config } from '../config/env.js';
 import prisma from '../config/prisma.js';
-import { mlSyncQueue, publishQueue, priceQueue, priceCheckQueue } from '../workers/queue.js';
+import { mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
 import axios from 'axios';
 
 
@@ -82,12 +82,116 @@ export const mlController = {
   },
 
   async getAttributes(req, res) {
-    try { res.json(await mlService.getCategoryAttributes(req.params.categoryId)); } 
+    try { res.json(await mlService.getCategoryAttributes(req.params.categoryId)); }
     catch (error) { res.status(error.response?.status || 500).json({ erro: 'Falha ao buscar atributos' }); }
   },
 
+  async getItemCategory(req, res) {
+    try {
+      const { itemId } = req.params;
+      // Primeiro tenta no banco
+      const ad = await prisma.anuncioML.findUnique({
+        where: { id: itemId },
+        select: { dadosML: true, contaId: true }
+      });
+      const catFromDb = ad?.dadosML?.category_id;
+      if (catFromDb) return res.json({ category_id: catFromDb });
+      // Fallback: busca da API do ML usando o token da conta do anúncio
+      if (!ad?.contaId) return res.json({ category_id: null });
+      const conta = await prisma.contaML.findUnique({ where: { id: ad.contaId } });
+      if (!conta) return res.json({ category_id: null });
+      let token = conta.accessToken;
+      try {
+        const refreshed = await mlService.refreshToken(conta.refreshToken);
+        if (refreshed?.access_token) token = refreshed.access_token;
+      } catch {}
+      const mlRes = await axios.get(
+        `https://api.mercadolibre.com/items/${itemId}?attributes=category_id`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      res.json({ category_id: mlRes.data?.category_id || null });
+    } catch (error) {
+      res.status(error.response?.status || 500).json({ erro: 'Falha ao buscar categoria do item' });
+    }
+  },
+
+  async getItemDescription(req, res) {
+    try {
+      const { itemId } = req.params;
+      const ad = await prisma.anuncioML.findUnique({
+        where: { id: itemId },
+        select: { contaId: true }
+      });
+      if (!ad?.contaId) return res.json({ descricao: '' });
+      const conta = await prisma.contaML.findUnique({ where: { id: ad.contaId } });
+      if (!conta) return res.json({ descricao: '' });
+      let token = conta.accessToken;
+      try {
+        const refreshed = await mlService.refreshToken(conta.refreshToken);
+        if (refreshed?.access_token) token = refreshed.access_token;
+      } catch {}
+      const mlRes = await axios.get(
+        `https://api.mercadolibre.com/items/${itemId}/description`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).catch(() => null);
+      res.json({ descricao: mlRes?.data?.plain_text || '' });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao buscar descrição' });
+    }
+  },
+
+  async getItemPictures(req, res) {
+    try {
+      const { itemId } = req.params;
+      const ad = await prisma.anuncioML.findUnique({
+        where: { id: itemId },
+        select: { contaId: true, dadosML: true }
+      });
+      if (!ad?.contaId) return res.json({ pictures: [] });
+      // Se já tem pictures no dadosML, retorna direto
+      if (ad.dadosML?.pictures?.length) return res.json({ pictures: ad.dadosML.pictures });
+      const conta = await prisma.contaML.findUnique({ where: { id: ad.contaId } });
+      if (!conta) return res.json({ pictures: [] });
+      let token = conta.accessToken;
+      try {
+        const refreshed = await mlService.refreshToken(conta.refreshToken);
+        if (refreshed?.access_token) token = refreshed.access_token;
+      } catch {}
+      const mlRes = await axios.get(
+        `https://api.mercadolibre.com/items/${itemId}?attributes=pictures`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).catch(() => null);
+      res.json({ pictures: mlRes?.data?.pictures || [] });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao buscar imagens' });
+    }
+  },
+
+  async gerarDescricaoIA(req, res) {
+    try {
+      const { titulo, categoria, atributos, instrucao } = req.body;
+      const GEMINI_KEY = process.env.GEMINI_API_KEY;
+      if (!GEMINI_KEY) return res.status(400).json({ erro: 'GEMINI_API_KEY não configurada no .env' });
+      const prompt = `Você é um especialista em e-commerce no Mercado Livre Brasil.
+Gere uma descrição de produto atraente, clara e persuasiva em português.
+Produto: ${titulo}
+Categoria: ${categoria || 'não informada'}
+Atributos: ${atributos || 'não informados'}
+${instrucao ? `Instrução adicional: ${instrucao}` : ''}
+Escreva uma descrição de 3 a 5 parágrafos, sem usar markdown, apenas texto simples.`;
+      const geminiRes = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+        { contents: [{ parts: [{ text: prompt }] }] }
+      );
+      const texto = geminiRes.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      res.json({ descricao: texto });
+    } catch (error) {
+      res.status(error.response?.status || 500).json({ erro: error.response?.data?.error?.message || error.message });
+    }
+  },
+
   async predictCategory(req, res) {
-    try { res.json(await mlService.predictCategory(req.query.title)); } 
+    try { res.json(await mlService.predictCategory(req.query.title)); }
     catch (error) { res.status(500).json({ erro: 'Falha ao prever' }); }
   },
 
@@ -105,15 +209,18 @@ async getShippingCostItems(req, res) {
       const { userId, items } = req.body;
       if (!userId || !Array.isArray(items)) return res.status(400).json({ erro: 'Parâmetros inválidos.' });
 
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true } });
+      const cepOrigem = user?.cepOrigem || '01001000';
+
       const results = {};
       const contasCache = {};
-      
+
       // Quebra a simulação em pacotes de 10 em 10 para não tomar bloqueio (Rate Limit 429) do ML
       const chunkSize = 10;
-      
+
       for (let i = 0; i < items.length; i += chunkSize) {
         const chunk = items.slice(i, i + chunkSize);
-        
+
         await Promise.all(chunk.map(async ({ itemId, contaId }) => {
           try {
             if (!contasCache[contaId]) {
@@ -138,7 +245,8 @@ async getShippingCostItems(req, res) {
             const listingTypeId = dadosML.listing_type_id || 'gold_pro';
             const itemPrice = anuncio.preco || 0;
 
-            // A API ML de frete grátis exige category_id + item_price 
+            // Para itens existentes: usa item_id (frete real do produto)
+            // Para itens novos (sem id no ML): usa dimensions como fallback
             if (categoryId && itemPrice >= 79 && conta.logistica !== 'ME1') {
               results[itemId] = await mlService.simulateShipping({
                 accessToken: conta.accessToken,
@@ -146,7 +254,9 @@ async getShippingCostItems(req, res) {
                 itemPrice,
                 categoryId,
                 listingTypeId,
-                dimensions: '20x15x10,500' // fallback
+                zipCode: cepOrigem,
+                itemId,
+                dimensions: '20x15x10,500'
               });
             } else {
               results[itemId] = 0;
@@ -168,9 +278,10 @@ async getShippingCostItems(req, res) {
     }
   },
 
-  async publish(req, res) {
+async publish(req, res) {
     try {
-      const { userId, contaNome, sku, accessToken, payload, description } = req.body;
+      // ✅ CORREÇÃO: Adicionado enviarAtacado, inflar e ativarPromocoes
+      const { userId, contaNome, sku, accessToken, payload, description, enviarAtacado, inflar, ativarPromocoes } = req.body;
 
       const tarefa = await prisma.tarefaFila.create({
         data: {
@@ -184,12 +295,17 @@ async getShippingCostItems(req, res) {
 
       const job = await publishQueue.add('publish-ml', {
         tarefaId: tarefa.id,
+        userId,
+        contaNome,
         accessToken,
         payload,
-        description
+        description,
+        enviarAtacado,
+        inflar,
+        ativarPromocoes
       });
 
-      await prisma.tarefaFila.update({
+      await prisma.tarefaFila.updateMany({
         where: { id: tarefa.id },
         data: { jobId: job.id }
       });
@@ -359,7 +475,7 @@ async syncAds(req, res) {
   async getAds(req, res) {
     try {
       const {
-        contasIds, search = '', status = 'Todos', tag = 'Todas',
+        contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '', prazo = 'Todos',
         descontoMin = '', descontoMax = '',
         semSku = 'false',
@@ -432,12 +548,15 @@ async syncAds(req, res) {
       }
 
       if (search) {
-        const searchCondition = [
-          { titulo: { contains: search, mode: 'insensitive' } },
-          { sku: { contains: search, mode: 'insensitive' } },
-          { id: { contains: search, mode: 'insensitive' } }
-        ];
-        
+        const searchCondition = searchType === 'titulo' ? [{ titulo: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'mlb'    ? [{ id: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }]
+          : [
+              { titulo: { contains: search, mode: 'insensitive' } },
+              { sku: { contains: search, mode: 'insensitive' } },
+              { id: { contains: search, mode: 'insensitive' } }
+            ];
+
         if (where.OR) {
           where.AND = [
             ...(where.AND || []),
@@ -568,7 +687,7 @@ async syncAds(req, res) {
   async getAdIds(req, res) {
     try {
       const {
-        contasIds, search = '', status = 'Todos', tag = 'Todas',
+        contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
         semSku = 'false',
       } = req.query;
@@ -604,11 +723,14 @@ async syncAds(req, res) {
       }
 
       if (search) {
-        const searchCondition =[
-          { titulo: { contains: search, mode: 'insensitive' } },
-          { sku: { contains: search, mode: 'insensitive' } },
-          { id: { contains: search, mode: 'insensitive' } },
-        ];
+        const searchCondition = searchType === 'titulo' ? [{ titulo: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'mlb'    ? [{ id: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }]
+          : [
+              { titulo: { contains: search, mode: 'insensitive' } },
+              { sku: { contains: search, mode: 'insensitive' } },
+              { id: { contains: search, mode: 'insensitive' } },
+            ];
         if (where.OR) {
           where.AND = [...(where.AND || []), { OR: where.OR }, { OR: searchCondition }];
           delete where.OR;
@@ -697,6 +819,63 @@ async syncAds(req, res) {
   },
 
 // ============================================================================
+// Busca dados de performance/qualidade de um item via API ML /performance
+// ============================================================================
+  async getItemPerformance(req, res) {
+    try {
+      const { itemId } = req.params;
+      const { contaId, userId } = req.query;
+
+      if (!itemId || !contaId || !userId) {
+        return res.status(400).json({ erro: "Parâmetros incompletos." });
+      }
+
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      if (!conta) return res.status(404).json({ erro: "Conta não encontrada ou não pertence a você." });
+
+      const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
+      const activeToken = tokenRefreshRes ? tokenRefreshRes.access_token : conta.accessToken;
+
+      if (tokenRefreshRes) {
+        await prisma.contaML.update({
+          where: { id: conta.id },
+          data: { accessToken: activeToken, refreshToken: tokenRefreshRes.refresh_token }
+        });
+      }
+
+      // Busca dados atualizados do item no ML
+      const response = await axios.get(`https://api.mercadolibre.com/items/${itemId}`, {
+        headers: { Authorization: `Bearer ${activeToken}` }
+      });
+
+      const adData = response.data;
+      const health = adData.health ?? 1; // float 0-1
+      const score = Math.round(health * 100);
+      const level = score >= 80 ? 'good' : score >= 60 ? 'normal' : 'bad';
+
+      // Salva dados frescos no banco
+      const primaryTag = getPrimaryTag(adData);
+      await prisma.anuncioML.updateMany({
+        where: { id: itemId, contaId },
+        data: {
+          titulo: adData.title,
+          preco: adData.price,
+          estoque: adData.available_quantity,
+          vendas: adData.sold_quantity,
+          thumbnail: adData.thumbnail,
+          permalink: adData.permalink,
+          tagPrincipal: primaryTag,
+          dadosML: adData,
+        }
+      });
+
+      res.json({ score, level, health, itemId });
+    } catch (error) {
+      res.status(error.response?.status || 500).json({ erro: error.message, detalhes: error.response?.data });
+    }
+  },
+
+// ============================================================================
 // Sincroniza anúncios selecionados (re-busca cada item na API do ML)
 // ============================================================================
   async syncSelectedAds(req, res) {
@@ -763,6 +942,53 @@ async syncAds(req, res) {
                 sku: extractSellerSku(adData), tagPrincipal: primaryTag, dadosML: adData
               }
             });
+
+            // ✅ INJEÇÃO DIRETA DE PROMOÇÕES (BACKFILL FOCADO)
+            try {
+              const itemPromoRes = await axios.get(
+                `https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`,
+                { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 }
+              );
+              const memberships = Array.isArray(itemPromoRes.data) ? itemPromoRes.data : (itemPromoRes.data?.results || []);
+
+              for (const m of memberships) {
+                const promoId = m.promotion_id || m.id;
+                if (!promoId) continue;
+
+                const promoRecord = await prisma.promoML.findUnique({
+                  where: { id_contaId: { id: promoId, contaId } },
+                });
+
+                if (promoRecord && Array.isArray(promoRecord.itens)) {
+                  const jaExisteIndex = promoRecord.itens.findIndex(i => i.id === itemId);
+                  let novosItens = [...promoRecord.itens];
+                  
+                  const newItemData = {
+                    id: itemId,
+                    status: m.status || 'candidate',
+                    original_price: m.original_price ?? null,
+                    price: m.price ?? m.deal_price ?? null,
+                    offer_id: m.offer_id ?? null,
+                    meli_percentage: m.meli_percentage ?? null,
+                    seller_percentage: m.seller_percentage ?? null
+                  };
+
+                  if (jaExisteIndex >= 0) {
+                     novosItens[jaExisteIndex] = { ...novosItens[jaExisteIndex], ...newItemData };
+                  } else {
+                     novosItens.push(newItemData);
+                  }
+
+                  await prisma.promoML.update({
+                    where: { id_contaId: { id: promoId, contaId } },
+                    data: { itens: novosItens }
+                  });
+                }
+              }
+            } catch (e) {
+              // Ignora em silêncio se o item não tiver campanhas para evitar travar a sincronização
+            }
+
             atualizados++;
           } catch (e) {
             erros.push(`${itemId}: ${e.message}`);
@@ -1310,7 +1536,7 @@ async responderPergunta(req, res) {
   }
 },
 
-  async excluirPergunta(req, res) {
+async excluirPergunta(req, res) {
     try {
       const { questionId } = req.params;
       const { contaId, userId } = req.query;
@@ -1328,23 +1554,28 @@ async responderPergunta(req, res) {
         });
       }
 
-      // ✅ CORREÇÃO: Retry (Backoff) para exclusão de perguntas
+      // ✅ CORREÇÃO: Adiciona lógica de nova tentativa (retry com backoff) para a exclusão
       let result = null;
-      let maxRetries = 3;
+      const maxRetries = 3; // Tenta até 3 vezes
       const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           result = await mlService.deleteQuestion(questionId, activeToken);
-          break; // Sucesso
+          break; // Se tiver sucesso, sai do loop
         } catch (apiErr) {
+          // Se o erro for 429 (Too Many Requests) e ainda não esgotou as tentativas, espera e tenta de novo
           if (apiErr.response?.status === 429 && attempt < maxRetries) {
-             await delay(attempt * 2000);
+             console.warn(`[excluirPergunta] Rate limit (429) na tentativa ${attempt}. Aguardando para tentar novamente...`);
+             await delay(attempt * 2000); // Espera 2s, depois 4s
           } else {
+             // Se for outro erro ou a última tentativa, lança o erro para ser pego pelo catch principal
              throw apiErr;
           }
         }
       }
+      
+      // ✅ FIM DA CORREÇÃO
 
       res.json(result);
     } catch (error) {
@@ -1356,14 +1587,14 @@ async corrigirPreco(req, res) {
     try {
       const { 
         userId, items, modo, regraId, precoManual, 
-        precoBaseManual, inflar, reduzir, removerPromocoes 
+        precoBaseManual, inflar, reduzir, removerPromocoes,
+        enviarAtacado, ativarPromocoes // ✅ CORREÇÃO: Resgatando os parâmetros
       } = req.body;
       
       if (!userId || !items || !Array.isArray(items)) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
-      // Cria a tarefa na interface para o usuário acompanhar
       const tarefa = await prisma.tarefaFila.create({
         data: {
           userId: userId,
@@ -1374,21 +1605,22 @@ async corrigirPreco(req, res) {
         }
       });
 
-      // Adiciona o job na fila passando todas as instruções para o Worker calcular lá
       const job = await priceQueue.add('update-price', {
         tarefaId: tarefa.id,
         userId,
-        items, // Apenas os IDs e dados básicos
+        items, 
         modo,
         regraId,
         precoManual,
         precoBaseManual,
         inflar,
         reduzir,
-        removerPromocoes
+        removerPromocoes,
+        enviarAtacado,    // ✅ CORREÇÃO
+        ativarPromocoes   // ✅ CORREÇÃO
       });
 
-      await prisma.tarefaFila.update({
+      await prisma.tarefaFila.updateMany({
         where: { id: tarefa.id },
         data: { jobId: job.id }
       });
@@ -1399,7 +1631,44 @@ async corrigirPreco(req, res) {
     }
   },
 
+// ============================================================================
+  // ✅ NOVO ENDPOINT: Ações em Massa (Ativar, Pausar, Estoque, Flex, Turbo)
+  // ============================================================================
+  async acoesMassa(req, res) {
+    try {
+      const { userId, items, acao, valor } = req.body;
+      if (!userId || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ erro: "Parâmetros incompletos." });
+      }
 
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId,
+          tipo: `Ação em Massa: ${acao.toUpperCase()}`,
+          alvo: `${items.length} anúncio(s)`,
+          conta: 'Várias Contas',
+          status: 'PENDENTE'
+        }
+      });
+
+      const job = await acoesMassaQueue.add('acoes-massa-job', {
+        tarefaId: tarefa.id,
+        userId,
+        items,
+        acao,
+        valor
+      });
+
+      await prisma.tarefaFila.updateMany({
+        where: { id: tarefa.id },
+        data: { jobId: job.id }
+      });
+
+      res.json({ ok: true, message: 'Ação enviada para a fila com sucesso.', jobId: job.id });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao enfileirar ação em massa', detalhes: error.message });
+    }
+  },
 
   async verificarPreco(req, res) {
     try {
@@ -1430,7 +1699,7 @@ async corrigirPreco(req, res) {
         reduzir
       });
 
-      await prisma.tarefaFila.update({
+      await prisma.tarefaFila.updateMany({
         where: { id: tarefa.id },
         data: { jobId: job.id }
       });
@@ -1612,6 +1881,68 @@ async syncPerguntasIniciais(req, res) {
       res.json({ ok: true, count });
     } catch (err) {
       res.status(500).json({ erro: 'Erro ao resetar margem', detalhes: err.message });
+    }
+  },
+
+  // ─── POST /api/ml/atacado-preco ──────────────────────────────────────────────
+  // Envia preços por quantidade (atacado) para um item no ML
+  async enviarPrecoAtacado(req, res) {
+    try {
+      const { itemId, contaId, userId, precoAlvo, faixas } = req.body;
+      if (!itemId || !contaId || !precoAlvo || !faixas || faixas.length === 0) {
+        return res.status(400).json({ erro: 'itemId, contaId, precoAlvo e faixas são obrigatórios' });
+      }
+
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada' });
+
+      // Renova token se necessário
+      let accessToken = conta.accessToken;
+      try {
+        const tRes = await mlService.refreshToken(conta.refreshToken);
+        if (tRes?.access_token) {
+          accessToken = tRes.access_token;
+          await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: tRes.access_token, refreshToken: tRes.refresh_token } });
+        }
+      } catch {}
+
+      // Busca o ID do preço padrão atual
+      const precosRes = await axios.get(`https://api.mercadolibre.com/items/${itemId}/prices`, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'show-all-prices': 'true' }
+      });
+      const precosPadrao = (precosRes.data.prices || []).filter(p => !p.conditions?.min_purchase_unit);
+      // ✅ CORREÇÃO: Preserva TODOS os IDs de preço base (necessário para itens com variação)
+      const keepNodes = precosPadrao.map(p => ({ id: p.id }));
+
+      // Monta o payload de PxQ (máximo 5 faixas)
+      const faixasLimitadas = faixas.slice(0, 5);
+      const prices = [...keepNodes];
+
+      // Adiciona as faixas de atacado
+      for (const faixa of faixasLimitadas) {
+        const tierPrice = Math.round(precoAlvo * (1 - faixa.desconto / 100) * 100) / 100;
+        if (tierPrice > 0 && faixa.minQtd > 1) {
+          prices.push({
+            amount: tierPrice,
+            currency_id: 'BRL',
+            conditions: {
+              context_restrictions: ['channel_marketplace', 'user_type_business'],
+              min_purchase_unit: Number(faixa.minQtd)
+            }
+          });
+        }
+      }
+
+      const response = await axios.post(
+        `https://api.mercadolibre.com/items/${itemId}/prices/standard/quantity`,
+        { prices },
+        { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+      );
+
+      res.json({ ok: true, resultado: response.data });
+    } catch (err) {
+      console.error('[atacado-preco] Erro:', err.response?.data || err.message);
+      res.status(500).json({ erro: 'Erro ao enviar preço de atacado', detalhes: err.response?.data || err.message });
     }
   },
 

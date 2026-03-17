@@ -13,16 +13,30 @@ model User {
   email                String                  @unique
   senha                String
   tinyToken            String?
+  cepOrigem            String?                 @default("01001000")
   createdAt            DateTime                @default(now())
   passwordResetToken   String?
   passwordResetExpires DateTime?
+    // Integrações de imagem
+  imgurClientId        String?
+  imgurClientSecret    String?
+  removeBgApiKey       String?
+  configAtacado        ConfigAtacado?
   contasMl             ContaML[]
   perfisCompat         PerfilCompatibilidade[]
   produtos             Produto[]
+  regrasOrquestrador   RegraOrquestrador[]
   regras               RegraPreco[]
   tarefas              TarefaFila[]
-  regrasOrquestrador   RegraOrquestrador[]
   verificacaoPreco     VerificacaoPreco?
+}
+
+model ConfigAtacado {
+  id     String  @id @default(uuid())
+  userId String  @unique
+  ativo  Boolean @default(false)
+  faixas Json
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model VerificacaoPreco {
@@ -34,17 +48,17 @@ model VerificacaoPreco {
 }
 
 model ContaML {
-  id           String      @id @default(uuid())
+  id           String       @id @default(uuid())
   userId       String
   nickname     String
   accessToken  String
   refreshToken String
   expiresAt    BigInt
-  logistica    String      @default("ME2")
+  logistica    String       @default("ME2")
   anuncios     AnuncioML[]
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   perguntas    PerguntaML[]
   promocoes    PromoML[]
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AnuncioML {
@@ -125,7 +139,7 @@ model TarefaFila {
 }
 
 model PerguntaML {
-  id            String    @id // Vamos usar String pois IDs do ML são gigantes
+  id            String    @id
   contaId       String
   itemId        String
   compradorId   String?
@@ -134,33 +148,29 @@ model PerguntaML {
   status        String
   dataCriacao   DateTime
   dataResposta  DateTime?
-  dadosML       Json?     // Para guardar a resposta crua do ML por segurança
-
+  dadosML       Json?
   conta         ContaML   @relation(fields: [contaId], references: [id], onDelete: Cascade)
 
   @@index([contaId, status])
   @@index([itemId])
 }
 
-// prisma/schema.prisma
-
 model PromoML {
-  id            String    // ML promotion ID (e.g. P-MLB1234)
+  id            String
   contaId       String
   tipo          String
-  sub_type      String?   // ✅ NOVO: Para VOLUME, SELLER_COUPON_CAMPAIGN, etc.
+  sub_type      String?
   status        String
   nome          String?
   startDate     DateTime?
   finishDate    DateTime?
-  deadline_date DateTime? // ✅ NOVO: Prazo final para aderir
-  itens         Json?     // Array of items from /promotions/:id/items endpoint
-  benefits      Json?     // ✅ NOVO: Para guardar meli_percent, seller_percent, etc.
-  dadosML       Json?     // Full promotion header object
+  deadline_date DateTime?
+  itens         Json?
+  benefits      Json?
+  dadosML       Json?
   fetchedAt     DateTime  @default(now())
   conta         ContaML   @relation(fields: [contaId], references: [id], onDelete: Cascade)
 
-  // ✅ CORRIGIDO: Usa ID composto para evitar erro de chave duplicada entre contas
   @@id([id, contaId])
   @@index([contaId])
   @@index([tipo])
@@ -171,9 +181,9 @@ model RegraOrquestrador {
   id              String   @id @default(uuid())
   userId          String
   nome            String
-  tiposPermitidos String[] // ["MARKETPLACE_CAMPAIGN", "SMART", "PRICE_MATCHING"]
-  maxSellerPct    Float    // Max acceptable seller contribution %
-  tolerancia      Float    @default(0) // Accept up to this much above maxSellerPct
+  tiposPermitidos String[]
+  maxSellerPct    Float
+  tolerancia      Float    @default(0)
   ativo           Boolean  @default(true)
   createdAt       DateTime @default(now())
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)

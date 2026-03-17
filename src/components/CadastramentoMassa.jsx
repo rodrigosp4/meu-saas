@@ -107,7 +107,9 @@ export default function CadastramentoMassa({ usuarioId }) {
   // == PASSO 2: Setup (Contas, Regra, Tipos, Estratégia) ==
   const [contasSelecionadas, setContasSelecionadas] = useState([]); // ✅ Array de IDs das contas selecionadas
   const[tiposAnuncio, setTiposAnuncio] = useState({ classico: false, premium: true }); // ✅ Clássico / Premium
-  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0 }); // ✅ Estratégia de preço
+  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false }); // ✅ Estratégia de preço
+  const [configAtacado, setConfigAtacado] = useState(null);
+  const [posicaoGlobal, setPosicaoGlobal] = useState(''); // ADICIONE ESTA LINHA
   
   const[regraSelecionada, setRegraSelecionada] = useState('');
   const [categoriaSelecionadaObj, setCategoriaSelecionadaObj] = useState(null); 
@@ -196,6 +198,7 @@ export default function CadastramentoMassa({ usuarioId }) {
     fetch(`/api/usuario/${usuarioId}/config`).then(r => r.json()).then(d => {
       setContasML(d.contasML || []);
       setRegrasPreco(d.regrasPreco || []);
+      if (d.configAtacado) setConfigAtacado(d.configAtacado);
     });
   },[usuarioId]);
 
@@ -306,6 +309,8 @@ export default function CadastramentoMassa({ usuarioId }) {
       atributosCategoria.forEach(attr => {
         if (attr.id === 'BRAND') fichaTecnica['BRAND'] = dt.marca || '';
         else if (attr.id === 'GTIN') fichaTecnica['GTIN'] = dt.gtin || dt.ean || '';
+        // ADICIONE A LINHA ABAIXO:
+        else if (attr.id === 'POSITION' && posicaoGlobal) fichaTecnica['POSITION'] = posicaoGlobal;
         else fichaTecnica[attr.id] = '';
       });
 
@@ -612,9 +617,12 @@ export default function CadastramentoMassa({ usuarioId }) {
                 userId: usuarioId,
                 contaNome: `${conta.nickname} (${tipo})`,
                 sku: prod.sku,
-                accessToken: token, 
+                accessToken: token,
                 payload: payload,
-                description: prod.descricao || "Anúncio criado em massa pelo MeuSaaS Hub"
+                description: prod.descricao || "Anúncio criado em massa pelo MeuSaaS Hub",
+                enviarAtacado: strategy.enviarAtacado || false,
+                inflar: strategy.inflar || 0,
+                ativarPromocoes: strategy.ativarPromocoes || false,
               })
             });
 
@@ -802,9 +810,49 @@ export default function CadastramentoMassa({ usuarioId }) {
                     <span className="text-sm font-bold text-purple-900">Premium</span>
                   </label>
                 </div>
+
+                {/* Enviar preços de atacado */}
+                {configAtacado?.ativo && Array.isArray(configAtacado.faixas) && configAtacado.faixas.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-orange-200">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 w-4 h-4 accent-green-600 cursor-pointer flex-shrink-0"
+                        checked={strategy.enviarAtacado || false}
+                        onChange={e => setStrategy(p => ({ ...p, enviarAtacado: e.target.checked }))}
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-green-700">Enviar preços de atacado (B2B)</span>
+                        <p className="text-[10px] text-green-600 mt-0.5">
+                          {configAtacado.faixas.map(f => `${f.minQtd}+ un: -${f.desconto}%`).join(' | ')}
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {/* Ativar promoções automaticamente */}
+                {(strategy.inflar || 0) > 0 && (
+                  <div className="mt-3 pt-3 border-t border-orange-200">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 w-4 h-4 accent-purple-600 cursor-pointer flex-shrink-0"
+                        checked={strategy.ativarPromocoes || false}
+                        onChange={e => setStrategy(p => ({ ...p, ativarPromocoes: e.target.checked }))}
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-purple-700">Ativar promoções dentro da margem ({strategy.inflar}%)</span>
+                        <p className="text-[10px] text-purple-600 mt-0.5">
+                          Ativará campanhas candidatas com desconto do vendedor ≤ {strategy.inflar}% após publicar.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
-            
+
             {/* Coluna Direita: Preço e Estratégia */}
             <div className="space-y-6">
               <div>
@@ -842,6 +890,25 @@ export default function CadastramentoMassa({ usuarioId }) {
                   categoriasSugeridas={[]} contasML={contasML} refreshTokenIfNeeded={refreshTokenIfNeeded} 
                 />
               </div>
+            </div>
+
+            {/* 👇 ADICIONE ESTE BLOCO AQUI 👇 */}
+            <div className="md:col-span-2 mt-2 bg-cyan-50 p-4 rounded-lg border border-cyan-200">
+              <label className="block text-sm font-bold text-cyan-800 mb-1">F. Posição da Peça (Para todos os itens)</label>
+              <p className="text-xs text-cyan-700 mb-3">Útil se você estiver cadastrando um lote inteiro de "Pastilhas Dianteiras", por exemplo. Será injetado na Ficha Técnica (Passo 3).</p>
+              <select value={posicaoGlobal} onChange={e => setPosicaoGlobal(e.target.value)} className="w-full md:w-1/2 p-2.5 border border-cyan-300 rounded-md focus:ring-2 focus:ring-cyan-500 outline-none text-sm font-medium bg-white">
+                <option value="">-- Deixar em branco (Não aplicar) --</option>
+                <option value="Dianteira">Dianteira</option>
+                <option value="Traseira">Traseira</option>
+                <option value="Esquerda">Esquerda</option>
+                <option value="Direita">Direita</option>
+                <option value="Superior">Superior</option>
+                <option value="Inferior">Inferior</option>
+                <option value="Dianteira Esquerda">Dianteira Esquerda</option>
+                <option value="Dianteira Direita">Dianteira Direita</option>
+                <option value="Traseira Esquerda">Traseira Esquerda</option>
+                <option value="Traseira Direita">Traseira Direita</option>
+              </select>
             </div>
           </div>
 

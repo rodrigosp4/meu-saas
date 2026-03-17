@@ -10,7 +10,8 @@ export const mlService = {
       code,
       redirect_uri: config.mlRedirectUri
     });
-    const res = await axios.post('https://api.mercadolibre.com/oauth/token', body);
+    // ✅ Timeout adicionado
+    const res = await axios.post('https://api.mercadolibre.com/oauth/token', body, { timeout: 15000 });
     const authData = res.data;
     try {
       const userRes = await axios.get('https://api.mercadolibre.com/users/me', { headers: { Authorization: `Bearer ${authData.access_token}` }});
@@ -67,14 +68,33 @@ export const mlService = {
     return res.data;
   },
 
-  async simulateShipping({ accessToken, sellerId, itemPrice, categoryId, listingTypeId, dimensions, zipCode }) {
-    const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
-    const res = await axios.get(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      params: { item_price: itemPrice, category_id: categoryId, listing_type_id: listingTypeId, dimensions, zip_code: zipCode || '01001000', condition: 'new', mode: 'me2', logistic_type: 'drop_off' }
-    });
-    return res.data.coverage?.all_country?.list_cost || 0;
-  },
+  async simulateShipping({ accessToken, sellerId, itemPrice, categoryId, listingTypeId, dimensions, zipCode, itemId }) {
+      const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
+      
+      const params = {
+        item_price: itemPrice,
+        category_id: categoryId,
+        listing_type_id: listingTypeId,
+        zip_code: zipCode || '01001000',
+        condition: 'new',
+        mode: 'me2',
+        logistic_type: 'drop_off'
+      };
+
+      // ✅ CORREÇÃO: Prioriza o envio do item_id se existir, 
+      // para que o ML use o peso/dimensões reais do anúncio já cadastrado
+      if (itemId) {
+        params.item_id = itemId;
+      } else {
+        params.dimensions = dimensions;
+      }
+
+      const res = await axios.get(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params
+      });
+      return res.data.coverage?.all_country?.list_cost || 0;
+    },
 
   async publishSmart({ accessToken, payload, description }) {
     try {
@@ -104,7 +124,7 @@ export const mlService = {
 
   // ✅ ALTERAÇÃO: sub_status adicionado ao attrs
   async getSingleAdDetails(itemId, accessToken) {
-    const attrs = 'id,title,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health';
+    const attrs = 'id,title,category_id,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health,pictures';
     
     const [detailsRes, visitsRes, salePriceRes] = await Promise.all([
       axios.get(`https://api.mercadolibre.com/items/${itemId}?include_attributes=all&attributes=${attrs}`, {

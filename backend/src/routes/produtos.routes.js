@@ -286,14 +286,15 @@ router.get('/api/produtos/sync-status/:id', async (req, res) => {
 });
 
 router.post('/api/tiny-produto-detalhes', async (req, res) => {
-  const { id } = req.body;
+  const { id, tinyToken } = req.body;
   if (!id) return res.status(400).json({ erro: 'ID obrigatório.' });
-  if (!config.tinyApiToken) return res.status(500).json({ erro: 'Token Tiny não configurado no .env.' });
+  const token = tinyToken || config.tinyApiToken;
+  if (!token) return res.status(500).json({ erro: 'Token Tiny não configurado.' });
 
   try {
     const [detalhesResponse, estoqueResponse] = await Promise.all([
-      axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token: config.tinyApiToken, formato: 'JSON', id })),
-      axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token: config.tinyApiToken, formato: 'JSON', id }))
+      axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token, formato: 'JSON', id })),
+      axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token, formato: 'JSON', id }))
     ]);
 
     const detRetorno = detalhesResponse.data?.retorno;
@@ -318,8 +319,8 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
         try {
           await delay(350);
           const [detF, estF] = await Promise.all([
-            axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token: config.tinyApiToken, formato: 'JSON', id: idFilho })),
-            axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token: config.tinyApiToken, formato: 'JSON', id: idFilho }))
+            axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token, formato: 'JSON', id: idFilho })),
+            axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token, formato: 'JSON', id: idFilho }))
           ]);
           
           const pFilho = detF.data?.retorno?.produto || {};
@@ -342,6 +343,33 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
     }
 
     return res.json(produto);
+  } catch (error) {
+    return res.status(500).json({ erro: error.message });
+  }
+});
+
+// Retorna URLs das imagens do produto Tiny armazenadas no DB (sem chamar a API Tiny)
+router.get('/api/produto-imagens', async (req, res) => {
+  const { userId, sku } = req.query;
+  if (!userId || !sku) return res.status(400).json({ erro: 'userId e sku obrigatórios.' });
+
+  try {
+    const produto = await prisma.produto.findUnique({
+      where: { userId_sku: { userId, sku } },
+      select: { dadosTiny: true }
+    });
+
+    if (!produto?.dadosTiny) return res.json({ imagens: [] });
+
+    const dados = produto.dadosTiny;
+    let anexos = dados.anexos || [];
+    if (!Array.isArray(anexos)) anexos = Object.values(anexos);
+
+    const imagens = anexos
+      .map(a => (typeof a === 'string' ? a : a?.anexo || a?.url || ''))
+      .filter(Boolean);
+
+    return res.json({ imagens });
   } catch (error) {
     return res.status(500).json({ erro: error.message });
   }

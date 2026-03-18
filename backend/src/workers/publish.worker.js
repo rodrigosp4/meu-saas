@@ -3,6 +3,7 @@ import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
+import { compatService } from '../services/compat.service.js';
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -164,7 +165,7 @@ const connection = {
 console.log('⚙️ Worker de Publicação ML Iniciado...');
 
 export const publishWorker = new Worker('publish-ml', async (job) => {
-  const { tarefaId, accessToken: initialToken, contaNome, payload, description, enviarAtacado, inflar, userId, ativarPromocoes } = job.data;
+  const { tarefaId, accessToken: initialToken, contaNome, payload, description, enviarAtacado, inflar, userId, ativarPromocoes, compatibilidades, posicoes } = job.data;
 
   await prisma.tarefaFila.updateMany({
     where: { id: tarefaId },
@@ -297,7 +298,7 @@ try {
   // ✅ CORREÇÃO CHAVE: Fase 2 - Processar Atacado e Promoções para os IDs criados
   let logAtacadoPromo = "";
   
-  if (idsCriados.length > 0 && (enviarAtacado || ativarPromocoes)) {
+  if (idsCriados.length > 0 && (enviarAtacado || ativarPromocoes || compatibilidades?.length > 0 || posicoes?.length > 0)) {
     // ⚠️ CRUCIAL: Esperar a indexação do ML. Aumentei para 12s para garantir.
     await delay(12000); 
 
@@ -321,6 +322,29 @@ try {
       if (ativarPromocoes) {
          const respP = await ativarPromocoesAuto(id, accessToken, inflar || 0, payload.price || 0);
          l += `\n   🏷️ Promos: ${respP}`;
+      }
+
+      if (compatibilidades?.length > 0) {
+        try {
+          await compatService.applyItemCompatibilities(accessToken, id, compatibilidades);
+          l += `\n   🚗 Compatibilidade: ${compatibilidades.length} veículos aplicados.`;
+        } catch (e) {
+          l += `\n   ⚠️ Compatibilidade falhou: ${e.message || e}`;
+        }
+        await delay(2000);
+      }
+
+      if (posicoes?.length > 0) {
+        try {
+          const POSICAO_TIMEOUT_MS = 4 * 60 * 1000;
+          await Promise.race([
+            compatService.updateAllCompatibilitiesPosition(accessToken, id, posicoes),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout posição')), POSICAO_TIMEOUT_MS))
+          ]);
+          l += `\n   📍 Posição: ${posicoes.join(', ')}.`;
+        } catch (e) {
+          l += `\n   ⚠️ Posição falhou: ${e.message || e}`;
+        }
       }
 
       logAtacadoPromo += l;

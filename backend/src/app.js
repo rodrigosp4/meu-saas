@@ -9,6 +9,7 @@ import filaRoutes from './routes/fila.routes.js';
 import compatRoutes from './routes/compat.routes.js';
 import promocoesRoutes from './routes/promocoes.routes.js';
 import catalogoRoutes from './routes/catalogo.routes.js';
+import clienteApiRoutes from './routes/clienteApi.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +29,7 @@ app.use(filaRoutes);
 app.use(compatRoutes);
 app.use(promocoesRoutes);
 app.use(catalogoRoutes);
+app.use(clienteApiRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

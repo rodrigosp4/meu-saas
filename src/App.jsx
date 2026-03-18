@@ -16,6 +16,7 @@ import CadastramentoMassa from './components/CadastramentoMassa.jsx';
 import Catalogo from './components/Catalogo.jsx';
 import QualidadePublicacoes from './components/QualidadePublicacoes.jsx';
 import OtimizadorImagens from './components/OtimizadorImagens.jsx';
+import ClienteAPI from './components/ClienteAPI.jsx';
 
 function App() {
   const [usuarioLogado, setUsuarioLogado] = useState(() => {
@@ -84,6 +85,7 @@ function App() {
       {activePage === 'catalogo' && <Catalogo usuarioId={usuarioLogado.id} />}
       {activePage === 'qualidadePublicacoes' && <QualidadePublicacoes usuarioId={usuarioLogado.id} />}
       {activePage === 'otimizadorImagens' && <OtimizadorImagens usuarioId={usuarioLogado.id} />}
+      {activePage === 'clienteAPI' && <ClienteAPI usuarioId={usuarioLogado.id} />}
     </DashboardLayout>
   );
 }

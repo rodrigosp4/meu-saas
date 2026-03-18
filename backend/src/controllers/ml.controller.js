@@ -281,7 +281,7 @@ async getShippingCostItems(req, res) {
 async publish(req, res) {
     try {
       // ✅ CORREÇÃO: Adicionado enviarAtacado, inflar e ativarPromocoes
-      const { userId, contaNome, sku, accessToken, payload, description, enviarAtacado, inflar, ativarPromocoes } = req.body;
+      const { userId, contaNome, sku, accessToken, payload, description, enviarAtacado, inflar, ativarPromocoes, compatibilidades, posicoes } = req.body;
 
       const tarefa = await prisma.tarefaFila.create({
         data: {
@@ -302,7 +302,9 @@ async publish(req, res) {
         description,
         enviarAtacado,
         inflar,
-        ativarPromocoes
+        ativarPromocoes,
+        compatibilidades: compatibilidades || [],
+        posicoes: posicoes || [],
       });
 
       await prisma.tarefaFila.updateMany({
@@ -570,9 +572,9 @@ async syncAds(req, res) {
       }
       
       let [anuncios, total] = await Promise.all([
-        prisma.anuncioML.findMany({ 
-          where, skip, take: Number(limit), 
-          orderBy: orderBy,
+        prisma.anuncioML.findMany({
+          where, skip, take: Number(limit),
+          orderBy: [orderBy, { id: 'asc' }],
           include: { conta: { select: { nickname: true } } }
         }),
         prisma.anuncioML.count({ where })
@@ -1636,7 +1638,7 @@ async corrigirPreco(req, res) {
   // ============================================================================
   async acoesMassa(req, res) {
     try {
-      const { userId, items, acao, valor } = req.body;
+      const { userId, items, acao, valor, modoReplace } = req.body;
       if (!userId || !items || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ erro: "Parâmetros incompletos." });
       }
@@ -1656,7 +1658,8 @@ async corrigirPreco(req, res) {
         userId,
         items,
         acao,
-        valor
+        valor,
+        modoReplace
       });
 
       await prisma.tarefaFila.updateMany({

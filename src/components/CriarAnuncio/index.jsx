@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { stripHtml } from '../../utils/formatters';
 
 import FormularioBasico from './FormularioBasico';
@@ -6,6 +6,12 @@ import SeletorCategoria from './SeletorCategoria';
 import TabelaContas from './TabelaContas';
 import FormularioAtributos from './FormularioAtributos';
 import ImageThumbnail from '../ImageThumbnail';
+
+const POSICOES_AUTOPECA = [
+  'Dianteira', 'Traseira', 'Esquerda', 'Direita',
+  'Superior', 'Inferior', 'Interno', 'Externo', 'Central',
+  'Dianteira Esquerda', 'Dianteira Direita', 'Traseira Esquerda', 'Traseira Direita',
+];
 
 // Função para garantir que a Grade do Tiny vire um Objeto tratável
 const parseGrade = (gradeRaw) => {
@@ -39,8 +45,17 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [alturaEmbalagem, setAlturaEmbalagem] = useState(10);
   const [larguraEmbalagem, setLarguraEmbalagem] = useState(10);
   const [comprimentoEmbalagem, setComprimentoEmbalagem] = useState(15);
-  const [posicaoPeca, setPosicaoPeca] = useState(''); // ADICIONE ESTA LINHA
   const [imagemAmpliada, setImagemAmpliada] = useState(null);
+
+  // Gerenciamento de imagens
+  const [imagensOrdenadas, setImagensOrdenadas] = useState([]);
+  const [uploadando, setUploadando] = useState(false);
+
+  // Autopeças (pós-criação)
+  const [perfisCompat, setPerfisCompat] = useState([]);
+  const [perfilCompatId, setPerfilCompatId] = useState('');
+  const [perfilCompatData, setPerfilCompatData] = useState(null);
+  const [posicoesSelecionadas, setPosicoesSelecionadas] = useState(new Set());
 
   // Categorias e Ficha
   const [categoriaSelecionada, setCategoriaSelecionada] = useState(null);
@@ -70,6 +85,12 @@ export default function CriarAnuncio({ produto, usuarioId }) {
         setContasML(contas);
         setRegrasPreco(regras);
         if (data.configAtacado) setConfigAtacado(data.configAtacado);
+
+        // Carrega perfis de compatibilidade (autopeças)
+        try {
+          const compatRes = await fetch(`/api/compat/perfis?userId=${usuarioId}`);
+          if (compatRes.ok) setPerfisCompat(await compatRes.json());
+        } catch (_) {}
 
         const configInicial = {};
         contas.forEach(c => {
@@ -126,6 +147,9 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       }
 
       setDetalhesProduto(data);
+      // Inicializa imagens a partir dos anexos do Tiny
+      const urlsIniciais = (data.anexos || []).map(img => img.anexo || img.url).filter(Boolean);
+      setImagensOrdenadas(urlsIniciais);
       const nome = (data.nome || '').substring(0, 60);
       setTituloAnuncio(nome);
       setPesoEmbalagem(data.peso_bruto || 0.1);
@@ -161,6 +185,43 @@ export default function CriarAnuncio({ produto, usuarioId }) {
 
   const handleAtributoChange = (id, valor) => {
     setValoresAtributos(prev => ({ ...prev, [id]: valor }));
+  };
+
+  // Upload de imagem para o Imgur
+  const uploadParaImgur = useCallback(async (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    setUploadando(true);
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch(`/api/usuario/${usuarioId}/imgur/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no upload');
+      setImagensOrdenadas(prev => prev.length < 12 ? [...prev, data.url] : prev);
+    } catch (e) {
+      alert(`Erro ao enviar para o Imgur: ${e.message}`);
+    } finally {
+      setUploadando(false);
+    }
+  }, [usuarioId]);
+
+  // Carrega dados do perfil de compatibilidade selecionado
+  const handlePerfilCompatChange = async (id) => {
+    setPerfilCompatId(id);
+    setPerfilCompatData(null);
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/compat/perfis/${id}?userId=${usuarioId}`);
+      if (res.ok) setPerfilCompatData(await res.json());
+    } catch (_) {}
   };
 
   // 3. CORRIGIDA A FUNÇÃO DE REFRESH PARA SALVAR O NOVO TOKEN NO BANCO DE DADOS
@@ -394,11 +455,6 @@ const publicarAnuncios = async () => {
     attrFinais.push({ id: 'SELLER_PACKAGE_WIDTH', value_name: `${Math.round(larguraEmbalagem)} cm` });
     attrFinais.push({ id: 'SELLER_PACKAGE_WEIGHT', value_name: `${Math.round(pesoEmbalagem * 1000)} g` });
 
-    // ✅ CORRIGIDO: Usar a variável correta "posicaoGlobal"
-    if (posicaoGlobal && !attrFinais.some(a => a.id === 'POSITION')) {
-      attrFinais.push({ id: 'POSITION', value_name: posicaoGlobal });
-    }
-
     if (produto?.sku && (!detalhesProduto.filhos || detalhesProduto.filhos.length === 0)) {
       attrFinais.push({ id: 'SELLER_SKU', value_name: String(produto.sku) });
     }
@@ -443,6 +499,8 @@ const publicarAnuncios = async () => {
               enviarAtacado: strategy.enviarAtacado || false,
               inflar: strategy.inflar || 0,
               ativarPromocoes: strategy.ativarPromocoes || false,
+              compatibilidades: perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : [],
+              posicoes: Array.from(posicoesSelecionadas),
             })
         });
         return { ok: res.ok, data: await res.json() };
@@ -460,10 +518,11 @@ const publicarAnuncios = async () => {
           let variationsPayload = undefined;
           let allPicturesMap = new Map();
 
-          (detalhesProduto.anexos ||[]).forEach(img => {
-            const url = img.anexo || img.url || img;
-            if (typeof url === 'string') allPicturesMap.set(url, { source: url });
-          });
+          // Usa imagens ordenadas pelo usuário (ou as do Tiny se estiver vazio)
+          const urlsPai = imagensOrdenadas.length > 0
+            ? imagensOrdenadas
+            : (detalhesProduto.anexos || []).map(img => img.anexo || img.url || img).filter(u => typeof u === 'string');
+          urlsPai.filter(u => u.trim()).forEach(url => allPicturesMap.set(url, { source: url }));
 
           const temVariacoes = detalhesProduto.filhos && detalhesProduto.filhos.length > 0;
 
@@ -607,7 +666,18 @@ const publicarAnuncios = async () => {
 
       <div className="bg-white p-6 rounded-b-lg shadow-sm border border-t-0 border-gray-200 mb-6">
         {activeTab === 'pai' && (
-          <FormularioBasico tituloAnuncio={tituloAnuncio} setTituloAnuncio={setTituloAnuncio} descricaoAnuncio={descricaoAnuncio} setDescricaoAnuncio={setDescricaoAnuncio} prazoFabricacao={prazoFabricacao} setPrazoFabricacao={setPrazoFabricacao} pesoEmbalagem={pesoEmbalagem} setPesoEmbalagem={setPesoEmbalagem} alturaEmbalagem={alturaEmbalagem} setAlturaEmbalagem={setAlturaEmbalagem} larguraEmbalagem={larguraEmbalagem} setLarguraEmbalagem={setLarguraEmbalagem} comprimentoEmbalagem={comprimentoEmbalagem} setComprimentoEmbalagem={setComprimentoEmbalagem} detalhesProduto={detalhesProduto} setImagemAmpliada={setImagemAmpliada} posicaoPeca={posicaoPeca} setPosicaoPeca={setPosicaoPeca} />
+          <FormularioBasico
+            tituloAnuncio={tituloAnuncio} setTituloAnuncio={setTituloAnuncio}
+            descricaoAnuncio={descricaoAnuncio} setDescricaoAnuncio={setDescricaoAnuncio}
+            prazoFabricacao={prazoFabricacao} setPrazoFabricacao={setPrazoFabricacao}
+            pesoEmbalagem={pesoEmbalagem} setPesoEmbalagem={setPesoEmbalagem}
+            alturaEmbalagem={alturaEmbalagem} setAlturaEmbalagem={setAlturaEmbalagem}
+            larguraEmbalagem={larguraEmbalagem} setLarguraEmbalagem={setLarguraEmbalagem}
+            comprimentoEmbalagem={comprimentoEmbalagem} setComprimentoEmbalagem={setComprimentoEmbalagem}
+            detalhesProduto={detalhesProduto} setImagemAmpliada={setImagemAmpliada}
+            imagensOrdenadas={imagensOrdenadas} onImagensChange={setImagensOrdenadas}
+            uploadando={uploadando} onUploadImagem={uploadParaImgur}
+          />
         )}
 
         {typeof activeTab === 'number' && filhos[activeTab] && (() => {
@@ -687,8 +757,87 @@ const publicarAnuncios = async () => {
         handleAtributoChange={handleAtributoChange}
         tituloAnuncio={tituloAnuncio}
         descricaoAnuncio={descricaoAnuncio}
-        fotosUrls={(detalhesProduto?.anexos || []).map(img => img.anexo || img.url || img).filter(u => typeof u === 'string')}
+        fotosUrls={imagensOrdenadas.filter(u => u.trim())}
       />
+
+      {/* ===== SEÇÃO AUTOPEÇAS (visível apenas se categoria tem POSITION) ===== */}
+      {atributosCategoria.some(a => a.id === 'POSITION') && (
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
+          <h3 className="font-black text-gray-800 mb-1 flex items-center gap-2 text-base">
+            🚗 Autopeças
+            <span className="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+              Opcionais — enviados via fila após criação do anúncio
+            </span>
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+
+            {/* Compatibilidade */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
+                🔗 Compatibilidade de Veículos
+              </label>
+              {perfisCompat.length === 0 ? (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  Nenhum perfil salvo. Crie perfis na aba <strong>Compatibilidade</strong>.
+                </p>
+              ) : (
+                <select
+                  value={perfilCompatId}
+                  onChange={e => handlePerfilCompatChange(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                >
+                  <option value="">-- Não aplicar --</option>
+                  {perfisCompat.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              )}
+              {perfilCompatData && (
+                <p className="mt-2 text-xs text-green-700 font-semibold bg-green-50 border border-green-200 rounded px-2 py-1">
+                  ✅ {(perfilCompatData.compatibilities || []).length} veículos — será enviado após a criação.
+                </p>
+              )}
+            </div>
+
+            {/* Posição */}
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
+                📍 Posição da Peça
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {POSICOES_AUTOPECA.map(pos => (
+                  <label
+                    key={pos}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded border cursor-pointer text-xs font-semibold select-none transition-colors ${
+                      posicoesSelecionadas.has(pos)
+                        ? 'border-cyan-500 bg-cyan-50 text-cyan-800'
+                        : 'border-gray-200 text-gray-600 hover:border-cyan-300 hover:bg-cyan-50/50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="hidden"
+                      checked={posicoesSelecionadas.has(pos)}
+                      onChange={() => setPosicoesSelecionadas(prev => {
+                        const next = new Set(prev);
+                        next.has(pos) ? next.delete(pos) : next.add(pos);
+                        return next;
+                      })}
+                    />
+                    {pos}
+                  </label>
+                ))}
+              </div>
+              {posicoesSelecionadas.size > 0 && (
+                <p className="mt-2 text-xs text-cyan-700 font-semibold bg-cyan-50 border border-cyan-200 rounded px-2 py-1">
+                  ✅ {posicoesSelecionadas.size} posição(ões) selecionada(s) — enviadas após criação.
+                </p>
+              )}
+            </div>
+
+          </div>
+        </div>
+      )}
+
       <TabelaContas contasML={contasML} regrasPreco={regrasPreco} configPublicacao={configPublicacao} setConfigPublicacao={setConfigPublicacao} precosCalculados={precosCalculados} isCalculatingPrices={isCalculatingPrices} strategy={strategy} setStrategy={setStrategy} configAtacado={configAtacado} />
 
       <div className="flex justify-end gap-4 mt-6">

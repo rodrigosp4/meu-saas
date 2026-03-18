@@ -378,4 +378,37 @@ router.post('/api/usuario/:id/integracoes/removebg', async (req, res) => {
 });
 
 
+// ================================================================
+// 17. UPLOAD DE IMAGEM NO IMGUR
+// ================================================================
+router.post('/api/usuario/:id/imgur/upload', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { imgurClientId: true } });
+    if (!user?.imgurClientId) {
+      return res.status(400).json({ erro: 'Client ID do Imgur não configurado. Acesse Configurações > Imgur.' });
+    }
+
+    const { image } = req.body; // base64 string (sem prefixo data:...)
+    if (!image) return res.status(400).json({ erro: 'Nenhuma imagem enviada.' });
+
+    const response = await fetch('https://api.imgur.com/3/image', {
+      method: 'POST',
+      headers: {
+        Authorization: `Client-ID ${user.imgurClientId}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ image, type: 'base64' }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      return res.status(502).json({ erro: data?.data?.error || 'Falha ao fazer upload no Imgur.' });
+    }
+
+    res.json({ url: data.data.link });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
 export default router;

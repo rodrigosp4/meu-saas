@@ -22,7 +22,7 @@ function healthColor(pct) {
 
 // ===== MODAL FICHA TÉCNICA =====
 function ModalFichaTecnica({ skuData, usuarioId, onClose }) {
-  const [aba, setAba] = useState('atributos'); // 'atributos' | 'descricao'
+  const [aba, setAba] = useState('atributos'); // 'atributos' | 'descricao' | 'titulo'
   const [attrs, setAttrs] = useState([]);
   const [valores, setValores] = useState({});
   const [marcados, setMarcados] = useState({});
@@ -33,6 +33,9 @@ function ModalFichaTecnica({ skuData, usuarioId, onClose }) {
   const [descricao, setDescricao] = useState('');
   const [loadingDesc, setLoadingDesc] = useState(false);
   const [enviarDesc, setEnviarDesc] = useState(false);
+  // Título
+  const [titulo, setTitulo] = useState(skuData?.ads?.[0]?.titulo || '');
+  const [alterarTitulo, setAlterarTitulo] = useState(false);
   // IA prompt/paste
   const [modalColagem, setModalColagem] = useState(false);
   const [textoColagem, setTextoColagem] = useState('');
@@ -104,7 +107,7 @@ function ModalFichaTecnica({ skuData, usuarioId, onClose }) {
   }, [aba]);
 
   const gerarPrompt = async () => {
-    const titulo = skuData?.ads?.[0]?.titulo || 'Produto sem título';
+    const tituloAtual = titulo || skuData?.ads?.[0]?.titulo || 'Produto sem título';
     const permalink = skuData?.ads?.[0]?.dadosML?.permalink || '';
 
     // Imagens: tenta pegar do dadosML (se foi sincronizado com pictures)
@@ -185,7 +188,7 @@ function ModalFichaTecnica({ skuData, usuarioId, onClose }) {
     const prompt = `Atue como um especialista de cadastro de produtos e SEO para o Mercado Livre.
 Analise os dados abaixo:
 
-TÍTULO DO PRODUTO: ${titulo}
+TÍTULO ATUAL: ${tituloAtual}
 LINK DO ANÚNCIO (ML): ${permalink || '(não disponível)'}
 
 LINKS DAS IMAGENS (Acesse as imagens para tentar identificar a cor, o material, conectores e outros dados visuais):
@@ -200,14 +203,20 @@ ${fichaAtual}
 ATRIBUTOS QUE PRECISAM SER PREENCHIDOS:
 ${faltandoTexto}
 
-Sua tarefa é dividida em DUAS partes:
+Sua tarefa é dividida em TRÊS partes:
 
-PARTE 1 - NOVA DESCRIÇÃO PARA SEO:
+PARTE 1 - SUGESTÃO DE TÍTULO (opcional):
+Se o título atual puder ser melhorado para SEO no Mercado Livre, sugira um novo.
+Regras: máximo 60 caracteres, sem símbolos especiais, inclua palavras-chave relevantes.
+Se o título atual já for bom, omita esta parte completamente.
+Formato: coloque "TÍTULO: [novo título]" como PRIMEIRA linha da resposta.
+
+PARTE 2 - NOVA DESCRIÇÃO PARA SEO:
 Crie uma descrição melhorada e persuasiva para o Mercado Livre.
 Formato obrigatório: TEXTO SIMPLES. Sem HTML. Use apenas parágrafos pulando uma linha, hifens (-) para listas e letras MAIÚSCULAS para destacar os subtítulos (ex: DESTAQUES, ESPECIFICAÇÕES).
 A nova descrição NÃO deve estar dentro do bloco JSON.
 
-PARTE 2 - COMPLETAR ATRIBUTOS (JSON):
+PARTE 3 - COMPLETAR ATRIBUTOS (JSON):
 Preencha os atributos que estão faltando, usando a descrição, as imagens e o seu conhecimento sobre o produto.
 REGRAS IMPORTANTES:
 - Preencha APENAS campos que você souber o valor correto com certeza.
@@ -216,7 +225,9 @@ REGRAS IMPORTANTES:
 - Campos vazios ("") serão automaticamente ignorados no envio.
 - CAMPOS DE DIMENSÃO/MEDIDA (largura, diâmetro, altura, comprimento, espessura, etc.): o valor DEVE incluir a unidade junto. Exemplos aceitos: "15 polegadas", "10.5 polegadas", "200 mm", "35 cm". Unidades válidas: cm, mm, m, km, polegadas, in, yd, milhas, ft, µm, mil, mãos, U. NUNCA envie apenas o número sem unidade (ex: "15" sozinho será rejeitado pelo sistema).
 
-Responda EXATAMENTE neste formato:
+Responda EXATAMENTE neste formato (TÍTULO é opcional — omita se o atual já for bom):
+
+TÍTULO: [novo título sugerido, ou omita esta linha]
 
 [SUA NOVA DESCRIÇÃO AQUI]
 
@@ -244,8 +255,16 @@ ${jsonTemplate}
   };
 
   const aplicarRespostaIA = (texto) => {
+    // Extrai sugestão de título (primeira linha "TÍTULO: ...")
+    let textoSemTitulo = texto;
+    const tituloIAMatch = texto.match(/^TÍTULO:\s*(.+)/m);
+    if (tituloIAMatch && tituloIAMatch[1].trim()) {
+      setTitulo(tituloIAMatch[1].trim().substring(0, 60));
+      textoSemTitulo = texto.replace(/^TÍTULO:.*\r?\n?/m, '').trim();
+    }
+
     // Extrai bloco ```json ... ```
-    const jsonBlockMatch = texto.match(/```json\s*([\s\S]*?)```/);
+    const jsonBlockMatch = textoSemTitulo.match(/```json\s*([\s\S]*?)```/);
     let aplicou = false;
 
     if (jsonBlockMatch) {
@@ -267,11 +286,11 @@ ${jsonTemplate}
       } catch { alert('Erro ao analisar JSON. Verifique se a IA seguiu o formato solicitado.'); return; }
 
       // Descrição = tudo antes do bloco ```json
-      const descTexto = texto.substring(0, texto.indexOf('```json')).trim();
+      const descTexto = textoSemTitulo.substring(0, textoSemTitulo.indexOf('```json')).trim();
       if (descTexto) setDescricao(descTexto);
     } else {
       // Fallback: JSON genérico sem code block
-      const genericJson = texto.match(/\{[\s\S]*\}/);
+      const genericJson = textoSemTitulo.match(/\{[\s\S]*\}/);
       if (genericJson) {
         try {
           const jsonLimpo = genericJson[0].replace(/\/\/[^\n]*/g, '').trim();
@@ -286,59 +305,182 @@ ${jsonTemplate}
           }
           setValores(novosValores);
           setMarcados(novosMarcados);
-          const textoBefore = texto.substring(0, genericJson.index).trim();
+          const textoBefore = textoSemTitulo.substring(0, genericJson.index).trim();
           if (textoBefore) setDescricao(textoBefore);
           aplicou = true;
         } catch {}
       }
     }
 
-    if (!aplicou) { alert('Nenhum dado reconhecido. Cole a resposta completa da IA no formato solicitado.'); return; }
+    if (!aplicou) {
+      // Fallback: trata o texto inteiro como descrição pura (sem JSON de atributos)
+      if (textoSemTitulo.trim()) {
+        setDescricao(textoSemTitulo.trim());
+        setModalColagem(false);
+        setTextoColagem('');
+        setAba('descricao');
+        alert('✅ Texto aplicado como descrição! Vá à aba "Descrição" para revisar e enviar.');
+        return;
+      }
+      alert('Nenhum dado reconhecido. Cole a resposta completa da IA no formato solicitado.');
+      return;
+    }
     setModalColagem(false);
     setTextoColagem('');
     alert('✅ Dados aplicados! Revise os valores antes de enviar.');
   };
 
+
   const handleEnviar = async () => {
     setEnviando(true);
-    const items = (skuData.ads || []).map(ad => ({ id: ad.id, contaId: ad.contaId }));
+    let tituloEnviado = null;
+
+    // Coleta todos os anúncios do grupo, incluindo vendas para a regra do título
+    const allItems = (skuData?.ads || []).map((ad) => ({
+      id: ad.id,
+      contaId: ad.contaId,
+      vendas: Number(ad.vendas || 0),
+    }));
+
     try {
+      if (!usuarioId) {
+        throw new Error('Usuário não identificado.');
+      }
+
+      if (!allItems.length) {
+        throw new Error('Nenhum anúncio encontrado para envio.');
+      }
+
       if (aba === 'atributos') {
         const atributosParaEnviar = attrs
-          .filter(a => marcados[a.id] && (valores[a.id] || '').trim())
-          .map(a => {
-            const payload = { id: a.id, value_name: valores[a.id].trim() };
+          .filter((a) => marcados[a.id] && String(valores[a.id] || '').trim())
+          .map((a) => {
+            const valorLimpo = String(valores[a.id] || '').trim();
+
+            const payload = {
+              id: a.id,
+              value_name: valorLimpo,
+            };
+
             if (Array.isArray(a.values)) {
-              const match = a.values.find(v => v.name?.toLowerCase() === valores[a.id].trim().toLowerCase());
-              if (match?.id) payload.value_id = match.id;
+              const match = a.values.find(
+                (v) => String(v.name || '').trim().toLowerCase() === valorLimpo.toLowerCase()
+              );
+
+              if (match?.id) {
+                payload.value_id = match.id;
+              }
             }
+
             return payload;
           });
-        if (atributosParaEnviar.length === 0) { alert('Nenhum atributo marcado para envio ou com valor preenchido.'); setEnviando(false); return; }
+
+        if (!atributosParaEnviar.length) {
+          alert('Nenhum atributo marcado para envio ou com valor preenchido.');
+          return;
+        }
+
         const res = await fetch('/api/ml/acoes-massa', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: usuarioId, items, acao: 'atualizar_atributos', valor: atributosParaEnviar }),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: usuarioId,
+            items: allItems,
+            acao: 'atualizar_atributos',
+            valor: atributosParaEnviar,
+          }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
-        alert(`✅ ${atributosParaEnviar.length} atributo(s) enviado(s) para ${items.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`);
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
+        }
+
+        alert(
+          `✅ ${atributosParaEnviar.length} atributo(s) enfileirado(s) para ${allItems.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`
+        );
+      } else if (aba === 'titulo') {
+        const novoTitulo = String(titulo || '').trim();
+
+        if (!novoTitulo) {
+          alert('O título está vazio.');
+          return;
+        }
+
+        if (!alterarTitulo) {
+          alert('Marque o checkbox para confirmar a alteração do título.');
+          return;
+        }
+
+        // Prepara todos os itens para envio, incluindo os que têm vendas
+        const itensParaEnviar = allItems.map(({ id, contaId }) => ({ id, contaId }));
+        const itensComVendasCount = allItems.filter((ad) => Number(ad.vendas) > 0).length;
+
+        const res = await fetch('/api/ml/acoes-massa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: usuarioId,
+            items: itensParaEnviar,
+            acao: 'editar_titulo',
+            valor: novoTitulo,
+          }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
+        }
+
+        tituloEnviado = novoTitulo;
+
+        let successMsg = `✅ Título enfileirado para ${itensParaEnviar.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`;
+
+        if (itensComVendasCount > 0) {
+          successMsg += `\n\n⚠️ ${itensComVendasCount} anúncio(s) possuem vendas. O sistema utilizará o método "Family Name" para alterar o título diretamente.`;
+        }
+
+        alert(successMsg);
       } else {
-        if (!descricao.trim()) { alert('A descrição está vazia.'); setEnviando(false); return; }
+        const descricaoLimpa = String(descricao || '').trim();
+
+        if (!descricaoLimpa) {
+          alert('A descrição está vazia.');
+          return;
+        }
+
         const res = await fetch('/api/ml/acoes-massa', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: usuarioId, items, acao: 'editar_descricao', valor: descricao.trim() }),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: usuarioId,
+            items: allItems,
+            acao: 'editar_descricao',
+            valor: descricaoLimpa,
+          }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
-        alert(`✅ Descrição enviada para ${items.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`);
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
+        }
+
+        alert(
+          `✅ Descrição enviada para ${allItems.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`
+        );
       }
-      onClose(true);
+
+      onClose(true, tituloEnviado);
     } catch (e) {
       alert(`Erro: ${e.message}`);
     } finally {
       setEnviando(false);
     }
   };
+
 
   const atributosFaltando = attrs.filter(a => !valores[a.id]);
   const atributosPreenchidos = attrs.filter(a => valores[a.id]);
@@ -368,6 +510,12 @@ ${jsonTemplate}
             className={`px-5 py-2.5 text-xs font-bold transition border-b-2 ${aba === 'descricao' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             📝 Descrição
+          </button>
+          <button
+            onClick={() => setAba('titulo')}
+            className={`px-5 py-2.5 text-xs font-bold transition border-b-2 ${aba === 'titulo' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            ✏️ Título
           </button>
         </div>
 
@@ -420,7 +568,43 @@ ${jsonTemplate}
           </div>
         )}
 
-        {aba === 'descricao' ? (
+        {aba === 'titulo' ? (
+          <div className="flex flex-col flex-1 min-h-0 p-4 gap-4 overflow-y-auto">
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Título atual</p>
+              {skuData.ads.map(ad => (
+                <p key={ad.id} className="text-xs text-gray-600 truncate leading-relaxed">
+                  <span className="font-mono text-blue-500 mr-1">{ad.id}</span>{ad.titulo}
+                </p>
+              ))}
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Novo título</label>
+              <input
+                type="text"
+                value={titulo}
+                onChange={e => setTitulo(e.target.value.substring(0, 60))}
+                placeholder="Digite o novo título (máx. 60 caracteres)..."
+                className="w-full text-xs px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-400"
+              />
+              <p className={`text-[10px] mt-1 ${titulo.length >= 55 ? 'text-orange-500 font-semibold' : 'text-gray-400'}`}>{titulo.length}/60 caracteres</p>
+            </div>
+            {skuData.vendas > 0 && (
+              <div className="px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-xs text-yellow-700 font-semibold">⚠️ Este SKU possui {skuData.vendas} venda(s). O sistema utilizará o método "Family Name" para alterar o título diretamente.</p>
+              </div>
+            )}
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={alterarTitulo}
+                onChange={e => setAlterarTitulo(e.target.checked)}
+                className="mt-0.5 cursor-pointer"
+              />
+              <span className="text-xs text-gray-700">Confirmo que desejo alterar o título de <strong>todos os {skuData.ads.length} anúncio(s)</strong> deste SKU</span>
+            </label>
+          </div>
+        ) : aba === 'descricao' ? (
           <div className="flex flex-col flex-1 min-h-0 p-4 gap-3">
             {/* Textarea descrição */}
             {loadingDesc ? (
@@ -530,6 +714,8 @@ ${jsonTemplate}
           <span className="text-xs text-gray-400">
             {aba === 'atributos'
               ? `${Object.values(marcados).filter(Boolean).length} atributo(s) marcado(s) para envio`
+              : aba === 'titulo'
+              ? `${titulo.length}/60 caracteres${alterarTitulo ? ' · pronto para enviar' : ' · marque o checkbox para confirmar'}`
               : `${descricao.length} caracteres`}
           </span>
           <div className="flex gap-2">
@@ -1149,11 +1335,24 @@ export default function QualidadePublicacoes({ usuarioId }) {
         <ModalFichaTecnica
           skuData={modalSku}
           usuarioId={usuarioId}
-          onClose={(enviou) => {
+          onClose={(enviou, novoTitulo) => {
             setModalSku(null);
             if (enviou) {
               const novo = { ...feitos, [modalSku._key]: true };
               salvarFeitos(novo);
+              if (novoTitulo) {
+                setSkuMap(prev => {
+                  const grupo = prev[modalSku._key];
+                  if (!grupo) return prev;
+                  return {
+                    ...prev,
+                    [modalSku._key]: {
+                      ...grupo,
+                      ads: grupo.ads.map(ad => ({ ...ad, titulo: novoTitulo })),
+                    },
+                  };
+                });
+              }
             }
           }}
         />

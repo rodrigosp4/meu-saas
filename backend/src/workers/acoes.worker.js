@@ -6,7 +6,7 @@ import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
 import { compatService } from '../services/compat.service.js';
 
-// ✅ CORREÇÃO 1: Instância segura do Axios com timeout para impedir o congelamento da Fila
+// Instância segura do Axios com timeout para impedir o congelamento da Fila
 const safeAxios = axios.create({ timeout: 25000 });
 
 const connection = {
@@ -21,7 +21,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 console.log('⚙️ Worker de Ações em Massa ML Iniciado (Protegido contra travamentos)...');
 
 export const acoesWorker = new Worker('acoes-massa', async (job) => {
-  const { tarefaId, userId, items, acao, valor } = job.data;
+  const { tarefaId, userId, items, acao, valor, modoReplace } = job.data;
 
   await prisma.tarefaFila.updateMany({
     where: { id: tarefaId },
@@ -90,7 +90,6 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
       for (const item of itensDaConta) {
         let logAcao = `[${item.id}] `;
         try {
-          // ✅ CORREÇÃO 2: Uso do safeAxios em todas as chamadas para garantir o Timeout
           if (acao === 'ativar' || acao === 'pausar') {
             const status = acao === 'ativar' ? 'active' : 'paused';
             await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { status }, { headers });
@@ -128,19 +127,101 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
             logAcao += `Prazo de fabricação ${dias > 0 ? `definido para ${dias} dias` : 'removido'}.`;
 
           } else if (acao === 'editar_titulo') {
-            await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { title: valor }, { headers });
-            await prisma.anuncioML.update({ where: { id: item.id }, data: { titulo: valor } }).catch(() => {});
-            logAcao += `Título alterado para: "${valor}"`;
+            const novoTitulo = String(valor || '').trim();
+            if (!novoTitulo || novoTitulo.length < 5 || novoTitulo.length > 60) {
+              throw new Error('Título inválido ou fora do limite de 5-60 caracteres.');
+            }
+
+            let metodoUsado = '';
+            let msgErro = '';
+
+            // 1. TENTA O MÉTODO AVANÇADO (Family Name) - funciona mesmo com vendas
+            try {
+              await safeAxios.put(
+                `https://api.mercadolibre.com/items/${item.id}/family_name`,
+                { family_name: novoTitulo },
+                { headers }
+              );
+              metodoUsado = 'FamilyName';
+            } catch (e) {
+              msgErro = e.response?.data?.message || e.message;
+              console.warn(`[Ações Massa] Falha no family_name para ${item.id}:`, msgErro);
+
+              // 2. FALLBACK: método tradicional (só para itens sem vendas)
+              try {
+                await safeAxios.put(
+                  `https://api.mercadolibre.com/items/${item.id}`,
+                  { title: novoTitulo },
+                  { headers }
+                );
+                metodoUsado = 'TitlePadrão';
+              } catch (e2) {
+                msgErro = e2.response?.data?.message || e2.message;
+                throw new Error(`O Mercado Livre rejeitou a alteração: ${msgErro}`);
+              }
+            }
+
+            // Atualiza no banco local
+            await prisma.anuncioML
+              .update({ where: { id: item.id }, data: { titulo: novoTitulo } })
+              .catch(() => {});
+
+            logAcao += `Título alterado para: "${novoTitulo}" (Via ${metodoUsado}).`;
 
           } else if (acao === 'editar_descricao') {
-            try {
-              await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}/description?api_version=2`, { plain_text: valor }, { headers });
-            } catch (e) {
-              if (e.response?.status === 404 || e.response?.data?.error === 'not_found') {
-                await safeAxios.post(`https://api.mercadolibre.com/items/${item.id}/description`, { plain_text: valor }, { headers });
-              } else throw e;
+              try {
+                await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}/description?api_version=2`, { plain_text: valor }, { headers });
+              } catch (e) {
+                if (e.response?.status === 404 || e.response?.data?.error === 'not_found') {
+                  await safeAxios.post(`https://api.mercadolibre.com/items/${item.id}/description`, { plain_text: valor }, { headers });
+                } else throw e;
+              }
+              logAcao += `Descrição atualizada.`;
+
+          } else if (acao === 'alterar_sku') {
+            const novoSku = String(valor || '').trim();
+            if (!novoSku) throw new Error('SKU não pode ser vazio.');
+            
+            let payload;
+
+            // Diferencia o payload para anúncios com e sem variações
+            if (item.hasVariations && item.variationsIds?.length > 0) {
+              // CASO 2: ANÚNCIO COM VARIAÇÕES
+              // O SKU deve ser aplicado a cada variação individualmente.
+              // É boa prática limpar o SKU do anúncio "pai".
+              payload = {
+                attributes: [
+                  { id: "SELLER_SKU", value_name: null }
+                ],
+                variations: item.variationsIds.map(variationId => ({
+                  id: variationId,
+                  attributes: [
+                    { id: "SELLER_SKU", value_name: novoSku }
+                  ]
+                }))
+              };
+              logAcao += `SKU alterado para "${novoSku}" em ${item.variationsIds.length} variação(ões).`;
+
+            } else {
+              // CASO 1: ANÚNCIO SIMPLES (SEM VARIAÇÕES)
+              // Envia apenas o atributo SELLER_SKU. A API do ML faz o merge.
+              payload = {
+                attributes: [
+                  { id: "SELLER_SKU", value_name: novoSku }
+                ]
+              };
+              logAcao += `SKU alterado para "${novoSku}".`;
             }
-            logAcao += `Descrição atualizada.`;
+
+            // Envia o payload correto para a API do ML
+            await safeAxios.put(
+              `https://api.mercadolibre.com/items/${item.id}`,
+              payload,
+              { headers }
+            );
+
+            // Atualiza o banco de dados local (apenas o SKU do anúncio pai para referência)
+            await prisma.anuncioML.update({ where: { id: item.id }, data: { sku: novoSku } }).catch(() => {});
 
           } else if (acao === 'posicao') {
             const posArrayBruto = Array.isArray(valor) ? valor : [valor];
@@ -189,34 +270,29 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
             const attributes = Array.isArray(valor) ? valor : [];
             if (attributes.length === 0) throw new Error('Nenhum atributo informado.');
             let attrFail = 0, attrFailIds = [];
-            // Retry cumulativo: tenta em bulk, remove atributos rejeitados pelo ML e retenta
             let pendentes = [...attributes];
             let ultimoErro = null;
             while (pendentes.length > 0) {
               try {
                 await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { attributes: pendentes }, { headers });
-                break; // sucesso — sai do loop
+                break;
               } catch (err) {
                 const msg = err.response?.data?.message || err.message || '';
-                // Extrai IDs de atributos rejeitados da mensagem de erro do ML
-                // Formato: "Attribute [ATTR_ID] is not valid, ..."
                 const rejeitados = [];
                 const regex = /Attribute \[([^\]]+)\] is not valid/gi;
                 let m;
                 while ((m = regex.exec(msg)) !== null) rejeitados.push(m[1]);
                 if (rejeitados.length === 0) {
-                  // Erro não relacionado a atributos específicos — falha definitiva
                   ultimoErro = err;
                   break;
                 }
-                // Remove os atributos rejeitados e registra
                 const antes = pendentes.length;
                 pendentes = pendentes.filter(a => !rejeitados.includes(a.id));
                 const removidos = antes - pendentes.length;
                 attrFail += removidos;
                 attrFailIds.push(...rejeitados.filter(id => !attrFailIds.includes(id)));
                 ultimoErro = err;
-                if (pendentes.length === 0) break; // todos foram rejeitados
+                if (pendentes.length === 0) break;
               }
             }
             const attrOk = attributes.length - attrFail;
@@ -230,12 +306,20 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
           } else if (acao === 'atualizar_imagens') {
             const pictures = Array.isArray(valor) ? valor : [];
             if (pictures.length === 0) throw new Error('Nenhuma imagem informada.');
-            await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { pictures }, { headers });
+            let finalPictures = pictures;
+            if (modoReplace === 'FIRST') {
+              try {
+                const itemRes = await safeAxios.get(`https://api.mercadolibre.com/items/${item.id}?attributes=pictures`, { headers });
+                const existingIds = (itemRes.data?.pictures || []).map(p => ({ id: p.id }));
+                finalPictures = [...pictures, ...existingIds];
+              } catch (_) {}
+            }
+            await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { pictures: finalPictures }, { headers });
             const anuncio = await prisma.anuncioML.findUnique({ where: { id: item.id }, select: { tagPrincipal: true } });
             if (anuncio?.tagPrincipal === 'poor_quality_thumbnail' || anuncio?.tagPrincipal === 'poor_quality_picture') {
               await prisma.anuncioML.update({ where: { id: item.id }, data: { tagPrincipal: null } }).catch(() => {});
             }
-            logAcao += `${pictures.length} imagem(ns) atualizada(s).`;
+            logAcao += `${finalPictures.length} imagem(ns) atualizada(s)${modoReplace === 'FIRST' ? ' (manteve existentes)' : ''}.`;
 
           } else if (acao === 'excluir') {
             await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { status: 'closed' }, { headers });
@@ -251,17 +335,25 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
 
         } catch (err) {
           falhas++;
-          
+
           let msgErro = err.message;
-          
+
           if (err.isAxiosError || err.response) {
             const data = err.response?.data || {};
-            msgErro = data.message || data.error || `HTTP ${err.response?.status}`;
+
             if (Array.isArray(data.cause) && data.cause.length > 0) {
-              msgErro += ` - ${data.cause.map(c => c.message || JSON.stringify(c)).join(', ')}`;
+              const causas = data.cause
+                .map(c => `${c.code || 'sem_code'} | ${c.message || c.description || c.error_message || 'sem_message'} | refs: ${Array.isArray(c.references) ? c.references.join(', ') : ''}`)
+                .join(' || ');
+
+              msgErro = `${data.message || data.error || `HTTP ${err.response?.status}`} - ${causas}`;
+            } else if (data.cause && typeof data.cause === 'string') {
+              msgErro = `${data.message || data.error || `HTTP ${err.response?.status}`} - ${data.cause}`;
+            } else {
+              msgErro = data.message || data.error || `HTTP ${err.response?.status}`;
             }
           }
-          
+
           logsDetalhes.push(`❌ ${logAcao} ERRO: ${msgErro}`);
         }
 

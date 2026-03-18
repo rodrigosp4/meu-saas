@@ -186,14 +186,12 @@ function ModalEditarTitulo({ anunciosSelecionados, usuarioId, onClose, onSuccess
   const [isLoading, setIsLoading] = useState(false);
 
   const comVendas = anunciosSelecionados.filter(ad => Number(ad.vendas || 0) > 0);
-  const semVendas = anunciosSelecionados.filter(ad => Number(ad.vendas || 0) === 0);
 
   const handleSalvar = async () => {
     if (!titulo.trim()) return alert('Digite um título.');
-    if (semVendas.length === 0) return alert('Nenhum anúncio elegível (todos têm histórico de vendas).');
     setIsLoading(true);
     try {
-      const items = semVendas.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
       const res = await fetch('/api/ml/acoes-massa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -201,7 +199,7 @@ function ModalEditarTitulo({ anunciosSelecionados, usuarioId, onClose, onSuccess
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
-      alert(`✅ Ação enviada para a fila!${comVendas.length > 0 ? `\n\n⚠️ ${comVendas.length} anúncio(s) com vendas foram ignorados.` : ''}\n\nAcompanhe na aba "Gerenciador de Fila".`);
+      alert(`✅ Ação enviada para a fila!\n\nAcompanhe na aba "Gerenciador de Fila".`);
       onSuccess();
     } catch (e) {
       alert(`Erro: ${e.message}`);
@@ -216,45 +214,42 @@ function ModalEditarTitulo({ anunciosSelecionados, usuarioId, onClose, onSuccess
         <div className="bg-gradient-to-r from-sky-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
           <div>
             <h2 className="text-white font-black text-base">Editar Título</h2>
-            <p className="text-sky-200 text-xs mt-0.5">{semVendas.length} de {anunciosSelecionados.length} elegível(is) — sem vendas</p>
+            <p className="text-sky-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
           </div>
           <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
         </div>
         <div className="p-6 space-y-4">
           {comVendas.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-              <p className="text-xs font-bold text-amber-700">⚠️ {comVendas.length} anúncio(s) com vendas serão ignorados — o ML não permite alterar o título de anúncios com histórico de vendas.</p>
+              <p className="text-xs font-bold text-amber-700">
+                ⚠️ {comVendas.length} anúncio(s) possuem vendas. O sistema utilizará o método "Family Name" para alterar o título diretamente.
+              </p>
             </div>
           )}
-          {semVendas.length === 0 ? (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-xs font-bold text-red-700">Todos os anúncios selecionados possuem vendas. Não é possível editar o título.</p>
-            </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Novo Título</label>
-              <input
-                type="text"
-                value={titulo}
-                onChange={e => setTitulo(e.target.value)}
-                maxLength={60}
-                placeholder="Digite o novo título do anúncio..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
-              />
-              <p className="text-xs text-gray-400 mt-1">{titulo.length}/60 caracteres</p>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Novo Título</label>
+            <input
+              type="text"
+              value={titulo}
+              onChange={e => setTitulo(e.target.value)}
+              maxLength={60}
+              placeholder="Digite o novo título do anúncio..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
+            />
+            <p className="text-xs text-gray-400 mt-1">{titulo.length}/60 caracteres</p>
+          </div>
         </div>
         <div className="px-6 pb-5 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
-          <button onClick={handleSalvar} disabled={isLoading || !titulo.trim() || semVendas.length === 0} className="px-5 py-2 text-sm font-black text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50 transition">
-            {isLoading ? 'Enviando...' : `Aplicar em ${semVendas.length} anúncio(s)`}
+          <button onClick={handleSalvar} disabled={isLoading || !titulo.trim()} className="px-5 py-2 text-sm font-black text-white bg-sky-600 rounded-lg hover:bg-sky-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : `Aplicar em ${anunciosSelecionados.length} anúncio(s)`}
           </button>
         </div>
       </div>
     </div>
   );
 }
+
 
 // ===== MODAL EDITAR DESCRIÇÃO =====
 function ModalEditarDescricao({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
@@ -312,6 +307,68 @@ function ModalEditarDescricao({ anunciosSelecionados, usuarioId, onClose, onSucc
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
           <button onClick={handleSalvar} disabled={isLoading || !descricao.trim()} className="px-5 py-2 text-sm font-black text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition">
             {isLoading ? 'Enviando...' : 'Salvar Descrição'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== MODAL ALTERAR SKU =====
+function ModalAlterarSku({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
+  const [sku, setSku] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSalvar = async () => {
+    if (!sku.trim()) return alert('Digite um SKU.');
+    setIsLoading(true);
+    try {
+      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items, acao: 'alterar_sku', valor: sku.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro);
+      alert('✅ Ação enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
+      onSuccess();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+          <div>
+            <h2 className="text-white font-black text-base">Alterar SKU</h2>
+            <p className="text-indigo-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+          </div>
+          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-700">
+            O mesmo SKU será aplicado em todos os anúncios selecionados. O campo <strong>SELLER_SKU</strong> será atualizado no Mercado Livre.
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Novo SKU</label>
+            <input
+              type="text"
+              value={sku}
+              onChange={e => setSku(e.target.value)}
+              placeholder="Ex: PROD-001, ABC123..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+            />
+          </div>
+        </div>
+        <div className="px-6 pb-5 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+          <button onClick={handleSalvar} disabled={isLoading || !sku.trim()} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : `Aplicar em ${anunciosSelecionados.length} anúncio(s)`}
           </button>
         </div>
       </div>
@@ -1447,6 +1504,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [modalPrazoFabricacao, setModalPrazoFabricacao] = useState(false);
   const [modalEditarTitulo, setModalEditarTitulo] = useState(false);
   const [modalEditarDescricao, setModalEditarDescricao] = useState(false);
+  const [modalAlterarSku, setModalAlterarSku] = useState(false);
   const [modalExcluir, setModalExcluir] = useState(false);
   const [modalCompatibilidade, setModalCompatibilidade] = useState(false);
   const [modalPosicao, setModalPosicao] = useState(false);
@@ -2597,6 +2655,13 @@ const handleFetchBySku = async () => {
                 </button>
 
                 <button
+                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalAlterarSku(true); }}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100"
+                >
+                  🏷️ Alterar SKU
+                </button>
+
+                <button
                   onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalExcluir(true); }}
                   className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-red-700 bg-red-50 border-red-200 hover:bg-red-100"
                 >
@@ -3049,6 +3114,15 @@ const handleFetchBySku = async () => {
         usuarioId={usuarioId}
         onClose={() => setModalEditarDescricao(false)}
         onSuccess={() => { setModalEditarDescricao(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalAlterarSku && (
+      <ModalAlterarSku
+        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalAlterarSku(false)}
+        onSuccess={() => { setModalAlterarSku(false); setSelectedIds(new Set()); }}
       />
     )}
 

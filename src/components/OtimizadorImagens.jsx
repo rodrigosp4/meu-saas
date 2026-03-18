@@ -1,7 +1,30 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { TAG_DISPLAY_MAP } from './GerenciadorAnuncios';
 
 const IMAGE_QUALITY_TAGS = ['poor_quality_thumbnail', 'poor_quality_picture', 'picture_downloading_pending'];
+
+// ===== CACHE =====
+const CACHE_KEY_OTIMIZADOR = 'otimizador_anuncios_v1';
+let _memCacheOtimizador = { anuncios: null, ts: null };
+
+function lerCacheOtimizador() {
+  if (_memCacheOtimizador.anuncios && _memCacheOtimizador.ts)
+    return { data: _memCacheOtimizador.anuncios, ts: _memCacheOtimizador.ts };
+  try {
+    const raw = localStorage.getItem(CACHE_KEY_OTIMIZADOR);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw);
+    _memCacheOtimizador = { anuncios: data, ts };
+    return { data, ts };
+  } catch { return null; }
+}
+
+function salvarCacheOtimizador(anuncios) {
+  const ts = Date.now();
+  _memCacheOtimizador = { anuncios, ts };
+  try { localStorage.setItem(CACHE_KEY_OTIMIZADOR, JSON.stringify({ data: anuncios, ts })); } catch {}
+  return ts;
+}
 
 // ===== PREVIEW DE IMAGEM COM VALIDAÇÃO =====
 function ImagePreview({ url, label, onValidated }) {
@@ -62,9 +85,13 @@ function ImagePreview({ url, label, onValidated }) {
 
 // ===== COMPONENTE PRINCIPAL =====
 export default function OtimizadorImagens({ usuarioId }) {
-  const [anuncios, setAnuncios] = useState([]);
+  const [anuncios, setAnuncios] = useState(() => lerCacheOtimizador()?.data || []);
+  const [cacheTs, setCacheTs] = useState(() => lerCacheOtimizador()?.ts || null);
   const [loading, setLoading] = useState(false);
-  const [statusMsg, setStatusMsg] = useState('');
+  const [statusMsg, setStatusMsg] = useState(() => {
+    const cache = lerCacheOtimizador();
+    return cache ? `Dados em cache de ${new Date(cache.ts).toLocaleString('pt-BR')}.` : '';
+  });
   const [selecionado, setSelecionado] = useState(null);
 
   // Editor state
@@ -80,8 +107,18 @@ export default function OtimizadorImagens({ usuarioId }) {
   const [filtroThumbRuim, setFiltroThumbRuim] = useState(true);
   const [filtroFotoRuim, setFiltroFotoRuim] = useState(false);
   const [filtroApenasAtivos, setFiltroApenasAtivos] = useState(true);
-  const [filtroSku, setFiltroSku] = useState('');
+  const [filtroTexto, setFiltroTexto] = useState('');
+  const [filtroTextoDebouncado, setFiltroTextoDebouncado] = useState('');
   const [sortReverse, setSortReverse] = useState(true);
+  const [agrupaPorSku, setAgrupaPorSku] = useState(false);
+  const [grupoSelecionado, setGrupoSelecionado] = useState(null); // array de ads quando agrupado
+
+  const debounceRef = useRef(null);
+  const handleFiltroTexto = (val) => {
+    setFiltroTexto(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setFiltroTextoDebouncado(val), 250);
+  };
 
   const carregarLista = useCallback(async () => {
     const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
@@ -93,8 +130,6 @@ export default function OtimizadorImagens({ usuarioId }) {
 
     setLoading(true);
     setStatusMsg('Carregando anúncios...');
-    setAnuncios([]);
-    setSelecionado(null);
 
     try {
       let page = 1;
@@ -114,8 +149,30 @@ export default function OtimizadorImagens({ usuarioId }) {
         setStatusMsg(`Carregando... ${todos.length}/${total}`);
       }
 
-      // Aplica filtros
-      const filtrados = todos.filter(ad => {
+      // Deduplica por id (paginação com empates em vendas pode repetir itens)
+      const seen = new Set();
+      const todosSemDuplicatas = todos.filter(ad => {
+        if (seen.has(ad.id)) return false;
+        seen.add(ad.id);
+        return true;
+      });
+      setAnuncios(todosSemDuplicatas);
+      const ts = salvarCacheOtimizador(todosSemDuplicatas);
+      setCacheTs(ts);
+      setStatusMsg(`Dados em cache de ${new Date(ts).toLocaleString('pt-BR')}.`);
+    } catch (e) {
+      setStatusMsg(`Erro: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const listaFiltrada = useMemo(() => {
+    const normalize = str => str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const termos = filtroTextoDebouncado ? normalize(filtroTextoDebouncado).split(/\s+/).filter(Boolean) : [];
+
+    return anuncios
+      .filter(ad => {
         if (filtroApenasAtivos && ad.status !== 'active') return false;
 
         const tags = [ad.tagPrincipal, ...(ad.dadosML?.tags || [])].filter(Boolean);
@@ -130,27 +187,48 @@ export default function OtimizadorImagens({ usuarioId }) {
 
         if (filtroSemVendas && Number(ad.vendas || 0) > 0) return false;
 
+        if (termos.length > 0) {
+          const haystack = normalize(`${ad.sku || ''} ${ad.id || ''} ${ad.titulo || ''}`);
+          if (termos.some(t => !haystack.includes(t))) return false;
+        }
+
         return true;
+      })
+      .sort((a, b) => {
+        const va = Number(a.vendas || 0), vb = Number(b.vendas || 0);
+        return sortReverse ? vb - va : va - vb;
       });
+  }, [anuncios, filtroApenasAtivos, filtroThumbRuim, filtroFotoRuim, filtroSemVendas, filtroTextoDebouncado, sortReverse]);
 
-      setAnuncios(filtrados);
-      setStatusMsg(`${filtrados.length} anúncio(s) listado(s) com os filtros aplicados.`);
-    } catch (e) {
-      setStatusMsg(`Erro: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [filtroSemVendas, filtroThumbRuim, filtroFotoRuim, filtroApenasAtivos]);
-
-  const listaFiltrada = anuncios
-    .filter(ad => !filtroSku || (ad.sku || '').toLowerCase().includes(filtroSku.toLowerCase()) || ad.id.includes(filtroSku))
-    .sort((a, b) => {
-      const va = Number(a.vendas || 0), vb = Number(b.vendas || 0);
-      return sortReverse ? vb - va : va - vb;
+  // Agrupamento por SKU — apenas ads COM sku real são agrupados
+  const { listaAgrupada, semSkuAds } = useMemo(() => {
+    if (!agrupaPorSku) return { listaAgrupada: null, semSkuAds: [] };
+    const groups = {};
+    const semSku = [];
+    listaFiltrada.forEach(ad => {
+      if (!ad.sku) { semSku.push(ad); return; }
+      if (!groups[ad.sku]) {
+        groups[ad.sku] = { sku: ad.sku, ads: [], titulo: ad.titulo, thumbnail: ad.thumbnail, totalVendas: 0 };
+      }
+      groups[ad.sku].ads.push(ad);
+      groups[ad.sku].totalVendas += Number(ad.vendas || 0);
     });
+    return {
+      listaAgrupada: Object.values(groups).sort((a, b) => b.totalVendas - a.totalVendas),
+      semSkuAds: semSku,
+    };
+  }, [agrupaPorSku, listaFiltrada]);
 
   const selecionarItem = (ad) => {
     setSelecionado(ad);
+    setGrupoSelecionado(null);
+    setUrlsNovas(['']);
+    setUrlsValidas({});
+  };
+
+  const selecionarGrupo = (group) => {
+    setSelecionado(group.ads[0]);
+    setGrupoSelecionado(group.ads);
     setUrlsNovas(['']);
     setUrlsValidas({});
   };
@@ -177,15 +255,86 @@ export default function OtimizadorImagens({ usuarioId }) {
   const urlsParaEnviar = urlsNovas.filter(u => u.trim().startsWith('http'));
   const primeiraUrlValida = urlsValidas[0] === true;
 
+  // ===== UPLOAD IMGUR =====
+  const [uploadando, setUploadando] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  const uploadParaImgur = useCallback(async (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    setUploadando(true);
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch(`/api/usuario/${usuarioId}/imgur/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no upload');
+      // Insere a URL no primeiro campo vazio ou adiciona novo
+      setUrlsNovas(prev => {
+        const idx = prev.findIndex(u => !u.trim());
+        if (idx >= 0) { const n = [...prev]; n[idx] = data.url; return n; }
+        if (prev.length < 12) return [...prev, data.url];
+        return prev;
+      });
+    } catch (e) {
+      alert(`Erro ao enviar para o Imgur: ${e.message}`);
+    } finally {
+      setUploadando(false);
+    }
+  }, [usuarioId]);
+
+  const handlePasteZone = (e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imgItem = items.find(i => i.type.startsWith('image/'));
+    if (imgItem) {
+      e.preventDefault();
+      uploadParaImgur(imgItem.getAsFile());
+    }
+  };
+
+  const handleDropZone = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+    files.forEach(uploadParaImgur);
+  };
+
+  // Captura Ctrl+V globalmente quando o editor está aberto
+  React.useEffect(() => {
+    if (!selecionado) return;
+    const onGlobalPaste = (e) => {
+      // Não intercepta se o foco está num input/textarea de texto
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const imgItem = items.find(i => i.type.startsWith('image/'));
+      if (imgItem) {
+        e.preventDefault();
+        uploadParaImgur(imgItem.getAsFile());
+      }
+    };
+    window.addEventListener('paste', onGlobalPaste);
+    return () => window.removeEventListener('paste', onGlobalPaste);
+  }, [selecionado, uploadParaImgur]);
+
   const aplicarImagens = async (autoNext = false) => {
     if (!selecionado || urlsParaEnviar.length === 0) return;
 
-    const sku = selecionado.sku;
     let itemsParaAtualizar = [];
 
-    if (aplicarTodosSku && sku) {
+    if (grupoSelecionado) {
+      // Modo agrupado: aplica em todos os anúncios do grupo
+      itemsParaAtualizar = grupoSelecionado.map(ad => ({ id: ad.id, contaId: ad.contaId }));
+    } else if (aplicarTodosSku && selecionado.sku) {
       itemsParaAtualizar = anuncios
-        .filter(ad => ad.sku === sku && ad.status === 'active')
+        .filter(ad => ad.sku === selecionado.sku && ad.status === 'active')
         .map(ad => ({ id: ad.id, contaId: ad.contaId }));
     } else {
       itemsParaAtualizar = [{ id: selecionado.id, contaId: selecionado.contaId }];
@@ -203,21 +352,28 @@ export default function OtimizadorImagens({ usuarioId }) {
       const res = await fetch('/api/ml/acoes-massa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, items: itemsParaAtualizar, acao: 'atualizar_imagens', valor: pictures }),
+        body: JSON.stringify({ userId: usuarioId, items: itemsParaAtualizar, acao: 'atualizar_imagens', valor: pictures, modoReplace }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
 
       alert(`✅ ${pictures.length} imagem(ns) enviada(s) para ${itemsParaAtualizar.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`);
 
-      // Remove os itens atualizados da lista se autoNext
       if (autoNext) {
         const idsAtualizados = new Set(itemsParaAtualizar.map(i => i.id));
         setAnuncios(prev => prev.filter(ad => !idsAtualizados.has(ad.id)));
-        // Seleciona próximo
-        const idx = listaFiltrada.findIndex(ad => ad.id === selecionado.id);
-        const proximo = listaFiltrada[idx + 1] || listaFiltrada[idx - 1] || null;
-        setSelecionado(proximo);
+
+        if (agrupaPorSku && listaAgrupada) {
+          const idx = listaAgrupada.findIndex(g => g.ads[0]?.id === selecionado.id);
+          const proximoGrupo = listaAgrupada[idx + 1] || listaAgrupada[idx - 1] || null;
+          if (proximoGrupo) selecionarGrupo(proximoGrupo);
+          else { setSelecionado(null); setGrupoSelecionado(null); }
+        } else {
+          const idx = listaFiltrada.findIndex(ad => ad.id === selecionado.id);
+          const proximo = listaFiltrada[idx + 1] || listaFiltrada[idx - 1] || null;
+          setSelecionado(proximo);
+          setGrupoSelecionado(null);
+        }
         setUrlsNovas(['']);
         setUrlsValidas({});
       }
@@ -230,10 +386,20 @@ export default function OtimizadorImagens({ usuarioId }) {
 
   const ignorarItem = () => {
     if (!selecionado) return;
-    setAnuncios(prev => prev.filter(ad => ad.id !== selecionado.id));
-    const idx = listaFiltrada.findIndex(ad => ad.id === selecionado.id);
-    const proximo = listaFiltrada[idx + 1] || listaFiltrada[idx - 1] || null;
-    setSelecionado(proximo);
+    const idsIgnorar = grupoSelecionado ? new Set(grupoSelecionado.map(a => a.id)) : new Set([selecionado.id]);
+    setAnuncios(prev => prev.filter(ad => !idsIgnorar.has(ad.id)));
+
+    if (agrupaPorSku && listaAgrupada) {
+      const idx = listaAgrupada.findIndex(g => g.ads[0]?.id === selecionado.id);
+      const proximoGrupo = listaAgrupada[idx + 1] || listaAgrupada[idx - 1] || null;
+      if (proximoGrupo) selecionarGrupo(proximoGrupo);
+      else { setSelecionado(null); setGrupoSelecionado(null); }
+    } else {
+      const idx = listaFiltrada.findIndex(ad => ad.id === selecionado.id);
+      const proximo = listaFiltrada[idx + 1] || listaFiltrada[idx - 1] || null;
+      setSelecionado(proximo);
+      setGrupoSelecionado(null);
+    }
     setUrlsNovas(['']);
     setUrlsValidas({});
   };
@@ -260,21 +426,31 @@ export default function OtimizadorImagens({ usuarioId }) {
           Apenas Ativos
         </label>
 
+        <label
+          className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer px-2.5 py-1 rounded-md border transition-colors ${agrupaPorSku ? 'bg-violet-600 text-white border-violet-600' : 'text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+        >
+          <input type="checkbox" className="hidden" checked={agrupaPorSku} onChange={e => { setAgrupaPorSku(e.target.checked); setSelecionado(null); setGrupoSelecionado(null); }} />
+          Agrupar por SKU
+        </label>
+
         <button
           onClick={carregarLista}
           disabled={loading}
           className="ml-auto px-4 py-2 text-sm font-bold text-white rounded-lg transition flex items-center gap-2 disabled:opacity-60"
-          style={{ background: '#2980b9' }}
+          style={{ background: cacheTs ? '#e67e22' : '#27ae60' }}
+          title={cacheTs ? `Cache de ${new Date(cacheTs).toLocaleString('pt-BR')} — clique para forçar atualização` : 'Carregar anúncios'}
         >
           {loading
             ? <><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white inline-block" /> Carregando...</>
-            : '🔄 Carregar Lista'}
+            : cacheTs ? '🔄 Forçar Atualização' : '▶ Carregar Lista'}
         </button>
       </div>
 
-      {statusMsg && (
+      {(statusMsg || anuncios.length > 0) && (
         <div className="px-4 py-1.5 bg-blue-50 border-b border-blue-100 text-xs text-blue-700 flex-shrink-0">
-          {statusMsg}
+          {statusMsg || (agrupaPorSku && listaAgrupada
+            ? `${listaAgrupada.length} grupo(s) de SKU${semSkuAds.length > 0 ? ` · ${semSkuAds.length} sem SKU` : ''} · ${listaFiltrada.length} anúncio(s) (de ${anuncios.length} carregados).`
+            : `${listaFiltrada.length} anúncio(s) listado(s) com os filtros aplicados (de ${anuncios.length} carregados).`)}
         </div>
       )}
 
@@ -282,18 +458,18 @@ export default function OtimizadorImagens({ usuarioId }) {
       <div className="flex flex-1 min-h-0 gap-0">
         {/* Lista */}
         <div className="flex flex-col" style={{ width: 420, flexShrink: 0, borderRight: '1px solid #e5e7eb' }}>
-          {/* Filtro SKU + sort */}
+          {/* Filtro SKU + sort + Título */}
           <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2 flex-shrink-0">
             <input
               type="text"
-              placeholder="Filtrar SKU ou MLB..."
-              value={filtroSku}
-              onChange={e => setFiltroSku(e.target.value)}
+              placeholder="Buscar por SKU, MLB ou título..."
+              value={filtroTexto}
+              onChange={e => handleFiltroTexto(e.target.value)}
               className="flex-1 text-xs px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
             <button
               onClick={() => setSortReverse(r => !r)}
-              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5 border border-gray-200 rounded hover:bg-white transition"
+              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5 border border-gray-200 rounded hover:bg-white transition flex-shrink-0"
               title="Ordenar por vendas"
             >
               Vendas {sortReverse ? '↓' : '↑'}
@@ -308,43 +484,100 @@ export default function OtimizadorImagens({ usuarioId }) {
                   <circle cx="8.5" cy="8.5" r="1.5" strokeWidth={1.5} />
                   <polyline points="21 15 16 10 5 21" strokeWidth={1.5} />
                 </svg>
-                <p>{anuncios.length === 0 ? 'Clique em "Carregar Lista" para começar.' : 'Nenhum resultado com os filtros atuais.'}</p>
+                <p>{anuncios.length === 0 ? 'Clique em "Carregar Lista" para começar.' : 'Nenhum resultado com os filtros atuais. Tente remover alguns filtros.'}</p>
               </div>
             )}
-            {listaFiltrada.map(ad => {
-              const isSelected = selecionado?.id === ad.id;
-              const imgQTags = [ad.tagPrincipal, ...(ad.dadosML?.tags || [])].filter(t => IMAGE_QUALITY_TAGS.includes(t));
-              return (
-                <div
-                  key={ad.id}
-                  onClick={() => selecionarItem(ad)}
-                  className={`flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'}`}
-                >
-                  <img
-                    src={ad.thumbnail || ''}
-                    alt=""
-                    className={`w-12 h-12 object-cover rounded border flex-shrink-0 ${imgQTags.length > 0 ? 'border-red-400' : 'border-gray-200'}`}
-                    onError={e => { e.target.style.display = 'none'; }}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-mono font-bold text-blue-600 truncate">{ad.id}</p>
-                    <p className="text-xs text-gray-700 truncate leading-tight">{ad.titulo}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      {ad.sku && <span className="text-[10px] text-gray-400 font-mono">{ad.sku}</span>}
-                      <span className="text-[10px] text-gray-400">· {ad.vendas} vendas</span>
-                      {imgQTags.map(tag => {
-                        const mapped = TAG_DISPLAY_MAP[tag];
-                        return (
-                          <span key={tag} className={`${mapped?.color || 'bg-gray-100 text-gray-600 border-gray-200'} border text-[9px] px-1 py-0.5 rounded font-bold`}>
-                            {mapped?.label || tag}
+
+            {agrupaPorSku ? (
+              <>
+                {(listaAgrupada || []).map(group => {
+                  const isGroupSelected = grupoSelecionado
+                    ? grupoSelecionado[0]?.id === group.ads[0]?.id
+                    : false;
+                  const multiThumb = group.ads.length > 1;
+
+                  return (
+                    <div
+                      key={group.sku}
+                      onClick={() => selecionarGrupo(group)}
+                      className={`flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-200 cursor-pointer transition-colors ${isGroupSelected ? 'bg-violet-100 border-l-4 border-l-violet-600' : 'bg-violet-50 hover:bg-violet-100 border-l-4 border-l-transparent'}`}
+                    >
+                      <div className="relative flex-shrink-0" style={{ width: 48, height: 48 }}>
+                        {group.ads.slice(0, 4).map((ad, i) => (
+                          <img
+                            key={ad.id}
+                            src={ad.thumbnail || ''}
+                            alt=""
+                            className="absolute object-cover border-2 border-white rounded"
+                            style={{
+                              width: multiThumb ? 30 : 48,
+                              height: multiThumb ? 30 : 48,
+                              top: multiThumb ? (i >= 2 ? 18 : 0) : 0,
+                              left: multiThumb ? (i % 2 === 0 ? 0 : 18) : 0,
+                              zIndex: 4 - i,
+                            }}
+                            onError={e => { e.target.style.display = 'none'; }}
+                          />
+                        ))}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-mono font-black text-violet-700 truncate">{group.sku}</p>
+                          <span className="flex-shrink-0 text-[10px] font-bold text-white bg-violet-600 px-1.5 py-0.5 rounded-full">
+                            {group.ads.length}
                           </span>
-                        );
-                      })}
+                        </div>
+                        <p className="text-xs text-gray-600 truncate leading-tight mt-0.5">{group.titulo}</p>
+                        <span className="text-[10px] text-gray-400">{group.totalVendas} vendas</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {semSkuAds.length > 0 && (
+                  <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                      {semSkuAds.length} anúncio{semSkuAds.length > 1 ? 's' : ''} sem SKU — desative o agrupamento para ver
+                    </span>
+                  </div>
+                )}
+              </>
+            ) : (
+              listaFiltrada.map(ad => {
+                const isSelected = selecionado?.id === ad.id;
+                const imgQTags = [ad.tagPrincipal, ...(ad.dadosML?.tags || [])].filter(t => IMAGE_QUALITY_TAGS.includes(t));
+                return (
+                  <div
+                    key={ad.id}
+                    onClick={() => selecionarItem(ad)}
+                    className={`flex items-center gap-2 px-3 py-2.5 border-b border-gray-100 cursor-pointer transition-colors ${isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'}`}
+                  >
+                    <img
+                      src={ad.thumbnail || ''}
+                      alt=""
+                      className={`w-12 h-12 object-cover rounded border flex-shrink-0 ${imgQTags.length > 0 ? 'border-red-400' : 'border-gray-200'}`}
+                      onError={e => { e.target.style.display = 'none'; }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-mono font-bold text-blue-600 truncate">{ad.id}</p>
+                      <p className="text-xs text-gray-700 truncate leading-tight">{ad.titulo}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        {ad.sku && <span className="text-[10px] text-gray-400 font-mono">{ad.sku}</span>}
+                        <span className="text-[10px] text-gray-400">· {ad.vendas} vendas</span>
+                        {imgQTags.map(tag => {
+                          const mapped = TAG_DISPLAY_MAP[tag];
+                          return (
+                            <span key={tag} className={`${mapped?.color || 'bg-gray-100 text-gray-600 border-gray-200'} border text-[9px] px-1 py-0.5 rounded font-bold`}>
+                              {mapped?.label || tag}
+                            </span>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -361,74 +594,151 @@ export default function OtimizadorImagens({ usuarioId }) {
             </div>
           ) : (
             <>
-              {/* Header do anúncio */}
+              {/* Header do anúncio / grupo */}
               <div>
-                <p className="font-bold text-gray-800 truncate">{selecionado.titulo}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {selecionado.id} · {selecionado.conta?.nickname || selecionado.contaId} · {selecionado.vendas} vendas
-                  {selecionado.permalink && (
-                    <a href={selecionado.permalink} target="_blank" rel="noreferrer" className="ml-2 text-blue-500 hover:underline">Abrir no ML →</a>
-                  )}
-                </p>
+                {grupoSelecionado ? (
+                  <>
+                    <p className="font-bold text-violet-700 truncate font-mono">{selecionado.sku || 'Sem SKU'}</p>
+                    <p className="text-xs text-gray-500 mt-0.5 truncate">{selecionado.titulo}</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs font-bold text-white bg-violet-600 px-2 py-0.5 rounded">
+                        {grupoSelecionado.length} anúncios serão atualizados
+                      </span>
+                      <span className="text-[10px] text-gray-400">{grupoSelecionado.map(a => a.id).join(', ')}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-bold text-gray-800 truncate">{selecionado.titulo}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {selecionado.id} · {selecionado.conta?.nickname || selecionado.contaId} · {selecionado.vendas} vendas
+                      {selecionado.permalink && (
+                        <a href={selecionado.permalink} target="_blank" rel="noreferrer" className="ml-2 text-blue-500 hover:underline">Abrir no ML →</a>
+                      )}
+                    </p>
+                  </>
+                )}
               </div>
 
-              {/* Preview lado a lado */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Imagem Atual (Thumb)</p>
-                  <div style={{ height: 200 }}>
-                    <ImagePreview url={selecionado.thumbnail} label="Sem imagem atual" />
+              {/* Imagens Atuais */}
+              {(() => {
+                const picsAtuais = selecionado.dadosML?.pictures?.length
+                  ? selecionado.dadosML.pictures
+                  : selecionado.thumbnail ? [{ source: selecionado.thumbnail }] : [];
+                if (picsAtuais.length === 0) return null;
+                return (
+                  <div>
+                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
+                      Imagens Atuais ({picsAtuais.length})
+                    </p>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {picsAtuais.map((pic, i) => (
+                        <div key={i} className="relative flex-shrink-0 rounded overflow-hidden border border-gray-200" style={{ width: 90, height: 90 }}>
+                          <img
+                            src={pic.secure_url || pic.url || pic.source}
+                            alt={`img-${i + 1}`}
+                            className="w-full h-full object-cover"
+                            onError={e => { e.target.style.display = 'none'; }}
+                          />
+                          <span className="absolute top-1 left-1 bg-black/60 text-white text-[9px] font-bold px-1 rounded">
+                            {i + 1}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Nova Capa (Preview da 1ª URL)</p>
-                  <div style={{ height: 200 }}>
-                    <ImagePreview
-                      url={urlsNovas[0]?.trim().startsWith('http') ? urlsNovas[0].trim() : null}
-                      label="Cole uma URL abaixo"
-                      onValidated={(valid) => setUrlsValidas(prev => ({ ...prev, 0: valid }))}
-                    />
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
-              {/* URLs das novas imagens */}
+              {/* Novas Imagens — grid visual */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">URLs das Novas Imagens (Máx 12)</p>
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Novas Imagens (Máx 12)</p>
                   <span className="text-[10px] text-gray-400">{urlsParaEnviar.length} URL(s) válida(s)</span>
                 </div>
-                <div className="space-y-2">
-                  {urlsNovas.map((url, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400 w-5 flex-shrink-0 text-right">{idx + 1}.</span>
-                      <input
-                        type="text"
-                        value={url}
-                        onChange={e => handleUrlChange(idx, e.target.value)}
-                        placeholder={idx === 0 ? 'Cole a URL da imagem principal aqui...' : 'URL adicional...'}
-                        className={`flex-1 text-xs px-3 py-2 border rounded focus:outline-none focus:ring-1 ${
-                          urlsValidas[idx] === true ? 'border-green-400 focus:ring-green-400' :
-                          urlsValidas[idx] === false ? 'border-red-400 focus:ring-red-400' :
-                          'border-gray-300 focus:ring-blue-400'
-                        }`}
-                      />
-                      {urlsValidas[idx] === true && <span className="text-green-500 text-sm">✓</span>}
-                      {urlsValidas[idx] === false && <span className="text-red-500 text-sm">✗</span>}
-                      {idx > 0 && (
-                        <button onClick={() => removeUrl(idx)} className="text-gray-400 hover:text-red-500 transition text-xs font-bold">✕</button>
-                      )}
-                    </div>
-                  ))}
+
+                {/* Zona de Paste / Drop para Imgur */}
+                <div
+                  onPaste={handlePasteZone}
+                  onDrop={handleDropZone}
+                  onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  className={`flex items-center justify-center gap-3 border-2 border-dashed rounded-lg px-4 py-2.5 mb-3 transition-colors cursor-pointer text-sm ${dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50 hover:border-blue-300 hover:bg-blue-50/50'}`}
+                  onClick={() => { const el = document.createElement('input'); el.type = 'file'; el.accept = 'image/*'; el.multiple = true; el.onchange = e => Array.from(e.target.files).forEach(uploadParaImgur); el.click(); }}
+                  title="Clique para selecionar, arraste ou cole (Ctrl+V) uma imagem para hospedar no Imgur"
+                >
+                  {uploadando ? (
+                    <><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500 inline-block flex-shrink-0" /><span className="text-blue-600 font-semibold">Enviando para o Imgur...</span></>
+                  ) : (
+                    <><span className="text-lg">🖼️</span><span className="text-gray-500 text-xs">Clique, arraste ou <kbd className="bg-gray-200 px-1 rounded text-xs">Ctrl+V</kbd> para hospedar no Imgur</span></>
+                  )}
                 </div>
-                {urlsNovas.length < 12 && (
-                  <button
-                    onClick={addUrl}
-                    className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
-                  >
-                    + Adicionar URL
-                  </button>
-                )}
+
+                {/* Grid de imagens novas */}
+                <div className="grid grid-cols-3 gap-2">
+                  {urlsNovas.map((url, idx) => {
+                    const urlValida = url.trim().startsWith('http') ? url.trim() : null;
+                    return (
+                      <div key={idx} className="flex flex-col gap-1">
+                        {/* Preview */}
+                        <div className="relative rounded overflow-hidden border border-gray-200 bg-gray-50" style={{ height: 90 }}>
+                          {urlValida ? (
+                            <ImagePreview
+                              url={urlValida}
+                              onValidated={(valid) => setUrlsValidas(prev => ({ ...prev, [idx]: valid }))}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <span className="text-[10px] text-gray-300 font-bold">{idx + 1}</span>
+                            </div>
+                          )}
+                          {/* Badge posição */}
+                          <span className={`absolute top-1 left-1 text-[9px] font-bold px-1 rounded ${idx === 0 ? 'bg-blue-600 text-white' : 'bg-black/50 text-white'}`}>
+                            {idx === 0 ? 'CAPA' : idx + 1}
+                          </span>
+                          {/* Botão remover */}
+                          {idx > 0 && (
+                            <button
+                              onClick={() => removeUrl(idx)}
+                              className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold hover:bg-red-600"
+                            >✕</button>
+                          )}
+                          {/* Indicador válida/inválida */}
+                          {urlsValidas[idx] === true && (
+                            <span className="absolute bottom-1 right-1 text-[9px] bg-green-500 text-white px-1 rounded font-bold">✓</span>
+                          )}
+                          {urlsValidas[idx] === false && (
+                            <span className="absolute bottom-1 right-1 text-[9px] bg-red-500 text-white px-1 rounded font-bold">✗</span>
+                          )}
+                        </div>
+                        {/* Input URL */}
+                        <input
+                          type="text"
+                          value={url}
+                          onChange={e => handleUrlChange(idx, e.target.value)}
+                          placeholder={idx === 0 ? 'URL da capa...' : 'URL...'}
+                          className={`w-full text-[10px] px-2 py-1.5 border rounded focus:outline-none focus:ring-1 ${
+                            urlsValidas[idx] === true ? 'border-green-400 focus:ring-green-400' :
+                            urlsValidas[idx] === false ? 'border-red-400 focus:ring-red-400' :
+                            'border-gray-300 focus:ring-blue-400'
+                          }`}
+                        />
+                      </div>
+                    );
+                  })}
+
+                  {/* Slot para adicionar nova */}
+                  {urlsNovas.length < 12 && (
+                    <div
+                      onClick={addUrl}
+                      className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
+                      style={{ height: 90 + 28 + 4 }}
+                    >
+                      <span className="text-xl text-gray-300">+</span>
+                      <span className="text-[10px] text-gray-400 mt-0.5">Adicionar</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Opções de aplicação */}
@@ -444,18 +754,20 @@ export default function OtimizadorImagens({ usuarioId }) {
                 </label>
               </div>
 
-              <div className="border-t border-gray-100 pt-3">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={aplicarTodosSku}
-                    onChange={e => setAplicarTodosSku(e.target.checked)}
-                  />
-                  <span className="text-xs text-gray-700 font-semibold">
-                    ⚡ Aplicar a TODOS os anúncios que tiverem o mesmo SKU ({selecionado.sku || 'sem SKU'})
-                  </span>
-                </label>
-              </div>
+              {!grupoSelecionado && (
+                <div className="border-t border-gray-100 pt-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={aplicarTodosSku}
+                      onChange={e => setAplicarTodosSku(e.target.checked)}
+                    />
+                    <span className="text-xs text-gray-700 font-semibold">
+                      ⚡ Aplicar a TODOS os anúncios que tiverem o mesmo SKU ({selecionado.sku || 'sem SKU'})
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Ações */}
               <div className="flex items-center gap-2 pt-2 border-t border-gray-100 flex-shrink-0">

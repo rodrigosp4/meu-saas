@@ -1636,6 +1636,123 @@ async corrigirPreco(req, res) {
 // ============================================================================
   // ✅ NOVO ENDPOINT: Ações em Massa (Ativar, Pausar, Estoque, Flex, Turbo)
   // ============================================================================
+  // Busca shipping.dimensions ao vivo do ML e salva no dadosML de cada item
+  async buscarDimensoesML(req, res) {
+    try {
+      const { userId, items } = req.body; // items: [{id, contaId}]
+      if (!userId || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ erro: 'Parâmetros incompletos.' });
+      }
+
+      // Agrupa por conta
+      const porConta = {};
+      for (const item of items) {
+        if (!porConta[item.contaId]) porConta[item.contaId] = [];
+        porConta[item.contaId].push(item.id);
+      }
+
+      const resultado = {}; // itemId -> dimensoes string ou null
+
+      for (const [contaId, ids] of Object.entries(porConta)) {
+        const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+        if (!conta) continue;
+
+        let token = conta.accessToken;
+        const margemSeguranca = 5 * 60 * 1000;
+        if (Date.now() + margemSeguranca >= Number(conta.expiresAt)) {
+          try {
+            const tRes = await mlService.refreshToken(conta.refreshToken);
+            token = tRes.access_token;
+            await prisma.contaML.update({
+              where: { id: conta.id },
+              data: { accessToken: token, refreshToken: tRes.refresh_token, expiresAt: BigInt(Date.now() + tRes.expires_in * 1000) }
+            });
+          } catch (_) {}
+        }
+
+        const headers = { Authorization: `Bearer ${token}` };
+        // Processa em chunks de 20
+        const CHUNK = 20;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const chunk = ids.slice(i, i + CHUNK);
+          try {
+            const resp = await axios.get(
+              `https://api.mercadolibre.com/items?ids=${chunk.join(',')}&attributes=id,shipping`,
+              { headers, timeout: 20000 }
+            );
+            const resultados = resp.data || [];
+            for (const entry of resultados) {
+              if (entry.code !== 200 || !entry.body) continue;
+              const body = entry.body;
+              const dim = body.shipping?.dimensions ?? null;
+              resultado[body.id] = dim;
+
+              // Atualiza dadosML no banco
+              const anuncio = await prisma.anuncioML.findUnique({ where: { id: body.id } });
+              if (anuncio) {
+                const dadosAtual = anuncio.dadosML || {};
+                await prisma.anuncioML.update({
+                  where: { id: body.id },
+                  data: {
+                    dadosML: {
+                      ...dadosAtual,
+                      shipping: { ...(dadosAtual.shipping || {}), dimensions: dim }
+                    }
+                  }
+                }).catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.error(`Erro ao buscar dimensões chunk: ${e.message}`);
+          }
+        }
+      }
+
+      res.json({ ok: true, resultado }); // { itemId: "10x5x30,500" | null }
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
+    }
+  },
+
+  async atualizarDimensoes(req, res) {
+    try {
+      const { userId, items, modo, dimensoes } = req.body;
+      if (!userId || !items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ erro: 'Parâmetros incompletos.' });
+      }
+      if (modo === 'novas' && !dimensoes) {
+        return res.status(400).json({ erro: 'Dimensões não informadas para o modo novas.' });
+      }
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId,
+          tipo: `Dimensões de Embalagem (${modo === 'novas' ? 'Novas' : 'Reenvio'})`,
+          alvo: `${items.length} anúncio(s)`,
+          conta: 'Várias Contas',
+          status: 'PENDENTE'
+        }
+      });
+
+      const job = await acoesMassaQueue.add('acoes-massa-job', {
+        tarefaId: tarefa.id,
+        userId,
+        items,
+        acao: 'dimensoes',
+        valor: { modo, dimensoes }
+      });
+
+      await prisma.tarefaFila.updateMany({
+        where: { id: tarefa.id },
+        data: { jobId: job.id }
+      });
+
+      res.json({ ok: true, message: 'Atualização de dimensões enviada para a fila.', jobId: job.id });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao enfileirar atualização de dimensões', detalhes: error.message });
+    }
+  },
+
   async acoesMassa(req, res) {
     try {
       const { userId, items, acao, valor, modoReplace } = req.body;

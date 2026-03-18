@@ -327,6 +327,38 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
             await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { deleted: 'true' }, { headers });
             await prisma.anuncioML.update({ where: { id: item.id }, data: { status: 'deleted' } }).catch(() => {});
             logAcao += `Anúncio EXCLUÍDO permanentemente.`;
+
+          } else if (acao === 'dimensoes') {
+            const { modo, dimensoes } = valor || {};
+            const anuncioAtual = await prisma.anuncioML.findUnique({ where: { id: item.id } });
+            const dadosMLAtual = anuncioAtual?.dadosML || {};
+
+            let dimStr;
+            if (modo === 'novas') {
+              if (!dimensoes) throw new Error('Dimensões não informadas.');
+              dimStr = dimensoes;
+            } else {
+              dimStr = dadosMLAtual?.shipping?.dimensions;
+              if (!dimStr) throw new Error('Item não possui dimensões cadastradas no banco para reenvio.');
+            }
+
+            await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, {
+              shipping: { dimensions: dimStr }
+            }, { headers });
+
+            const updatedDadosML = {
+              ...dadosMLAtual,
+              shipping: {
+                ...(dadosMLAtual?.shipping || {}),
+                dimensions: dimStr
+              }
+            };
+            await prisma.anuncioML.update({
+              where: { id: item.id },
+              data: { dadosML: updatedDadosML }
+            }).catch(() => {});
+
+            logAcao += `Dimensões atualizadas: ${dimStr}.`;
           }
 
           sucessos++;

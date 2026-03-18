@@ -48,4 +48,6 @@ router.post('/api/ml/webhook', mlController.handleWebhook);
 router.post('/api/ml/sync-perguntas-iniciais', mlController.syncPerguntasIniciais);
 
 router.post('/api/ml/acoes-massa', mlController.acoesMassa);
+router.post('/api/ml/dimensoes-embalagem', mlController.atualizarDimensoes);
+router.post('/api/ml/buscar-dimensoes-ml', mlController.buscarDimensoesML);
 export default router;

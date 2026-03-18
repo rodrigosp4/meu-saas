@@ -275,7 +275,7 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
       // ─── 2a. Multiget de detalhes ───
       // ★ CORREÇÃO 2: NÃO mistura include_attributes=all com attributes=...
       // O Python usa UM ou OUTRO. Usar ambos gera payloads enormes e timeouts.
-      const attrs = 'id,title,category_id,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health,pictures';
+      const attrs = 'id,title,category_id,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health,pictures,shipping';
       const detRes = await mlClient.get(
         `https://api.mercadolibre.com/items?ids=${idsStr}&attributes=${attrs}`,
         { headers }

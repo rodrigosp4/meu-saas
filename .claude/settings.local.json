@@ -5,7 +5,8 @@
       "Bash(grep -E \"\\(frontend|src\\)$\")",
       "Bash(ls -la /c/Users/Rodrigo/meu-saas/src/components/*.jsx)",
       "Bash(grep -v \"^$\")",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''calculadora_marketplace.py'',''r'',encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK - sem erros de sintaxe''\\)\")"
     ]
   }
 }

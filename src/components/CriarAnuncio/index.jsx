@@ -633,6 +633,9 @@ const publicarAnuncios = async () => {
 
   const filhos = detalhesProduto.filhos || [];
 
+  const isAutoPecasCategory = (categoriaSelecionada?.domain_name && /VEHICLE|AUTO|MOTOR/i.test(categoriaSelecionada.domain_name)) || 
+                              atributosCategoria.some(a => ['POSITION', 'PART_NUMBER', 'OEM', 'COMPATIBILITY'].includes(a.id));
+
   return (
     <div className="max-w-6xl mx-auto pb-12">
       
@@ -760,8 +763,8 @@ const publicarAnuncios = async () => {
         fotosUrls={imagensOrdenadas.filter(u => u.trim())}
       />
 
-      {/* ===== SEÇÃO AUTOPEÇAS (visível apenas se categoria tem POSITION) ===== */}
-      {atributosCategoria.some(a => a.id === 'POSITION') && (
+      {/* ===== SEÇÃO AUTOPEÇAS (visível para categorias automotivas) ===== */}
+      {isAutoPecasCategory && (
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
           <h3 className="font-black text-gray-800 mb-1 flex items-center gap-2 text-base">
             🚗 Autopeças

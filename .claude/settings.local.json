@@ -6,7 +6,17 @@
       "Bash(ls -la /c/Users/Rodrigo/meu-saas/src/components/*.jsx)",
       "Bash(grep -v \"^$\")",
       "Bash(tasklist)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\(''calculadora_marketplace.py'',''r'',encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK - sem erros de sintaxe''\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''calculadora_marketplace.py'',''r'',encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK - sem erros de sintaxe''\\)\")",
+      "Bash(ls \"/c/Users/Rodrigo/Downloads/calculadora_marketplace/calculadora_marketplace - Copia \\(2\\)/__pycache__/\")",
+      "Bash(curl -s http://127.0.0.1:7841)",
+      "Bash(stat \"/c/Users/Rodrigo/Downloads/calculadora_marketplace/calculadora_marketplace - Copia \\(2\\)/calculadora_marketplace.py\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 26600 /F)",
+      "Bash(taskkill /PID 60728 /F)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -rn \"Delivery by Amazon\\\\|Cálculo com tarifa\\\\|comissão por categoria\" c:/Users/Rodrigo/meu-saas/ --include=*.jsx --include=*.tsx --include=*.js --include=*.html -i)",
+      "Bash(grep -rn \"Buscar no Tiny\\\\|Custo.*Produto.*R$\\\\|Categoria Amazon\\\\|Regra de Precificação\\\\|Dimensões e Peso\" c:/Users/Rodrigo/meu-saas/ --include=*.jsx --include=*.tsx --include=*.js)",
+      "Bash(grep -rn \"Buscar no Tiny\\\\|Custo do Produto\\\\|Categoria Amazon\\\\|Regra de Precificação\\\\|Dimensões e Peso\" c:/Users/Rodrigo/meu-saas/src/ --include=*.jsx --include=*.tsx --include=*.js)"
     ]
   }
 }

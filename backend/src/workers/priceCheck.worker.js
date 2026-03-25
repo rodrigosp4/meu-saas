@@ -27,9 +27,9 @@ function parseTinyPrice(val) {
   return Number(String(val).replace(',', '.'));
 }
 
-async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 4) {
+async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 6) {
   const skuStr = String(sku).trim().toLowerCase();
-  const delayMs = Math.max(tinyLimits?.delayMs || 1500, 1500);
+  const delayMs = tinyLimits?.delayMs ?? 1500;
 
   for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
     try {
@@ -49,7 +49,7 @@ async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 4) {
 
         const retorno = searchRes.data?.retorno;
 
-        if (retorno?.codigo_erro == 8 || String(retorno?.erros?.[0]?.erro || '').toLowerCase().includes('limite')) {
+        if (retorno?.codigo_erro == 8 || retorno?.codigo_erro == 6 || String(retorno?.erros?.[0]?.erro || '').toLowerCase().includes('limite')) {
           throw new Error('RATE_LIMIT_JSON');
         }
 
@@ -68,8 +68,11 @@ async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 4) {
         const exactMatch = produtos.map(p => p.produto).find(p => String(p.codigo || '').trim().toLowerCase() === skuStr);
 
         if (exactMatch) {
+          if (exactMatch.tipoVariacao !== 'P' && exactMatch.classe_produto !== 'V') {
+            return { preco: parseTinyPrice(exactMatch.preco), preco_promocional: parseTinyPrice(exactMatch.preco_promocional), preco_custo: parseTinyPrice(exactMatch.preco_custo) };
+          }
           foundCandidateId = exactMatch.id;
-          isParentCandidate = (exactMatch.tipoVariacao === 'P' || exactMatch.classe_produto === 'V');
+          isParentCandidate = true;
           break;
         } else {
           candidateIdsToInspect.push(...produtos.map(p => p.produto.id));
@@ -171,11 +174,14 @@ async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 4) {
 
     } catch (err) {
       const isRateLimit = err.message === 'RATE_LIMIT_JSON' || err.response?.status === 429;
-      const isNetwork =['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
-      if (tentativa < tentativas) { await delay(isRateLimit ? 10000 : (isNetwork ? 6000 * tentativa : 4000 * tentativa)); continue; }
-      if (isRateLimit) return { error: `Limite de requisições excedido na API da Tiny (Rate Limit).` };
-      if (isNetwork) return { error: `A API da Tiny recusou a conexão (Sobrecarga / Cloudflare).` };
-      return { error: `Falha na API Tiny: ${err.message}` };
+      const isNetwork = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
+      if (tentativa < tentativas) {
+        await delay(isRateLimit ? (20000 + tentativa * 10000) : (isNetwork ? 4000 * tentativa : 3000));
+        continue;
+      }
+      if (isRateLimit) return { error: `Limite de requisições excedido na API da Tiny.` };
+      if (isNetwork) return { error: `Falha de rede com a API da Tiny.` };
+      return { error: `Erro Tiny: ${err.message}` };
     }
   }
   return null;
@@ -367,44 +373,61 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
     if (tinyToken && modo !== 'manual') {
       const skusConhecidos = [...new Set(anunciosCompletos.map(a => a.sku).filter(Boolean))];
       if (skusConhecidos.length > 0) {
-        const concSkus = tinyLimits.blocked ? 0
-          : tinyLimits.delayMs <= 500  ? 3
-          : tinyLimits.delayMs <= 1000 ? 2
-          : 1;
+        const chunkPreFetch = tinyLimits.blocked ? 1 : (tinyLimits.concurrency || 2);
 
-        console.log(`[PriceCheck] Pré-carregando ${skusConhecidos.length} SKUs (concorrência: ${concSkus})...`);
+        console.log(`[PriceCheck] Pré-carregando ${skusConhecidos.length} SKUs (chunk: ${chunkPreFetch})...`);
 
         let skusCarregados = 0;
-        await new Promise(resolve => {
-          const fila = [...skusConhecidos];
-          const emAndamento = new Set();
-
-          function despachar() {
-            while (emAndamento.size < concSkus && fila.length > 0) {
-              const sku = fila.shift();
-              const p = fetchPrecoTiny(sku, tinyToken, tinyLimits).then(precos => {
-                // ✅ CORREÇÃO: Trata o NOT_FOUND corretamente no mapa
-                precosTinyMap[sku] = (precos && !precos.error) ? precos : (precos?.error ? precos : 'NOT_FOUND');
-              }).catch(() => {
-                precosTinyMap[sku] = 'NOT_FOUND';
-              }).finally(() => {
-                skusCarregados++;
-                const pct = Math.floor((skusCarregados / skusConhecidos.length) * 100);
-                prisma.tarefaFila.updateMany({
-                  where: { id: tarefaId },
-                  data: { detalhes: `Processando... ${skusCarregados}/${skusConhecidos.length} (${pct}%)\n===\n>> Carregando preços do Tiny ERP...` }
-                }).catch(() => {});
-                emAndamento.delete(p);
-                if (fila.length > 0) despachar();
-                else if (emAndamento.size === 0) resolve();
-              });
-              emAndamento.add(p);
+        for (let i = 0; i < skusConhecidos.length; i += chunkPreFetch) {
+          const lote = skusConhecidos.slice(i, i + chunkPreFetch);
+          await Promise.all(lote.map(async (sku) => {
+            try {
+              const precos = await fetchPrecoTiny(sku, tinyToken, tinyLimits);
+              precosTinyMap[sku] = (precos && !precos.error) ? precos : (precos?.error ? precos : 'NOT_FOUND');
+            } catch {
+              precosTinyMap[sku] = 'NOT_FOUND';
             }
-            if (fila.length === 0 && emAndamento.size === 0) resolve();
+            skusCarregados++;
+          }));
+          const pct = Math.floor((skusCarregados / skusConhecidos.length) * 100);
+          await prisma.tarefaFila.updateMany({
+            where: { id: tarefaId },
+            data: { detalhes: `Processando... ${skusCarregados}/${skusConhecidos.length} (${pct}%)\n===\n>> Carregando preços do Tiny ERP...` }
+          }).catch(() => {});
+        }
+
+        // Segunda passagem: re-tenta SKUs com rate limit após janela resetar
+        const skusRateLimit = Object.entries(precosTinyMap)
+          .filter(([, v]) => v?.error?.includes('Limite') || v?.error?.includes('limit'))
+          .map(([sku]) => sku);
+
+        if (skusRateLimit.length > 0) {
+          console.log(`[PriceCheck] ${skusRateLimit.length} SKU(s) com rate limit. Aguardando 65s para re-tentar...`);
+          await prisma.tarefaFila.updateMany({
+            where: { id: tarefaId },
+            data: { detalhes: `Processando... ${skusCarregados}/${skusConhecidos.length} (100%)\n===\n>> ${skusRateLimit.length} SKU(s) com limite excedido. Aguardando 65s para re-tentar...` }
+          }).catch(() => {});
+          await delay(65000);
+
+          for (let i = 0; i < skusRateLimit.length; i += chunkPreFetch) {
+            const lote = skusRateLimit.slice(i, i + chunkPreFetch);
+            await Promise.all(lote.map(async (sku) => {
+              try {
+                const precos = await fetchPrecoTiny(sku, tinyToken, tinyLimits, 4);
+                if (precos && !precos.error) precosTinyMap[sku] = precos;
+                else if (precos?.error) precosTinyMap[sku] = precos;
+              } catch { /* mantém erro anterior */ }
+            }));
+            const recuperados = skusRateLimit.slice(0, i + chunkPreFetch).filter(s => precosTinyMap[s] && !precosTinyMap[s]?.error).length;
+            await prisma.tarefaFila.updateMany({
+              where: { id: tarefaId },
+              data: { detalhes: `Processando... ${skusCarregados}/${skusConhecidos.length} (100%)\n===\n>> Re-tentando SKUs: ${Math.min(i + chunkPreFetch, skusRateLimit.length)}/${skusRateLimit.length} (${recuperados} recuperados)` }
+            }).catch(() => {});
           }
 
-          if (concSkus > 0) despachar(); else resolve();
-        });
+          const totalRecuperados = skusRateLimit.filter(s => precosTinyMap[s] && !precosTinyMap[s]?.error).length;
+          console.log(`[PriceCheck] Re-tentativa concluída: ${totalRecuperados}/${skusRateLimit.length} recuperados.`);
+        }
 
         console.log(`[PriceCheck] Pré-carga concluída. ${Object.keys(precosTinyMap).length} SKUs em cache.`);
       }

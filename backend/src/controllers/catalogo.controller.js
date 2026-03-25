@@ -255,9 +255,13 @@ export const catalogoController = {
 
       const { token } = await getValidToken(contaId, userId);
 
+      // category_id deve ser um ID numérico (ex: MLB1053), não um domain_id (MLB-CELLPHONES).
+      // Para publicação no catálogo com catalog_product_id, o ML deriva a categoria automaticamente.
+      const validCategoryId = categoryId && !categoryId.includes('-') ? categoryId : undefined;
+
       const payload = {
         site_id: siteId || 'MLB',
-        category_id: categoryId,
+        ...(validCategoryId ? { category_id: validCategoryId } : {}),
         price: Number(price),
         currency_id: 'BRL',
         available_quantity: Number(quantity) || 1,

@@ -268,7 +268,23 @@ export const catalogoController = {
           });
           finalCategoryId = prodResp.data?.buy_box_winner?.category_id;
 
-          // 2) Fallback: category predictor by product name
+          // 2) Fallback: domain_id to generic name string search
+          if (!finalCategoryId && prodResp.data?.domain_id) {
+            try {
+              const parsedDomain = prodResp.data.domain_id.replace(/^MLB-/, '').replace(/_/g, ' ');
+              const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
+                params: { limit: 1, q: parsedDomain },
+                timeout: 10000
+              });
+              if (domResp.data && domResp.data.length > 0) {
+                finalCategoryId = domResp.data[0].category_id;
+              }
+            } catch (e) {
+              console.log('[publishDirect] aviso: erro no domain_discovery via domain_id:', e.message);
+            }
+          }
+
+          // 3) Fallback: category predictor by product name
           if (!finalCategoryId && prodResp.data?.name) {
             try {
               const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
@@ -279,7 +295,7 @@ export const catalogoController = {
                 finalCategoryId = domResp.data[0].category_id;
               }
             } catch (e) {
-              console.log('[publishDirect] aviso: erro no domain_discovery:', e.message);
+              console.log('[publishDirect] aviso: erro no domain_discovery via name:', e.message);
             }
           }
 

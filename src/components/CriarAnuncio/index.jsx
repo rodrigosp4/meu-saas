@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useContasML } from '../../contexts/ContasMLContext';
 import { stripHtml } from '../../utils/formatters';
+import { ModalPreenchimentoRapido } from '../CompatibilidadeAutopecas';
 
 import FormularioBasico from './FormularioBasico';
 import SeletorCategoria from './SeletorCategoria';
@@ -30,6 +32,7 @@ const parseGrade = (gradeRaw) => {
 
 // 1. ADICIONADO O usuarioId AQUI NAS PROPS
 export default function CriarAnuncio({ produto, usuarioId }) {
+  const { tinyToken } = useContasML();
   const [detalhesProduto, setDetalhesProduto] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -50,12 +53,15 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   // Gerenciamento de imagens
   const [imagensOrdenadas, setImagensOrdenadas] = useState([]);
   const [uploadando, setUploadando] = useState(false);
+  const [removendoFundo, setRemovendoFundo] = useState(false);
 
   // Autopeças (pós-criação)
   const [perfisCompat, setPerfisCompat] = useState([]);
   const [perfilCompatId, setPerfilCompatId] = useState('');
   const [perfilCompatData, setPerfilCompatData] = useState(null);
   const [posicoesSelecionadas, setPosicoesSelecionadas] = useState(new Set());
+  const [compatRapida, setCompatRapida] = useState(null);
+  const [modalPreenchRapido, setModalPreenchRapido] = useState(false);
 
   // Categorias e Ficha
   const [categoriaSelecionada, setCategoriaSelecionada] = useState(null);
@@ -117,8 +123,6 @@ export default function CriarAnuncio({ produto, usuarioId }) {
     setIsLoading(true);
     setFetchError(null);
     try {
-      const userDb = JSON.parse(localStorage.getItem('saas_usuario'));
-      const tinyToken = userDb?.tinyToken;
       const res = await fetch('/api/tiny-produto-detalhes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -147,9 +151,27 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       }
 
       setDetalhesProduto(data);
-      // Inicializa imagens a partir dos anexos do Tiny
+      // Inicializa imagens — prefere imagens customizadas (tratadas) salvas no DB
       const urlsIniciais = (data.anexos || []).map(img => img.anexo || img.url).filter(Boolean);
-      setImagensOrdenadas(urlsIniciais);
+      try {
+        if (produto?.sku && usuarioId) {
+          const customRes = await fetch(`/api/produto-imagens-custom?userId=${usuarioId}&sku=${encodeURIComponent(produto.sku)}`);
+          if (customRes.ok) {
+            const customData = await customRes.json();
+            if (Array.isArray(customData.imagens) && customData.imagens.length > 0) {
+              setImagensOrdenadas(customData.imagens);
+            } else {
+              setImagensOrdenadas(urlsIniciais);
+            }
+          } else {
+            setImagensOrdenadas(urlsIniciais);
+          }
+        } else {
+          setImagensOrdenadas(urlsIniciais);
+        }
+      } catch (_) {
+        setImagensOrdenadas(urlsIniciais);
+      }
       const nome = (data.nome || '').substring(0, 60);
       setTituloAnuncio(nome);
       setPesoEmbalagem(data.peso_bruto || 0.1);
@@ -174,10 +196,39 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       const res = await fetch(`/api/ml/category-attributes/${catId}`);
       const data = await res.json();
       setAtributosCategoria(data);
+      const d = detalhesProduto || {};
+
+      // Helper: encontra opção de select por nome aproximado
+      const findOpt = (attr, needle) => {
+        if (!needle || !attr.values?.length) return null;
+        const low = String(needle).toLowerCase();
+        return attr.values.find(v => v.name.toLowerCase().includes(low) || low.includes(v.name.toLowerCase())) || null;
+      };
+
+      // Mapeamento origem Tiny: 0=Nacional, 1=Estrangeira/Importada, 2=Nacional c/ importado
+      const origemKeyword = { 0: 'nacional', 1: 'import', 2: 'nacional' }[Number(d.origem)] ?? '';
+
       const valores = {};
       data.forEach(a => {
-        if (a.id === 'BRAND') valores[a.id] = detalhesProduto?.marca || '';
-        else if (a.id === 'GTIN') valores[a.id] = detalhesProduto?.gtin || '';
+        if (a.id === 'BRAND')                 { if (d.marca)       valores[a.id] = d.marca; }
+        else if (a.id === 'GTIN')             { if (d.gtin)        valores[a.id] = d.gtin; }
+        else if (a.id === 'SELLER_SKU')       { if (d.codigo)      valores[a.id] = String(d.codigo); }
+        else if (a.id === 'MPN')              { if (d.mpn)         valores[a.id] = String(d.mpn); }
+        else if (a.id === 'SELLER_PACKAGE_HEIGHT') { if (d.alturaEmbalagem)      valores[a.id] = `${d.alturaEmbalagem} cm`; }
+        else if (a.id === 'SELLER_PACKAGE_WIDTH')  { if (d.larguraEmbalagem)     valores[a.id] = `${d.larguraEmbalagem} cm`; }
+        else if (a.id === 'SELLER_PACKAGE_LENGTH')  { if (d.comprimentoEmbalagem) valores[a.id] = `${d.comprimentoEmbalagem} cm`; }
+        else if (a.id === 'SELLER_PACKAGE_WEIGHT')  { if (d.peso_bruto)  valores[a.id] = `${d.peso_bruto} kg`; }
+        else if (a.id === 'IS_KIT') {
+          const isKit = d.tipo_produto === 'K';
+          const opt = findOpt(a, isKit ? 'sim' : 'não') || findOpt(a, isKit ? 'yes' : 'no');
+          if (opt) valores[a.id] = { value_id: String(opt.id), value_name: opt.name };
+        }
+        else if (a.id === 'ORIGIN' || a.id === 'PRODUCT_ORIGIN') {
+          if (origemKeyword) {
+            const opt = findOpt(a, origemKeyword);
+            if (opt) valores[a.id] = { value_id: String(opt.id), value_name: opt.name };
+          }
+        }
       });
       setValoresAtributos(valores);
     } catch(e) {}
@@ -212,6 +263,94 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       setUploadando(false);
     }
   }, [usuarioId]);
+
+  // Remove fundo da imagem (idx), converte para JPG 1000x1000 e re-hospeda no Imgur
+  const removerFundoEOtimizar = useCallback(async (idx) => {
+    const urlAtual = imagensOrdenadas[idx];
+    if (!urlAtual || !urlAtual.trim()) return alert('Nenhuma imagem na posição de capa.');
+    setRemovendoFundo(true);
+    try {
+      // 1. Prepara payload. Se for blob/base64 local faz leitura, senão envia a URL para o backend contornar o CORS
+      let payloadParams = {};
+      if (urlAtual.startsWith('data:image')) {
+        payloadParams.imageBase64 = urlAtual.split(',')[1];
+      } else if (urlAtual.startsWith('blob:') || urlAtual.startsWith('blob/')) {
+        const imgRes = await fetch(urlAtual);
+        const blob = await imgRes.blob();
+        const originalBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve(e.target.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        payloadParams.imageBase64 = originalBase64;
+      } else {
+        payloadParams.imageUrl = urlAtual;
+      }
+
+      // 2. Remove fundo via backend (remove.bg)
+      const rbRes = await fetch(`/api/usuario/${usuarioId}/imagem/remover-fundo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadParams),
+      });
+      const rbData = await rbRes.json();
+      if (!rbRes.ok) throw new Error(rbData.erro || 'Erro no remove.bg');
+
+      // 3. Converte PNG transparente → JPG 1000x1000 com fundo branco via Canvas
+      const jpegBase64 = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 1000;
+          canvas.height = 1000;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, 1000, 1000);
+          const scale = Math.min(1000 / img.width, 1000 / img.height);
+          const x = (1000 - img.width * scale) / 2;
+          const y = (1000 - img.height * scale) / 2;
+          ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+          resolve(canvas.toDataURL('image/jpeg', 0.93).split(',')[1]);
+        };
+        img.onerror = reject;
+        img.src = `data:image/png;base64,${rbData.pngBase64}`;
+      });
+
+      // 4. Faz upload do JPG no Imgur
+      const upRes = await fetch(`/api/usuario/${usuarioId}/imgur/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: jpegBase64 }),
+      });
+      const upData = await upRes.json();
+      if (!upRes.ok) throw new Error(upData.erro || 'Erro no upload Imgur');
+
+      // 5. Move original para slot 2 e coloca imagem tratada na capa
+      setImagensOrdenadas(prev => {
+        const arr = [...prev];
+        const originalUrl = arr[idx];
+        // Insere a imagem tratada no slot idx e empurra o original logo após
+        arr.splice(idx, 1, upData.url, originalUrl);
+        const novas = arr.slice(0, 12); // respeita limite ML
+
+        // 6. Salva no banco para não precisar re-tratar na próxima vez
+        if (produto?.sku && usuarioId) {
+          fetch('/api/produto-imagens-custom', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: usuarioId, sku: produto.sku, imagens: novas }),
+          }).catch(() => {});
+        }
+
+        return novas;
+      });
+    } catch (e) {
+      alert(`Erro ao remover fundo: ${e.message}`);
+    } finally {
+      setRemovendoFundo(false);
+    }
+  }, [usuarioId, imagensOrdenadas, produto]);
 
   // Carrega dados do perfil de compatibilidade selecionado
   const handlePerfilCompatChange = async (id) => {
@@ -446,9 +585,16 @@ const publicarAnuncios = async () => {
     let mensagensErro =[];
 
     const attrFinais = Object.entries(valoresAtributos)
-    .filter(([_, v]) => v && (typeof v !== 'object' || v.value_id) && String(v).trim() !== '')
-    .map(([id, v]) => typeof v === 'object' ? { id, value_id: v.value_id, value_name: v.value_name } : { id, value_name: String(v) })
-    .filter(a => !a.id.includes('PACKAGE')); 
+    .filter(([_, v]) => v && (typeof v !== 'object' || v.value_id || v.value_name) && String(v).trim() !== '')
+    .map(([id, v]) => {
+      if (typeof v === 'object') {
+        const attr = { id, value_name: v.value_name };
+        if (v.value_id) attr.value_id = v.value_id; // só inclui value_id se não for vazio
+        return attr;
+      }
+      return { id, value_name: String(v) };
+    })
+    .filter(a => !a.id.includes('PACKAGE'));
 
     attrFinais.push({ id: 'SELLER_PACKAGE_LENGTH', value_name: `${Math.round(comprimentoEmbalagem)} cm` });
     attrFinais.push({ id: 'SELLER_PACKAGE_HEIGHT', value_name: `${Math.round(alturaEmbalagem)} cm` });
@@ -499,7 +645,7 @@ const publicarAnuncios = async () => {
               enviarAtacado: strategy.enviarAtacado || false,
               inflar: strategy.inflar || 0,
               ativarPromocoes: strategy.ativarPromocoes || false,
-              compatibilidades: perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : [],
+              compatibilidades: compatRapida ? compatRapida.slice(0, 200) : (perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : []),
               posicoes: Array.from(posicoesSelecionadas),
             })
         });
@@ -570,7 +716,7 @@ const publicarAnuncios = async () => {
 
           const payloadPadrao = {
               title: tituloAnuncio,
-              family_name: tituloAnuncio.substring(0, 60), // <-- ML AGORA EXIGE ISSO AQUI
+              ...(!temVariacoes ? { family_name: tituloAnuncio.substring(0, 60) } : {}),
               category_id: categoriaSelecionada.category_id,
               price: Number(precoObj.precoFinal.toFixed(2)),
               currency_id: 'BRL',
@@ -637,6 +783,7 @@ const publicarAnuncios = async () => {
                               atributosCategoria.some(a => ['POSITION', 'PART_NUMBER', 'OEM', 'COMPATIBILITY'].includes(a.id));
 
   return (
+    <>
     <div className="max-w-6xl mx-auto pb-12">
       
       <div className="mb-6 flex items-center justify-between">
@@ -680,6 +827,7 @@ const publicarAnuncios = async () => {
             detalhesProduto={detalhesProduto} setImagemAmpliada={setImagemAmpliada}
             imagensOrdenadas={imagensOrdenadas} onImagensChange={setImagensOrdenadas}
             uploadando={uploadando} onUploadImagem={uploadParaImgur}
+            onRemoverFundo={removerFundoEOtimizar} removendoFundo={removendoFundo}
           />
         )}
 
@@ -780,21 +928,36 @@ const publicarAnuncios = async () => {
               <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
                 🔗 Compatibilidade de Veículos
               </label>
-              {perfisCompat.length === 0 ? (
-                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                  Nenhum perfil salvo. Crie perfis na aba <strong>Compatibilidade</strong>.
-                </p>
-              ) : (
-                <select
-                  value={perfilCompatId}
-                  onChange={e => handlePerfilCompatChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+              <div className="flex gap-2 items-start">
+                {perfisCompat.length === 0 ? (
+                  <p className="flex-1 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                    Nenhum perfil salvo. Crie perfis na aba <strong>Compatibilidade</strong>.
+                  </p>
+                ) : (
+                  <select
+                    value={perfilCompatId}
+                    onChange={e => { handlePerfilCompatChange(e.target.value); setCompatRapida(null); }}
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  >
+                    <option value="">-- Não aplicar --</option>
+                    {perfisCompat.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setModalPreenchRapido(true)}
+                  className="px-3 py-2 text-sm font-bold border border-violet-300 text-violet-700 bg-violet-50 rounded-md hover:bg-violet-100 transition whitespace-nowrap"
                 >
-                  <option value="">-- Não aplicar --</option>
-                  {perfisCompat.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                </select>
+                  ⚡ Preenchimento Rápido
+                </button>
+              </div>
+              {compatRapida && (
+                <p className="mt-2 text-xs text-violet-700 font-semibold bg-violet-50 border border-violet-200 rounded px-2 py-1 flex items-center justify-between">
+                  <span>⚡ {compatRapida.length} veículos (preenchimento rápido) — enviados após criação.</span>
+                  <button type="button" onClick={() => setCompatRapida(null)} className="ml-2 text-violet-400 hover:text-violet-700">✕</button>
+                </p>
               )}
-              {perfilCompatData && (
+              {!compatRapida && perfilCompatData && (
                 <p className="mt-2 text-xs text-green-700 font-semibold bg-green-50 border border-green-200 rounded px-2 py-1">
                   ✅ {(perfilCompatData.compatibilities || []).length} veículos — será enviado após a criação.
                 </p>
@@ -850,5 +1013,15 @@ const publicarAnuncios = async () => {
       </div>
 
     </div>
+
+    {modalPreenchRapido && (
+      <ModalPreenchimentoRapido
+        contaId={contasML[0]?.id}
+        usuarioId={usuarioId}
+        onClose={() => setModalPreenchRapido(false)}
+        onAplicarLocal={(veiculos) => { setCompatRapida(veiculos); setPerfilCompatId(''); setPerfilCompatData(null); }}
+      />
+    )}
+    </>
   );
 }

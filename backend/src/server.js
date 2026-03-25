@@ -24,6 +24,7 @@ process.on('unhandledRejection', (reason) => {
 // Inicia os workers BullMQ junto com o servidor
 import './workers/sync.worker.js';
 import './workers/acoes.worker.js';
+import './workers/promo.worker.js';
 
 app.listen(config.port, () => {
   console.log(`🚀 Servidor rodando na porta ${config.port}`);

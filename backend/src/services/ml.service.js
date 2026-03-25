@@ -60,7 +60,11 @@ export const mlService = {
 
   async getCategoryAttributes(categoryId) {
     const res = await axios.get(`https://api.mercadolibre.com/categories/${categoryId}/attributes`);
-    return res.data.filter(attr => !attr.tags?.read_only);
+    return res.data.filter(attr =>
+      !attr.tags?.read_only &&
+      !attr.tags?.not_modifiable &&
+      !attr.tags?.fixed
+    );
   },
 
   async predictCategory(title) {
@@ -202,5 +206,67 @@ export const mlService = {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     return res.data;
+  },
+
+  // ── Métodos públicos para Monitor de Concorrentes ─────────────────────────
+
+  // Busca dados de até 20 itens sem autenticação (API pública)
+  async getPublicItems(itemIds) {
+    const ids = itemIds.slice(0, 20).join(',');
+    const attrs = 'id,title,price,available_quantity,sold_quantity,thumbnail,permalink,seller_id,seller';
+    const res = await axios.get(`https://api.mercadolibre.com/items?ids=${ids}&attributes=${attrs}`, {
+      timeout: 15000
+    });
+    return res.data; // array de { code, body } ou { code, body: { id, ... } }
+  },
+
+  // Busca perfil/reputação de um vendedor sem autenticação
+  async getPublicSellerInfo(sellerId) {
+    const res = await axios.get(
+      `https://api.mercadolibre.com/users/${sellerId}?attributes=id,nickname,seller_reputation,transactions`,
+      { timeout: 10000 }
+    );
+    return res.data;
+  },
+
+  // Extrai o ID de item MLB a partir de uma URL do ML
+  extractItemIdFromUrl(url) {
+    if (!url) return null;
+    const s = url.trim();
+
+    // 1. Tentar query params (Catálogo Seller Específico)
+    const queryItem =
+      s.match(/item_id[:%]3A(MLB\d+)/i) ||
+      s.match(/item_id:(MLB\d+)/i) ||
+      s.match(/[?&#]wid=(MLB\d+)/i) ||
+      s.match(/[?&#]sid=(MLB\d+)/i);
+    
+    if (queryItem) {
+      return queryItem[1].toUpperCase();
+    }
+
+    // Permite produto de catálogo de usuário (User Product / MLBU)
+    const upMatch = s.match(/(MLBU\d+)/i);
+    if (upMatch) {
+      return upMatch[1].toUpperCase();
+    }
+
+    // Permite produto de catálogo geral (/p/MLB... ou /products/MLB...)
+    const catMatch = s.match(/\/(?:p|products)\/(MLB\d+)/i) || s.match(/^(MLB\d+)$/i);
+    if (catMatch) {
+      return catMatch[1].toUpperCase();
+    }
+
+    // 2. Extração direta de item ID com traço
+    const itemTracao = s.match(/MLB-(\d+)/i);
+    if (itemTracao) return `MLB${itemTracao[1]}`;
+
+    // 3. Fallback: extrai o MLB e os números ignorando sufixos
+    const matchFallback = s.match(/MLB[-_]?(\d+)/i);
+    if (matchFallback) {
+      return `MLB${matchFallback[1]}`;
+    }
+
+    return null;
   }
 };

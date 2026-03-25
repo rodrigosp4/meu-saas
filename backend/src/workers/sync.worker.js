@@ -4,11 +4,14 @@ import './publish.worker.js';
 import './price.worker.js';
 import './priceCheck.worker.js';
 import './acoes.worker.js';
+import './cron.worker.js';
+import './promo.worker.js';
 
 import { Worker } from 'bullmq';
 import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
+import { getTinyRateLimit } from './../utils/tinyRateLimit.js';
 
 // Configuração de conexão com o Redis (Upstash) idêntica à da fila
 const connection = {
@@ -30,6 +33,13 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
   }
 
   await job.updateProgress(5);
+
+  const userRecord = await prisma.user.findUnique({ where: { id: userId }, select: { tinyPlano: true } });
+  const tinyLimits = getTinyRateLimit(userRecord?.tinyPlano);
+
+  if (tinyLimits.blocked) {
+    throw new Error('O plano "Começar" do Tiny ERP não permite integração via API. Atualize seu plano.');
+  }
 
   let idsToFetch = [];
 
@@ -62,13 +72,48 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       idsToFetch.push(...firstItems.map(p => p.produto.id));
 
       for (let page = 2; page <= totalPages && page <= 500; page++) {
-        await delay(350);
+        await delay(tinyLimits.delayMs);
         try {
           const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
             new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: page })
           );
           const items = res.data?.retorno?.produtos || [];
           idsToFetch.push(...items.map(p => p.produto.id));
+        } catch (pageErr) {
+          console.warn(`⚠️ Falha ao buscar página ${page}/${totalPages}: ${pageErr.message}`);
+        }
+      }
+
+    } else if (mode === 'novos') {
+      // Busca apenas produtos cujo SKU ainda NÃO existe no banco local
+      const produtosExistentes = await prisma.produto.findMany({
+        where: { userId },
+        select: { sku: true }
+      });
+      const skusExistentes = new Set(produtosExistentes.map(p => p.sku));
+
+      const firstRes = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
+        new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: 1 })
+      );
+      const totalPages = parseInt(firstRes.data?.retorno?.numero_paginas || '1', 10);
+      const firstItems = firstRes.data?.retorno?.produtos || [];
+
+      for (const p of firstItems) {
+        const codigo = String(p.produto?.codigo || '').trim();
+        if (codigo && !skusExistentes.has(codigo)) idsToFetch.push(p.produto.id);
+      }
+
+      for (let page = 2; page <= totalPages && page <= 500; page++) {
+        await delay(tinyLimits.delayMs);
+        try {
+          const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
+            new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: page })
+          );
+          const items = res.data?.retorno?.produtos || [];
+          for (const p of items) {
+            const codigo = String(p.produto?.codigo || '').trim();
+            if (codigo && !skusExistentes.has(codigo)) idsToFetch.push(p.produto.id);
+          }
         } catch (pageErr) {
           console.warn(`⚠️ Falha ao buscar página ${page}/${totalPages}: ${pageErr.message}`);
         }
@@ -98,7 +143,7 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
 
     while (tentativas < maxTentativas && !sucesso) {
       try {
-        await delay(350);
+        await delay(tinyLimits.delayMs);
 
         // ✅ Timeout adicionado para forçar o failover caso a requisição enrosque
         const [detRes, estRes] = await Promise.all([

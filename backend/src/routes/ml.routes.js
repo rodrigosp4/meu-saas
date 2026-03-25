@@ -11,6 +11,8 @@ router.get('/api/ml/categories-all', mlController.getAllCategories);
 router.get('/api/ml/category-attributes/:categoryId', mlController.getAttributes);
 router.get('/api/ml/item-category/:itemId', mlController.getItemCategory);
 router.get('/api/ml/item-description/:itemId', mlController.getItemDescription);
+router.get('/api/ml/item-clone-data/produto/:produtoId', mlController.getProdutoCloneData);
+router.get('/api/ml/item-clone-data/:itemId', mlController.getItemCloneData);
 router.get('/api/ml/item-pictures/:itemId', mlController.getItemPictures);
 router.post('/api/ml/gerar-descricao-ia', mlController.gerarDescricaoIA);
 router.get('/api/ml/predict-category', mlController.predictCategory);
@@ -25,6 +27,7 @@ router.get('/api/ml/anuncios', mlController.getAds);
 
 // ✅ NOVO: Endpoint para listar tags únicas dos anúncios
 router.get('/api/ml/anuncios/tags', mlController.getAdTags);
+router.get('/api/ml/recomendacoes-replicacao', mlController.getRecomendacoesReplicacao);
 // Endpoint para retornar apenas IDs (usado no "Selecionar Todos os Filtrados")
 router.get('/api/ml/anuncios/ids', mlController.getAdIds);
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useContasML } from '../contexts/ContasMLContext';
 
 // Extrai a string de dimensões do dadosML
 function getDimStr(anuncio) {
@@ -24,6 +25,7 @@ function StatusBadge({ temDimensoes }) {
 }
 
 export default function DimensoesEmbalagem({ usuarioId }) {
+  const { contas: contasMLCtx } = useContasML();
   const [contas, setContas] = useState([]);
   const [contasSelecionadas, setContasSelecionadas] = useState([]);
   const [anuncios, setAnuncios] = useState([]);
@@ -43,12 +45,10 @@ export default function DimensoesEmbalagem({ usuarioId }) {
   const [carregandoTodos, setCarregandoTodos] = useState(false);
   const LIMIT = 50;
 
-  // Carrega contas do localStorage
   useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
-    setContas(saved);
-    setContasSelecionadas(saved.map(c => c.id));
-  }, []);
+    setContas(contasMLCtx);
+    setContasSelecionadas(contasMLCtx.map(c => c.id));
+  }, [contasMLCtx]);
 
   const buscarAnuncios = useCallback(async (pg = 1) => {
     if (contasSelecionadas.length === 0) { setAnuncios([]); setTotal(0); return; }

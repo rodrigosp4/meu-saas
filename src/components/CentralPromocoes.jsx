@@ -136,32 +136,42 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
   async function handleBulkActivate() {
     setBulkLoading(true);
     setBulkResult(null);
-    let success = 0, errs = 0;
-    for (const item of candidateItems) {
-      if (itemActions[item.id]?.done) { success++; continue; }
-      try {
-        const body = {
-          userId: usuarioId,
+    try {
+      const itensParaFila = candidateItems.filter(item => !itemActions[item.id]?.done).map(item => {
+        const st = itemActions[item.id] || {};
+        const suggestedPrice = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
+        const dealPrice = st.dealPrice ?? suggestedPrice;
+        return {
           contaId: promo.contaId,
           itemId: item.id,
           promoId: promo.id,
           promoTipo: promo.tipo,
-          ...(item.offer_id ? { offerId: item.offer_id } : {}),
+          offerId: item.offer_id,
+          dealPrice: dealPrice,
+          topDealPrice: st.topDealPrice,
+          stock: st.stock,
         };
-        const res = await fetch('/api/promocoes/ativar-item', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (data.ok) { setItemAction(item.id, { done: true }); success++; }
-        else { setItemAction(item.id, { error: data.erro || 'Erro' }); errs++; }
-        await new Promise(r => setTimeout(r, 150));
-      } catch { errs++; }
+      });
+
+      if (itensParaFila.length === 0) { setBulkLoading(false); return; }
+
+      const res = await fetch('/api/promocoes/massa-fila', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, acao: 'ATIVAR', itens: itensParaFila }),
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        setBulkResult({ success: itensParaFila.length, errs: 0, msg: `Enviado para fila (Tarefa: ${data.tarefaId})` });
+        itensParaFila.forEach(i => setItemAction(i.itemId, { done: true }));
+      } else {
+        setBulkResult({ success: 0, errs: itensParaFila.length, msg: data.erro });
+      }
+    } catch (e) {
+      setBulkResult({ success: 0, errs: candidateItems.length, msg: e.message });
     }
-    setBulkResult({ success, errs });
     setBulkLoading(false);
-    if (success > 0) onRefresh?.();
   }
 
   return (
@@ -231,7 +241,7 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
               )}
               {bulkResult && (
                 <span className={`text-xs font-semibold ${bulkResult.errs > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                  {bulkResult.success} ativado(s){bulkResult.errs > 0 ? `, ${bulkResult.errs} erro(s)` : ''}
+                  {bulkResult.msg || `${bulkResult.success} enviado(s) para fila${bulkResult.errs > 0 ? `, ${bulkResult.errs} erro(s)` : ''}`}
                 </span>
               )}
             </div>
@@ -648,11 +658,12 @@ function TabCriarCampanha({ usuarioId, contas }) {
   const [result, setResult] = useState(null);
 
   useEffect(() => {
-    if (!form.contaId) { setAnuncios([]); return; }
+    if (!form.contaId) { setAnuncios([]); setSelected({}); return; }
     setLoadingAds(true);
-    fetch(`/api/ml/anuncios?contasIds=${form.contaId}&status=active&limit=500`) // Aumentado o limite
+    setSelected({}); // Limpa seleção ao trocar de conta
+    fetch(`/api/ml/anuncios?contasIds=${form.contaId}&status=active&limit=500`)
       .then(r => r.json())
-      .then(data => setAnuncios(data.anuncios || [])) // Corrigido de 'results' para 'anuncios'
+      .then(data => setAnuncios(data.anuncios || []))
       .catch(() => setAnuncios([]))
       .finally(() => setLoadingAds(false));
   }, [form.contaId]);
@@ -710,24 +721,24 @@ function TabCriarCampanha({ usuarioId, contas }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
+    // Filtro estrito: preço válido, menor que o preço original, e item ainda na lista atual
     const itens = Object.entries(selected)
-      .filter(([, v]) => v.dealPrice && parseFloat(v.dealPrice) > 0)
+      .filter(([itemId, v]) => v.dealPrice && parseFloat(v.dealPrice) > 0 && parseFloat(v.dealPrice) < v.ad.preco && anuncios.some(a => a.id === itemId))
       .map(([itemId, v]) => ({
         itemId,
         dealPrice: parseFloat(v.dealPrice),
         ...(v.topDealPrice && parseFloat(v.topDealPrice) > 0 ? { topDealPrice: parseFloat(v.topDealPrice) } : {}),
       }));
 
-    if (itens.length === 0) return alert('Selecione ao menos um item e defina um preço de promoção válido.');
+    if (itens.length === 0) return alert('Selecione ao menos um item e defina um preço de promoção válido (menor que o preço original).');
     if (new Date(form.finishDate) < new Date(form.startDate)) return alert('A data de fim não pode ser anterior à data de início.');
 
     setSaving(true);
     setResult(null);
     try {
-      // Formata as datas para o padrão esperado pela API do ML
       const startDate = form.startDate ? `${form.startDate}T00:00:00` : '';
       const finishDate = form.finishDate ? `${form.finishDate}T23:59:59` : '';
-      
+
       const res = await fetch('/api/promocoes/campanha-vendedor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -736,7 +747,7 @@ function TabCriarCampanha({ usuarioId, contas }) {
       const data = await res.json();
       setResult(data);
       if (data.ok) {
-        alert(`Campanha "${form.nome}" criada com sucesso! ${itens.length} iten(s) adicionado(s).`);
+        alert(`Campanha criada! Aviso: A API do ML associa todos os seus anúncios automaticamente como "Candidatos" à campanha, porém apenas os ${itens.length} iten(s) selecionados foram ativados com o desconto definido.`);
         setSelected({});
         setForm(prev => ({ ...prev, nome: '', startDate: '', finishDate: '' }));
       } else {
@@ -779,7 +790,7 @@ function TabCriarCampanha({ usuarioId, contas }) {
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Data de Fim <span className="text-gray-400 font-normal">(máx. 14 dias)</span></label>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Data de Fim <span className="text-gray-400 font-normal">(máx. 1 mês)</span></label>
             <input required type="date" value={form.finishDate} onChange={e => setF('finishDate', e.target.value)}
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-orange-300" />
           </div>
@@ -807,6 +818,21 @@ function TabCriarCampanha({ usuarioId, contas }) {
 
           <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
             <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide flex-1">Selecionar Itens</h3>
+            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-500 hover:text-gray-700 select-none">
+              <input
+                type="checkbox"
+                className="accent-orange-500 w-4 h-4 cursor-pointer"
+                checked={filteredAds.length > 0 && filteredAds.every(ad => !!selected[ad.id])}
+                onChange={e => {
+                  if (e.target.checked) {
+                    filteredAds.forEach(ad => { if (!selected[ad.id]) toggleSelect(ad); });
+                  } else {
+                    filteredAds.forEach(ad => { if (selected[ad.id]) toggleSelect(ad); });
+                  }
+                }}
+              />
+              Selecionar todos
+            </label>
             <span className="text-xs text-gray-400">{selectedCount} selecionado(s)</span>
             <input
               type="text" value={search} onChange={e => setSearch(e.target.value)}

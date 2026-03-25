@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { TAG_DISPLAY_MAP } from './GerenciadorAnuncios';
+import { useContasML } from '../contexts/ContasMLContext';
 
 // Tags que indicam problema de qualidade
 const QUALITY_TAGS = [
@@ -351,69 +352,12 @@ ${jsonTemplate}
         throw new Error('Nenhum anúncio encontrado para envio.');
       }
 
-      if (aba === 'atributos') {
-        const atributosParaEnviar = attrs
-          .filter((a) => marcados[a.id] && String(valores[a.id] || '').trim())
-          .map((a) => {
-            const valorLimpo = String(valores[a.id] || '').trim();
+      const resumo = [];
+      let algumEnvio = false;
 
-            const payload = {
-              id: a.id,
-              value_name: valorLimpo,
-            };
-
-            if (Array.isArray(a.values)) {
-              const match = a.values.find(
-                (v) => String(v.name || '').trim().toLowerCase() === valorLimpo.toLowerCase()
-              );
-
-              if (match?.id) {
-                payload.value_id = match.id;
-              }
-            }
-
-            return payload;
-          });
-
-        if (!atributosParaEnviar.length) {
-          alert('Nenhum atributo marcado para envio ou com valor preenchido.');
-          return;
-        }
-
-        const res = await fetch('/api/ml/acoes-massa', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: usuarioId,
-            items: allItems,
-            acao: 'atualizar_atributos',
-            valor: atributosParaEnviar,
-          }),
-        });
-
-        const data = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
-        }
-
-        alert(
-          `✅ ${atributosParaEnviar.length} atributo(s) enfileirado(s) para ${allItems.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`
-        );
-      } else if (aba === 'titulo') {
-        const novoTitulo = String(titulo || '').trim();
-
-        if (!novoTitulo) {
-          alert('O título está vazio.');
-          return;
-        }
-
-        if (!alterarTitulo) {
-          alert('Marque o checkbox para confirmar a alteração do título.');
-          return;
-        }
-
-        // Prepara todos os itens para envio, incluindo os que têm vendas
+      // --- TÍTULO ---
+      const novoTitulo = String(titulo || '').trim();
+      if (alterarTitulo && novoTitulo) {
         const itensParaEnviar = allItems.map(({ id, contaId }) => ({ id, contaId }));
         const itensComVendasCount = allItems.filter((ad) => Number(ad.vendas) > 0).length;
 
@@ -429,28 +373,55 @@ ${jsonTemplate}
         });
 
         const data = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
-        }
+        if (!res.ok) throw new Error(data?.erro || data?.message || 'Erro ao enviar título');
 
         tituloEnviado = novoTitulo;
+        algumEnvio = true;
 
-        let successMsg = `✅ Título enfileirado para ${itensParaEnviar.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`;
-
+        let msg = `✅ Título enfileirado para ${itensParaEnviar.length} anúncio(s).`;
         if (itensComVendasCount > 0) {
-          successMsg += `\n\n⚠️ ${itensComVendasCount} anúncio(s) possuem vendas. O sistema utilizará o método "Family Name" para alterar o título diretamente.`;
+          msg += ` (${itensComVendasCount} com vendas → usará Family Name)`;
         }
+        resumo.push(msg);
+      }
 
-        alert(successMsg);
-      } else {
-        const descricaoLimpa = String(descricao || '').trim();
+      // --- ATRIBUTOS ---
+      const atributosParaEnviar = attrs
+        .filter((a) => marcados[a.id] && String(valores[a.id] || '').trim())
+        .map((a) => {
+          const valorLimpo = String(valores[a.id] || '').trim();
+          const payload = { id: a.id, value_name: valorLimpo };
+          if (Array.isArray(a.values)) {
+            const match = a.values.find(
+              (v) => String(v.name || '').trim().toLowerCase() === valorLimpo.toLowerCase()
+            );
+            if (match?.id) payload.value_id = match.id;
+          }
+          return payload;
+        });
 
-        if (!descricaoLimpa) {
-          alert('A descrição está vazia.');
-          return;
-        }
+      if (atributosParaEnviar.length > 0) {
+        const res = await fetch('/api/ml/acoes-massa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: usuarioId,
+            items: allItems,
+            acao: 'atualizar_atributos',
+            valor: atributosParaEnviar,
+          }),
+        });
 
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.erro || data?.message || 'Erro ao enviar atributos');
+
+        algumEnvio = true;
+        resumo.push(`✅ ${atributosParaEnviar.length} atributo(s) enfileirado(s) para ${allItems.length} anúncio(s).`);
+      }
+
+      // --- DESCRIÇÃO ---
+      const descricaoLimpa = String(descricao || '').trim();
+      if (descricaoLimpa) {
         const res = await fetch('/api/ml/acoes-massa', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -463,16 +434,18 @@ ${jsonTemplate}
         });
 
         const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.erro || data?.message || 'Erro ao enviar descrição');
 
-        if (!res.ok) {
-          throw new Error(data?.erro || data?.message || 'Erro desconhecido');
-        }
-
-        alert(
-          `✅ Descrição enviada para ${allItems.length} anúncio(s)!\nAcompanhe na aba "Gerenciador de Fila".`
-        );
+        algumEnvio = true;
+        resumo.push(`✅ Descrição enfileirada para ${allItems.length} anúncio(s).`);
       }
 
+      if (!algumEnvio) {
+        alert('Nada para enviar. Preencha o título (e marque o checkbox), selecione atributos ou preencha a descrição.');
+        return;
+      }
+
+      alert(resumo.join('\n') + '\n\nAcompanhe na aba "Gerenciador de Fila".');
       onClose(true, tituloEnviado);
     } catch (e) {
       alert(`Erro: ${e.message}`);
@@ -783,6 +756,7 @@ function lerCache() {
 
 // ===== COMPONENTE PRINCIPAL =====
 export default function QualidadePublicacoes({ usuarioId }) {
+  const { contas: contasMLCtx } = useContasML();
   const [skuMap, setSkuMap] = useState(() => {
     const cache = lerCache();
     return cache ? cache.data : {};
@@ -866,7 +840,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
   }, [perfMap, usuarioId]);
 
   const carregarAnuncios = useCallback(async () => {
-    const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
+    const contas = contasMLCtx;
     if (!contas.length) {
       setStatusMsg('Nenhuma conta ML conectada. Configure em "Configurações".');
       return;
@@ -904,12 +878,13 @@ export default function QualidadePublicacoes({ usuarioId }) {
       for (const ad of todos) {
         const skuBase = ad.sku || null;
         const tkey = tituloClave(ad.titulo);
-        // Chave interna: SKU + título (evita misturar produtos diferentes com mesmo SKU)
-        const grupoKey = skuBase ? `${skuBase}__${tkey}` : `SEM_SKU_${ad.id}`;
+        // Chave interna: SKU normalizado (uppercase) + título — case-insensitive para não separar "SS-4938DD" de "Ss-4938dd"
+        const skuKey = skuBase ? skuBase.toUpperCase().trim() : null;
+        const grupoKey = skuKey ? `${skuKey}__${tkey}` : `SEM_SKU_${ad.id}`;
 
         if (!mapa[grupoKey]) {
           mapa[grupoKey] = {
-            sku: skuBase || `SEM_SKU_${ad.id}`, // SKU exibido na tabela
+            sku: skuKey || `SEM_SKU_${ad.id}`, // SKU exibido na tabela (sempre uppercase)
             ads: [],
             vendas: 0,
             health: 100,
@@ -983,7 +958,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [contasMLCtx]);
 
   const exportarCSV = () => {
     const linhas = [['SKU', 'Anúncios', 'Vendas', 'Health%', 'Catálogo', 'Tags/Avisos', 'Status']];

@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ModalPreenchimentoRapido } from './CompatibilidadeAutopecas';
+import { useAuth } from '../contexts/AuthContext';
+import { useContasML } from '../contexts/ContasMLContext';
 
 // ✅ Mapa de tradução das tags do ML para labels amigáveis e cores
 export const TAG_DISPLAY_MAP = {
@@ -465,7 +468,7 @@ export function ModalCompatibilidade({ anunciosSelecionados, onClose, usuarioId,
 
   // Carrega contas e perfis ao abrir
   useEffect(() => {
-    const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
+    const contas = contasMLCtx;
     setContasML(contas);
     if (contas.length > 0) setContaSelecionada(contas[0].id);
     if (usuarioId) {
@@ -474,7 +477,7 @@ export function ModalCompatibilidade({ anunciosSelecionados, onClose, usuarioId,
         .then(data => setPerfis(data))
         .catch(() => {});
     }
-  }, [usuarioId]);
+  }, [usuarioId, contasMLCtx]);
 
   // Carrega dados do perfil ao selecionar
   const handlePerfilChange = async (id) => {
@@ -1107,9 +1110,10 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
               <div>
                 <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Preço Base R$ ({tipoBaseTexto})</label>
                 {loadingPrecos && <p className="text-[10px] text-blue-500 mb-1">Buscando preço da Tiny...</p>}
-                {precoBaseAutoPreenchido && !loadingPrecos && <p className="text-[10px] text-green-600 mb-1">✅ Preenchido automaticamente da Tiny.</p>}
+                {precoBaseAutoPreenchido && !loadingPrecos && precosTinyMap[skusUnicos[0]]?.fonte === 'local' && <p className="text-[10px] text-amber-600 mb-1">⚠️ Preço do banco local (Tiny indisponível). Pode estar desatualizado.</p>}
+                {precoBaseAutoPreenchido && !loadingPrecos && precosTinyMap[skusUnicos[0]]?.fonte !== 'local' && <p className="text-[10px] text-green-600 mb-1">✅ Preenchido automaticamente da Tiny.</p>}
                 {temMultiplosSKUs && <p className="text-[10px] text-amber-600 mb-1">⚠️ SKUs diferentes — cada item usará seu próprio preço base da Tiny.</p>}
-                {!loadingPrecos && !temMultiplosSKUs && !precoBaseAutoPreenchido && skusUnicos.length > 0 && <p className="text-[10px] text-red-500 mb-1">❌ Produto não encontrado no banco local. Sincronize com a Tiny.</p>}
+                {!loadingPrecos && !temMultiplosSKUs && !precoBaseAutoPreenchido && skusUnicos.length > 0 && <p className="text-[10px] text-red-500 mb-1">❌ Produto não encontrado na Tiny nem no banco local.</p>}
                 {!loadingPrecos && !temMultiplosSKUs && !precoBaseAutoPreenchido && skusUnicos.length === 0 && <p className="text-[10px] text-amber-600 mb-1">⚠️ Anúncio sem SKU vinculado. Insira o preço base manualmente.</p>}
 
                 <input type="number" min="0" step="0.01" value={precoBaseManual}
@@ -1328,14 +1332,10 @@ function ModalVerificarPreco({ anunciosSelecionados, regrasPreco, usuarioId, onC
 
     setIsLoading(true);
     try {
-      // Simplificamos: pegamos apenas os dados essenciais do anúncio para enviar ao worker
+      // Simplificamos: enviamos apenas ID e contaId. O worker busca o resto no banco para evitar Payload Too Large.
       const anunciosPayload = anunciosSelecionados.map(ad => ({
         id: ad.id,
-        contaId: ad.contaId,
-        sku: ad.sku,
-        titulo: ad.titulo,
-        preco: ad.preco,
-        dadosML: { listing_type_id: ad.dadosML?.listing_type_id }
+        contaId: ad.contaId
       }));
 
       const body = {
@@ -1442,6 +1442,8 @@ function ModalVerificarPreco({ anunciosSelecionados, regrasPreco, usuarioId, onC
 // =========================================
 
 export default function GerenciadorAnuncios({ usuarioId }) {
+  const { canUseResource } = useAuth();
+  const { contas: contasMLCtx } = useContasML();
   const [anuncios, setAnuncios] = useState([]);
   const[allKnownAds, setAllKnownAds] = useState({});
   const [total, setTotal] = useState(0);
@@ -1508,6 +1510,9 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [modalExcluir, setModalExcluir] = useState(false);
   const [modalCompatibilidade, setModalCompatibilidade] = useState(false);
   const [modalPosicao, setModalPosicao] = useState(false);
+  const [modalRapido, setModalRapido] = useState(false);
+  const [dropdownCompat, setDropdownCompat] = useState(false);
+  const dropdownCompatRef = useRef(null);
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
@@ -1538,6 +1543,17 @@ export default function GerenciadorAnuncios({ usuarioId }) {
         if (data.configAtacado) setConfigAtacado(data.configAtacado);
       });
   }, [usuarioId]);
+
+  useEffect(() => {
+    if (!dropdownCompat) return;
+    const handler = (e) => {
+      if (dropdownCompatRef.current && !dropdownCompatRef.current.contains(e.target)) {
+        setDropdownCompat(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownCompat]);
 
   const fetchAvailableTags = async () => {
     try {
@@ -1659,33 +1675,42 @@ const handleSelectAllFiltered = async () => {
 
 const handleSyncSelected = async () => {
     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
-    
-    // ✅ TRAVA DE PROTEÇÃO CONTRA TIMEOUT
-    if (selectedIds.size > 100) {
-      return alert('Para garantir a estabilidade, sincronize no máximo 100 anúncios por vez nesta opção.\n\nPara sincronizar toda a conta de uma vez, use o botão verde "Importar Tudo" no topo da página.');
-    }
-
     if (!window.confirm(`Sincronizar ${selectedIds.size} anúncio(s) com a API do ML?`)) return;
     setIsSyncingSelected(true);
-    
+
     try {
       const res = await fetch('/api/ml/sync-selected-ads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemIds: Array.from(selectedIds), userId: usuarioId }),
       });
-
-      // ✅ TRATAMENTO SEGURO DE ERROS NÃO-JSON (EVITA O UNEXPECTED TOKEN '<')
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-         throw new Error("O servidor demorou muito para responder (Timeout) ou ocorreu um erro de rede. Tente selecionar menos itens.");
-      }
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
-      
-      const msg = `${data.atualizados} anúncio(s) sincronizado(s).${data.erros?.length ? `\n\nErros:\n${data.erros.join('\n')}` : ''}`;
-      alert(msg);
+
+      const jobId = data.jobId;
+
+      // Polling do status do job na fila
+      await new Promise((resolve, reject) => {
+        const interval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`/api/ml/sync-ads-status/${jobId}`);
+            if (!statusRes.ok) { clearInterval(interval); return resolve(); }
+            const statusData = await statusRes.json();
+            if (statusData.state === 'completed') {
+              clearInterval(interval);
+              resolve();
+            } else if (statusData.state === 'failed') {
+              clearInterval(interval);
+              reject(new Error('Falha na sincronização. Verifique o console do worker.'));
+            }
+          } catch (e) {
+            clearInterval(interval);
+            reject(e);
+          }
+        }, 2000);
+      });
+
+      alert(`✅ ${selectedIds.size} anúncio(s) sincronizado(s).`);
       fetchAnuncios();
     } catch (e) {
       alert(`Erro ao sincronizar: ${e.message}`);
@@ -1770,7 +1795,21 @@ const handleSyncSelected = async () => {
 
 const getSelectedItemsData = () => {
     return Array.from(selectedIds).map(id => {
+      // IDs de variação são numéricos; IDs pai começam com "MLB"
+      if (typeof id !== 'string' || !id.startsWith('MLB')) {
+        const parentAd = Object.values(allKnownAds).find(ad =>
+          ad.dadosML?.variations?.some(v => v.id === id)
+        );
+        if (!parentAd) return null;
+        return {
+          id: parentAd.id,
+          contaId: parentAd.contaId,
+          hasVariations: true,
+          variationsIds: [id],
+        };
+      }
       const ad = allKnownAds[id];
+      if (!ad) return null;
       const variations = ad.dadosML?.variations || [];
       return {
         id: ad.id,
@@ -1778,7 +1817,7 @@ const getSelectedItemsData = () => {
         hasVariations: variations.length > 0,
         variationsIds: variations.map(v => v.id)
       };
-    });
+    }).filter(Boolean);
   };
 
   const handleAcaoMassa = async (acao) => {
@@ -1855,8 +1894,11 @@ const getSelectedItemsData = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
-      alert(`✅ Desconto ativado!\n\nAtivados: ${data.joined}\nIgnorados: ${data.skipped}\nErros: ${data.errors}${data.detalhes?.errors?.length ? '\n\nVer erros no console.' : ''}`);
-      if (data.detalhes?.errors?.length) console.error('[AtivarDesconto] Erros:', data.detalhes.errors);
+      if (data.joined === 0) {
+        alert(`ℹ️ Nenhum candidato encontrado para ativar.\n\nIgnorados: ${data.skipped}`);
+      } else {
+        alert(`✅ ${data.joined} itens enviados para a fila de ativação!\n\nIgnorados: ${data.skipped}\n\nAcompanhe o progresso no Gerenciador de Fila.${data.tarefaId ? `\n\nTarefa ID: ${data.tarefaId}` : ''}`);
+      }
     } catch (e) {
       alert('Erro ao ativar desconto: ' + e.message);
     } finally {
@@ -2119,7 +2161,7 @@ const handleFetchBySku = async () => {
 
   return (
     <>
-    <div className="space-y-6 max-w-[1600px] mx-auto">
+    <div className="space-y-6 w-full">
       {/* Cabeçalho */}
       <div className="flex justify-between items-start bg-white p-6 rounded-lg shadow-sm border border-gray-200">
         <div>
@@ -2155,13 +2197,15 @@ const handleFetchBySku = async () => {
             <option value="_TODAS_">📦 Todas as Contas</option>
             {contasML.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
            </select>
-           <button 
-             onClick={iniciarSincronizacaoML} 
-             disabled={syncProgress !== null || !contaParaSincronizar} 
+           {canUseResource('gerenciadorML.sincronizar') && (
+           <button
+             onClick={iniciarSincronizacaoML}
+             disabled={syncProgress !== null || !contaParaSincronizar}
              className="px-5 py-2 bg-green-600 text-white font-bold rounded shadow hover:bg-green-700 transition disabled:opacity-50"
            >
             {syncProgress !== null ? 'Sincronizando...' : (importarApenasNovos ? '⬇ Importar Novos' : '⬇ Importar Tudo')}
            </button>
+           )}
         </div>
       </div>
 
@@ -2507,8 +2551,8 @@ const handleFetchBySku = async () => {
           </button>
 
           <div
-            className={`overflow-hidden transition-all duration-300 ease-in-out ${
-              showAcoesMassa ? 'max-h-64 opacity-100' : 'max-h-0 opacity-0'
+            className={`transition-all duration-300 ease-in-out ${
+              showAcoesMassa ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'
             }`}
           >
             <div className="px-4 pb-4 pt-2 border-t border-gray-100 bg-gray-50/50">
@@ -2543,6 +2587,7 @@ const handleFetchBySku = async () => {
 
               <div className="flex flex-wrap gap-2">
                 {/* Sincronizar Selecionados */}
+                {canUseResource('gerenciadorML.sincronizar') && (
                 <button
                   onClick={handleSyncSelected}
                   disabled={isSyncingSelected}
@@ -2550,8 +2595,10 @@ const handleFetchBySku = async () => {
                 >
                   {isSyncingSelected ? '⏳ Sincronizando...' : '🔄 Sincronizar Selecionados'}
                 </button>
+                )}
 
                 {/* Corrigir Preço — funcional */}
+                {canUseResource('gerenciadorML.editarPreco') && (
                 <button
                   onClick={() => {
                     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
@@ -2561,8 +2608,10 @@ const handleFetchBySku = async () => {
                 >
                   💲 Corrigir Preço
                 </button>
+                )}
 
                 {/* Verificar Preço — novo */}
+                {canUseResource('gerenciadorML.editarPreco') && (
                 <button
                   onClick={() => {
                     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
@@ -2572,6 +2621,7 @@ const handleFetchBySku = async () => {
                 >
                   🔍 Verificar Preço
                 </button>
+                )}
 
                 <button
                   onClick={handleAtivarDesconto}
@@ -2582,14 +2632,17 @@ const handleFetchBySku = async () => {
                   🏷️ Ativar Desconto
                 </button>
 
-              <button
+              {canUseResource('gerenciadorML.pausar') && (
+                <button
                   onClick={() => handleAcaoMassa('ativar')}
                   disabled={isSyncingSelected}
                   className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-green-700 bg-green-50 border-green-200 hover:bg-green-100 disabled:opacity-50"
                 >
                   ▶ Ativar
                 </button>
+              )}
 
+                {canUseResource('gerenciadorML.pausar') && (
                 <button
                   onClick={() => handleAcaoMassa('pausar')}
                   disabled={isSyncingSelected}
@@ -2597,6 +2650,7 @@ const handleFetchBySku = async () => {
                 >
                   ⏸ Pausar
                 </button>
+                )}
 
                 <button
                   onClick={() => handleAcaoMassa('estoque')}
@@ -2661,27 +2715,50 @@ const handleFetchBySku = async () => {
                   🏷️ Alterar SKU
                 </button>
 
+                {canUseResource('gerenciadorML.excluir') && (
                 <button
                   onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalExcluir(true); }}
                   className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-red-700 bg-red-50 border-red-200 hover:bg-red-100"
                 >
                   🗑️ Excluir
                 </button>
+                )}
 
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalCompatibilidade(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100 flex items-center gap-1.5"
-                >
-                  🚗 Compatibilidade
-                  <span className="text-[9px] font-bold bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded">Em breve</span>
-                </button>
-
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalPosicao(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-cyan-700 bg-cyan-50 border-cyan-200 hover:bg-cyan-100 flex items-center gap-1.5"
-                >
-                  📍 Posição da Peça
-                </button>
+                <div className="relative" ref={dropdownCompatRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCompat(v => !v); }}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100 flex items-center gap-1.5"
+                  >
+                    🚗 Compatibilidade
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownCompat ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownCompat && (
+                    <div
+                      className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[220px] py-1"
+                      onMouseLeave={() => setDropdownCompat(false)}
+                    >
+                      <button
+                        onClick={() => { setDropdownCompat(false); setModalCompatibilidade(true); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-amber-700 hover:bg-amber-50 flex items-center gap-2"
+                      >
+                        🚗 <span><span className="font-semibold">Aplicar Perfil</span><br/><span className="text-xs text-gray-400">Usa compatibilidade já cadastrada</span></span>
+                      </button>
+                      <button
+                        onClick={() => { setDropdownCompat(false); setModalRapido(true); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2"
+                      >
+                        ⚡ <span><span className="font-semibold">Preenchimento Rápido</span><br/><span className="text-xs text-gray-400">Busca e aplica sem perfil salvo</span></span>
+                      </button>
+                      <div className="border-t border-gray-100 my-1" />
+                      <button
+                        onClick={() => { setDropdownCompat(false); setModalPosicao(true); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-cyan-700 hover:bg-cyan-50 flex items-center gap-2"
+                      >
+                        📍 <span><span className="font-semibold">Posição da Peça</span><br/><span className="text-xs text-gray-400">Define dianteira, traseira, etc.</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -2725,19 +2802,19 @@ const handleFetchBySku = async () => {
                   }}
                 />
               </th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Img</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Conta / ID</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Título / SKU</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th>
-              <th className="px-3 py-3 text-right text-xs font-bold text-gray-600 uppercase">Preço (de/por)</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">% Desc</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Estoque</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Visitas</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Vendas</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">T. Fabr.</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Tipo An.</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Catálogo / Tags</th>
-              <th className="px-3 py-3 text-center text-xs font-bold text-teal-600 uppercase">Dif. Preço</th>
+              <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Img</th>
+              <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Conta / ID</th>
+              <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Título / SKU</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th>
+              <th className="px-2 py-3 text-right text-xs font-bold text-gray-600 uppercase">Preço (de/por)</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">% Desc</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Estoque</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Visitas</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Vendas</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">T. Fabr.</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Tipo An.</th>
+              <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Catálogo / Tags</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-teal-600 uppercase">Dif. Preço</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-100">
@@ -2837,11 +2914,24 @@ const handleFetchBySku = async () => {
                 const discount = getDiscountPerc(ad.preco, ad.precoOriginal);
                 const variations = dadosML.variations || [];
                 const hasVariations = variations.length > 0;
-                const isExpanded = expandedAds.has(ad.id);
+                // Se a busca é por SKU de variação específica → auto-expande e filtra só essa variação
+                const isVariationSkuSearch = searchTerm &&
+                  (searchType === 'sku' || searchType === 'todos') &&
+                  Array.isArray(ad.skusVariacoes) && ad.skusVariacoes.includes(searchTerm) &&
+                  !ad.sku?.toLowerCase().includes(searchTerm.toLowerCase());
+                const isExpanded = expandedAds.has(ad.id) || isVariationSkuSearch;
+                const variationsToShow = isVariationSkuSearch
+                  ? variations.filter(v => {
+                      const vSku = v.seller_custom_field
+                        || v.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name
+                        || null;
+                      return vSku?.toLowerCase() === searchTerm.toLowerCase();
+                    })
+                  : variations;
 
                 return (
                   <React.Fragment key={ad.id}>
-                  <tr className={`hover:bg-blue-50/30 transition-colors ${selectedIds.has(ad.id) ? 'bg-indigo-50/40' : ''}`}>
+                  {!isVariationSkuSearch && <tr className={`hover:bg-blue-50/30 transition-colors ${selectedIds.has(ad.id) ? 'bg-indigo-50/40' : ''}`}>
                     {/* Expand button */}
                     <td className="px-2 py-2 text-center w-7">
                       {hasVariations ? (
@@ -2965,12 +3055,12 @@ const handleFetchBySku = async () => {
                     <td className="px-3 py-2 text-center">
                       {priceCheckResults[ad.id] ? (() => {
                         const { status, diferenca, precoCalculado, precoDE } = priceCheckResults[ad.id];
-                        const cfg = {
+                        const cfg = ({
                           perfeito: { bg: 'bg-blue-50 border-blue-200 text-blue-700', label: '✓ Perfeito' },
                           perfeito_promo: { bg: 'bg-emerald-50 border-emerald-300 text-emerald-700', label: '✓ Perf. (Promo)' },
                           lucro:    { bg: 'bg-green-50 border-green-200 text-green-700', label: `+${diferenca.toFixed(1)}%` },
                           prejuizo: { bg: 'bg-red-50 border-red-200 text-red-700', label: `${diferenca.toFixed(1)}%` },
-                        }[status];
+                        }[status]) ?? { bg: 'bg-gray-50 border-gray-200 text-gray-500', label: status };
                         return (
                           <button
                             onClick={() => setPriceDetailPopup({ ad, resultado: priceCheckResults[ad.id] })}
@@ -2981,15 +3071,69 @@ const handleFetchBySku = async () => {
                         );
                       })() : <span className="text-gray-200 text-xs">—</span>}
                     </td>
-                  </tr>
+                  </tr>}
                   {/* Variações expandidas */}
-                  {hasVariations && isExpanded && variations.map((v) => {
+                  {hasVariations && isExpanded && variationsToShow.map((v) => {
                     const grade = v.attribute_combinations || [];
                     const gradeStr = grade.map(g => `${g.name}: ${g.value_name}`).join(' / ') || `ID ${v.id}`;
                     const vSku = v.seller_custom_field
                       || (v.attributes && v.attributes.find(a => a.id === 'SELLER_SKU'))?.value_name
                       || null;
                     const vDiscount = getDiscountPerc(v.price, ad.precoOriginal);
+
+                    // Quando busca por SKU de variação: linha completa (sem pai acima)
+                    if (isVariationSkuSearch) {
+                      return (
+                        <tr key={v.id} className={`hover:bg-blue-50/30 transition-colors ${selectedIds.has(v.id) ? 'bg-indigo-50/40' : ''}`}>
+                          <td className="px-2 py-2 text-center w-7" />
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 rounded border-gray-400 text-indigo-600 cursor-pointer"
+                              checked={selectedIds.has(v.id)}
+                              onChange={(e) => {
+                                setSelectedIds(prev => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(v.id);
+                                  else next.delete(v.id);
+                                  return next;
+                                });
+                              }}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <img src={ad.thumbnail} alt="thumb" className="w-10 h-10 object-cover rounded shadow-sm border border-gray-200" />
+                          </td>
+                          <td className="px-3 py-2 text-sm">
+                            <div className="font-bold text-gray-800">{ad.conta?.nickname}</div>
+                            <a href={ad.permalink} target="_blank" rel="noreferrer" className="text-[11px] font-mono text-blue-600 hover:underline">{ad.id}</a>
+                          </td>
+                          <td className="px-3 py-2 text-sm max-w-xs">
+                            <div className="font-semibold text-gray-900 truncate" title={gradeStr}>{gradeStr}</div>
+                            <div className="text-[11px] font-mono text-gray-500 mt-0.5">
+                              SKU: <span className="text-indigo-600 font-bold">{vSku || 'S/ SKU'}</span>
+                              <span className="ml-2 text-gray-400">ID var: {v.id}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={`px-2 py-0.5 inline-flex text-[11px] font-bold rounded-full border ${ad.status === 'active' ? 'bg-green-100 text-green-800 border-green-200' : ad.status === 'paused' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-red-100 text-red-800 border-red-200'}`}>
+                              {ad.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right text-sm">
+                            <div className="font-bold text-gray-900">R$ {Number(v.price || 0).toFixed(2)}</div>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {vDiscount ? <span className="text-[11px] font-black text-green-700 bg-green-50 px-1.5 py-0.5 rounded">-{vDiscount}%</span> : <span className="text-gray-300">-</span>}
+                          </td>
+                          <td className="px-3 py-2 text-center text-sm font-black text-gray-700">
+                            {v.available_quantity ?? '-'}
+                          </td>
+                          <td colSpan="6" />
+                        </tr>
+                      );
+                    }
+
                     return (
                       <tr key={v.id} className="bg-blue-50/40 border-b border-blue-100">
                         <td className="pl-8 pr-2 py-1.5 text-center">
@@ -3149,6 +3293,15 @@ const handleFetchBySku = async () => {
         usuarioId={usuarioId}
         onClose={() => setModalPosicao(false)}
         onSuccess={() => { setModalPosicao(false); setSelectedIds(new Set()); }}
+      />
+    )}
+
+    {modalRapido && (
+      <ModalPreenchimentoRapido
+        ads={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        usuarioId={usuarioId}
+        onClose={() => setModalRapido(false)}
+        onSuccess={(ids) => { setModalRapido(false); setSelectedIds(new Set()); }}
       />
     )}
 

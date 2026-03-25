@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { TAG_DISPLAY_MAP } from './GerenciadorAnuncios';
+import { useContasML } from '../contexts/ContasMLContext';
 
 const IMAGE_QUALITY_TAGS = ['poor_quality_thumbnail', 'poor_quality_picture', 'picture_downloading_pending'];
 
@@ -85,6 +86,7 @@ function ImagePreview({ url, label, onValidated }) {
 
 // ===== COMPONENTE PRINCIPAL =====
 export default function OtimizadorImagens({ usuarioId }) {
+  const { contas: contasMLCtx } = useContasML();
   const [anuncios, setAnuncios] = useState(() => lerCacheOtimizador()?.data || []);
   const [cacheTs, setCacheTs] = useState(() => lerCacheOtimizador()?.ts || null);
   const [loading, setLoading] = useState(false);
@@ -121,7 +123,7 @@ export default function OtimizadorImagens({ usuarioId }) {
   };
 
   const carregarLista = useCallback(async () => {
-    const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
+    const contas = contasMLCtx;
     if (!contas.length) {
       setStatusMsg('Nenhuma conta ML conectada. Configure em "Configurações".');
       return;
@@ -165,7 +167,7 @@ export default function OtimizadorImagens({ usuarioId }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [contasMLCtx]);
 
   const listaFiltrada = useMemo(() => {
     const normalize = str => str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -433,17 +435,23 @@ export default function OtimizadorImagens({ usuarioId }) {
           Agrupar por SKU
         </label>
 
-        <button
-          onClick={carregarLista}
-          disabled={loading}
-          className="ml-auto px-4 py-2 text-sm font-bold text-white rounded-lg transition flex items-center gap-2 disabled:opacity-60"
-          style={{ background: cacheTs ? '#e67e22' : '#27ae60' }}
-          title={cacheTs ? `Cache de ${new Date(cacheTs).toLocaleString('pt-BR')} — clique para forçar atualização` : 'Carregar anúncios'}
-        >
-          {loading
-            ? <><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white inline-block" /> Carregando...</>
-            : cacheTs ? '🔄 Forçar Atualização' : '▶ Carregar Lista'}
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {cacheTs && (
+            <span className="text-xs text-gray-400">
+              Cache de {new Date(cacheTs).toLocaleString('pt-BR')}
+            </span>
+          )}
+          <button
+            onClick={carregarLista}
+            disabled={loading}
+            className="px-4 py-2 text-sm font-bold text-white rounded-lg transition flex items-center gap-2 disabled:opacity-60"
+            style={{ background: '#e67e22' }}
+          >
+            {loading
+              ? <><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white inline-block" /> Carregando...</>
+              : '🔄 Forçar Atualização'}
+          </button>
+        </div>
       </div>
 
       {(statusMsg || anuncios.length > 0) && (

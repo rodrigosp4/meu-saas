@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useContasML } from '../contexts/ContasMLContext';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -22,6 +23,7 @@ const ML_PRESETS = [
 
 const TINY_PRESETS = [
   { label: 'Pesquisar produtos', endpoint: 'produtos.pesquisa.php', params: { pesquisa: '' } },
+  { label: 'Buscar por SKU exato', endpoint: 'produtos.pesquisa.php', params: { codigoExato: '' } },
   { label: 'Consultar produto', endpoint: 'produto.obter.php', params: { id: '' } },
   { label: 'Pesquisar pedidos', endpoint: 'pedidos.pesquisa.php', params: { situacao: '' } },
   { label: 'Consultar pedido', endpoint: 'pedido.obter.php', params: { id: '' } },
@@ -35,6 +37,7 @@ const TINY_PRESETS = [
 
 // ── Componente ────────────────────────────────────────────────────────────────
 export default function ClienteAPI({ usuarioId }) {
+  const { contas: contasMlCtx } = useContasML();
   const [api, setApi] = useState('ml'); // 'ml' | 'tiny'
   const [contasMl, setContasMl] = useState([]);
   const [contaId, setContaId] = useState('');
@@ -44,6 +47,7 @@ export default function ClienteAPI({ usuarioId }) {
   const [mlPath, setMlPath] = useState('/users/me');
   const [mlQueryParams, setMlQueryParams] = useState([{ key: '', value: '' }]);
   const [mlBody, setMlBody] = useState('');
+  const [mlPublic, setMlPublic] = useState(false);
 
   // Tiny state
   const [tinyEndpoint, setTinyEndpoint] = useState('produtos.pesquisa.php');
@@ -58,10 +62,9 @@ export default function ClienteAPI({ usuarioId }) {
   const [history, setHistory] = useState([]);
 
   useEffect(() => {
-    const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
-    setContasMl(contas);
-    if (contas.length > 0) setContaId(contas[0].id);
-  }, []);
+    setContasMl(contasMlCtx);
+    if (contasMlCtx.length > 0) setContaId(contasMlCtx[0].id);
+  }, [contasMlCtx]);
 
   // ── Aplicar preset ML ─────────────────────────────────────────────────────
   function applyMlPreset(preset) {
@@ -89,14 +92,14 @@ export default function ClienteAPI({ usuarioId }) {
       let payload, url;
 
       if (api === 'ml') {
-        if (!contaId) { setError('Selecione uma conta ML.'); setLoading(false); return; }
+        if (!mlPublic && !contaId) { setError('Selecione uma conta ML ou ative a chamada pública.'); setLoading(false); return; }
         const queryParams = {};
         mlQueryParams.forEach(({ key, value }) => { if (key.trim()) queryParams[key.trim()] = value; });
         let body = {};
         if (mlBody.trim()) {
           try { body = JSON.parse(mlBody); } catch { setError('Body JSON inválido.'); setLoading(false); return; }
         }
-        payload = { userId: usuarioId, contaId, method: mlMethod, path: mlPath, queryParams, body };
+        payload = { userId: usuarioId, contaId: mlPublic ? null : contaId, method: mlMethod, path: mlPath, queryParams, body, public: mlPublic };
         url = `${API_BASE}/api/cliente-api/ml`;
       } else {
         const params = {};
@@ -240,7 +243,7 @@ export default function ClienteAPI({ usuarioId }) {
 
           {/* ── Seletor de conta ML ── */}
           {api === 'ml' && (
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: '0.85em', color: '#6b7280', minWidth: '60px' }}>Conta ML:</span>
               {contasMl.length === 0 ? (
                 <span style={{ fontSize: '0.85em', color: '#ef4444' }}>Nenhuma conta conectada. Configure em Configurações API.</span>
@@ -248,12 +251,27 @@ export default function ClienteAPI({ usuarioId }) {
                 <select
                   value={contaId}
                   onChange={e => setContaId(e.target.value)}
-                  style={{ padding: '5px 10px', border: '1px solid #d1d5db', borderRadius: '5px', fontSize: '0.85em', cursor: 'pointer' }}
+                  disabled={mlPublic}
+                  style={{ padding: '5px 10px', border: '1px solid #d1d5db', borderRadius: '5px', fontSize: '0.85em', cursor: mlPublic ? 'not-allowed' : 'pointer', opacity: mlPublic ? 0.4 : 1 }}
                 >
                   {contasMl.map(c => (
                     <option key={c.id} value={c.id}>{c.nickname}</option>
                   ))}
                 </select>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer', fontSize: '0.85em', color: mlPublic ? '#e67e22' : '#6b7280', fontWeight: mlPublic ? 600 : 400, userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={mlPublic}
+                  onChange={e => setMlPublic(e.target.checked)}
+                  style={{ cursor: 'pointer', accentColor: '#e67e22' }}
+                />
+                Chamada pública (sem token)
+              </label>
+              {mlPublic && (
+                <span style={{ fontSize: '0.78em', background: '#fff7ed', color: '#b45309', padding: '2px 8px', borderRadius: '4px', border: '1px solid #fed7aa' }}>
+                  Útil para testar itens de outros vendedores ou inativos
+                </span>
               )}
             </div>
           )}

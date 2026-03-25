@@ -8,16 +8,38 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum UserRole {
+  SUPER_ADMIN
+  OWNER
+  OPERATOR
+  VIEWER
+  SUPPORT
+}
+
 model User {
   id                   String                  @id @default(uuid())
   email                String                  @unique
   senha                String
   tinyToken            String?
+  tinyPlano            String?                 @default("descontinuado")
   cepOrigem            String?                 @default("01001000")
   createdAt            DateTime                @default(now())
   passwordResetToken   String?
   passwordResetExpires DateTime?
-    // Integrações de imagem
+  // Controle de usuários
+  role                 UserRole                @default(OWNER)
+  ativo                Boolean                 @default(true)
+  parentUserId         String?
+  parentUser           User?                   @relation("SubUsuarios", fields: [parentUserId], references: [id])
+  subUsuarios          User[]                  @relation("SubUsuarios")
+  permissoesCustom     Json?
+  featureFlags         Json?                   // { "monitorConcorrentes": false } → oculta módulo
+  // Acesso de suporte
+  suporteAtivo         Boolean                 @default(false)
+  suporteExpira        DateTime?
+  sessoesSuporteDadas      SessaoSuporte[]     @relation("SessoesDadas")
+  sessoesSuporteRecebidas  SessaoSuporte[]     @relation("SessoesRecebidas")
+  // Integrações de imagem
   imgurClientId        String?
   imgurClientSecret    String?
   removeBgApiKey       String?
@@ -29,6 +51,30 @@ model User {
   regras               RegraPreco[]
   tarefas              TarefaFila[]
   verificacaoPreco     VerificacaoPreco?
+  gruposMonitoramento  GrupoMonitoramento[]
+  lojasMonitoradas     LojaMonitorada[]
+  resourceFlags        Json?                   // { "catalogo.criar": false } → bloqueia recurso granular
+}
+
+model ConfigGlobal {
+  id                   String   @id @default("global")
+  defaultFeatureFlags  Json?    // flags de módulo aplicadas a novos cadastros OWNER
+  defaultResourceFlags Json?    // flags de recurso aplicadas a novos cadastros OWNER
+  updatedAt            DateTime @updatedAt
+}
+
+model SessaoSuporte {
+  id            String   @id @default(uuid())
+  suporteUserId String
+  targetUserId  String
+  criadaEm      DateTime @default(now())
+  expiraEm      DateTime
+  ativa         Boolean  @default(true)
+  suporteUser   User     @relation("SessoesDadas", fields: [suporteUserId], references: [id])
+  targetUser    User     @relation("SessoesRecebidas", fields: [targetUserId], references: [id])
+
+  @@index([suporteUserId])
+  @@index([targetUserId])
 }
 
 model ConfigAtacado {
@@ -75,6 +121,7 @@ model AnuncioML {
   thumbnail         String?
   permalink         String?
   dadosML           Json?
+  skusVariacoes     String[] @default([])
   updatedAt         DateTime @updatedAt
   tagPrincipal      String?
   margemPromocional Boolean  @default(false)
@@ -100,9 +147,10 @@ model Produto {
   nome      String
   preco     Float
   estoque   Int
-  statusML  String   @default("Não Publicado")
-  dadosTiny Json?
-  updatedAt DateTime @updatedAt
+  statusML      String   @default("Não Publicado")
+  dadosTiny     Json?
+  imagensCustom Json?
+  updatedAt     DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, sku])
@@ -133,6 +181,7 @@ model TarefaFila {
   status     String   @default("PENDENTE")
   tentativas Int      @default(0)
   detalhes   String?
+  payload    Json?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -188,5 +237,69 @@ model RegraOrquestrador {
   createdAt       DateTime @default(now())
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+}
+
+// ── Monitor de Concorrentes ───────────────────────────────────────────────────
+
+model GrupoMonitoramento {
+  id           String               @id @default(uuid())
+  userId       String
+  nome         String
+  skus         String[]
+  precoMinimo  Float?
+  autoIgualar  Boolean              @default(false)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  concorrentes ConcorrenteAnuncio[]
+
+  @@unique([userId, nome])
+  @@index([userId])
+}
+
+model ConcorrenteAnuncio {
+  id             String             @id  // MLB item ID
+  grupoId        String
+  titulo         String
+  preco          Float
+  estoqueRange   String?
+  vendas         Int                @default(0)
+  thumbnail      String?
+  permalink      String?
+  sellerId       String?
+  sellerNickname String?
+  listingTypeId  String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  grupo          GrupoMonitoramento @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  historico      PrecoHistorico[]
+
+  @@index([grupoId])
+}
+
+model PrecoHistorico {
+  id          String             @id @default(uuid())
+  itemId      String
+  preco       Float
+  capturedAt  DateTime           @default(now())
+  concorrente ConcorrenteAnuncio @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@index([capturedAt])
+}
+
+model LojaMonitorada {
+  id             String   @id @default(uuid())
+  userId         String
+  sellerId       String   // ML seller ID (numérico como string)
+  nickname       String
+  nivel          String?  // platinum, gold, silver, bronze, green
+  reputacaoData  Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sellerId])
   @@index([userId])
 }

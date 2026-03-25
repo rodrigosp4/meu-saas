@@ -39,8 +39,21 @@ function extractSellerSku(itemData) {
     if (skuAttr && skuAttr.value_name && skuAttr.value_name !== '-1') {
       return skuAttr.value_name;
     }
+    // ✅ ADICIONADO: Fallback para PART_NUMBER conforme lógica do python
+    const partAttr = itemData.attributes.find(a => a.id === 'PART_NUMBER');
+    if (partAttr && partAttr.value_name && partAttr.value_name !== '-1') {
+      return partAttr.value_name;
+    }
   }
   return itemData.seller_custom_field || null;
+}
+
+function extractVariationSkus(itemData) {
+  if (!itemData.variations || !Array.isArray(itemData.variations)) return [];
+  return itemData.variations.flatMap(v => {
+    const attr = v.attributes?.find(a => a.id === 'SELLER_SKU');
+    return (attr && attr.value_name && attr.value_name !== '-1') ? [attr.value_name] : [];
+  });
 }
 
 export const mlController = {
@@ -140,6 +153,189 @@ export const mlController = {
     }
   },
 
+  async _getTokenHeaders(userId) {
+    if (!userId) return {};
+    const conta = await prisma.contaML.findFirst({ where: { userId } });
+    if (!conta) return {};
+    try {
+      const refreshed = await mlService.refreshToken(conta.refreshToken);
+      const token = refreshed?.access_token || conta.accessToken;
+      if (refreshed?.access_token) {
+        await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token } }).catch(() => {});
+      }
+      return { Authorization: `Bearer ${token}` };
+    } catch {
+      return { Authorization: `Bearer ${conta.accessToken}` };
+    }
+  },
+
+  async getItemCloneData(req, res) {
+    try {
+      const { itemId } = req.params;
+      const { userId, contaId } = req.query;
+
+      // Tenta usar o token da conta dona do item (evita 403)
+      let headers = {};
+      const contaAlvo = contaId
+        ? await prisma.contaML.findUnique({ where: { id: contaId } })
+        : await prisma.anuncioML.findUnique({ where: { id: itemId }, select: { contaId: true } })
+            .then(ad => ad?.contaId ? prisma.contaML.findUnique({ where: { id: ad.contaId } }) : null);
+
+      if (contaAlvo) {
+        try {
+          const refreshed = await mlService.refreshToken(contaAlvo.refreshToken);
+          const token = refreshed?.access_token || contaAlvo.accessToken;
+          headers = { Authorization: `Bearer ${token}` };
+        } catch { headers = { Authorization: `Bearer ${contaAlvo.accessToken}` }; }
+      } else {
+        headers = await mlController._getTokenHeaders(userId);
+      }
+
+      const [itemRes, descRes] = await Promise.allSettled([
+        axios.get(`https://api.mercadolibre.com/items/${itemId}?include_attributes=all`, { headers }),
+        axios.get(`https://api.mercadolibre.com/items/${itemId}/description`, { headers }),
+      ]);
+
+      if (itemRes.status === 'rejected') {
+        const status = itemRes.reason?.response?.status || 404;
+        const msg = itemRes.reason?.response?.data?.message || 'Item não encontrado no Mercado Livre';
+        return res.status(status).json({ erro: msg });
+      }
+
+      const item = itemRes.value.data;
+      const desc = descRes.status === 'fulfilled' ? descRes.value.data : null;
+
+      res.json({
+        id: item.id,
+        title: item.title,
+        category_id: item.category_id,
+        price: item.price,
+        available_quantity: item.available_quantity,
+        condition: item.condition,
+        listing_type_id: item.listing_type_id,
+        seller_custom_field: item.seller_custom_field,
+        attributes: item.attributes || [],
+        pictures: item.pictures || [],
+        shipping: item.shipping || {},
+        description: desc?.plain_text || desc?.text || '',
+        variations: (item.variations || []).map(v => ({
+          id: v.id,
+          price: v.price,
+          available_quantity: v.available_quantity,
+          picture_ids: v.picture_ids || [],
+          attribute_combinations: v.attribute_combinations || [],
+          attributes: v.attributes || [],
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao buscar dados do item para clonagem' });
+    }
+  },
+
+// Produto de catálogo (MLBU... ou MLB numérico de catálogo)
+  async getProdutoCloneData(req, res) {
+    try {
+      const { produtoId } = req.params;
+      const { userId, itemId } = req.query;
+      const headers = await mlController._getTokenHeaders(userId);
+
+      // Define se vai usar a rota de catálogo geral (/products) ou do vendedor (/user-products)
+      const urlAlvo = (produtoId.startsWith('MLB') && !produtoId.startsWith('MLBU'))
+        ? `https://api.mercadolibre.com/products/${produtoId}`
+        : `https://api.mercadolibre.com/user-products/${produtoId}`;
+
+      const requests = [
+        axios.get(urlAlvo, { headers }),
+      ];
+      if (itemId) {
+        requests.push(axios.get(`https://api.mercadolibre.com/items/${itemId}/description`, { headers }));
+      }
+
+      const [prodResult, descResult] = await Promise.allSettled(requests);
+
+      if (prodResult.status === 'rejected') {
+        const status = prodResult.reason?.response?.status || 404;
+        const msg = prodResult.reason?.response?.data?.message || 'Produto de catálogo não encontrado';
+        return res.status(status).json({ erro: msg });
+      }
+
+      const prod = prodResult.value.data;
+      const desc = descResult?.status === 'fulfilled' ? descResult.value.data : null;
+
+      const pictures = (prod.pictures ||[]).map(p => ({
+        id: p.id,
+        secure_url: p.secure_url || p.url,
+        url: p.secure_url || p.url,
+      }));
+
+      const attributes = (prod.attributes ||[]).map(a => ({
+        id: a.id,
+        name: a.name,
+        values: a.values ||[{ name: a.value_name || '' }],
+        value_name: a.value_name || ''
+      }));
+
+      // Verifica se category_id é válido (formato MLB + dígitos)
+      const rawCategoryId = prod.category_id || '';
+      const categoryValida = /^MLB\d+$/.test(rawCategoryId);
+
+      let categoryId = categoryValida ? rawCategoryId : '';
+      let categoryOpcoes =[];
+      let categorySugerida = false;
+
+      // Se não tem categoria válida (em /products só vem o domain_id), prediz pelo título
+      if (!categoryValida) {
+        const titulo = prod.name || prod.title || prod.family_name || '';
+        if (titulo) {
+          try {
+            const predRes = await axios.get(
+              `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=5&q=${encodeURIComponent(titulo)}`
+            );
+            const opcoes = predRes.data ||[];
+            categoryOpcoes = await Promise.all(opcoes.map(async o => {
+              try {
+                const catRes = await axios.get(`https://api.mercadolibre.com/categories/${o.category_id}`);
+                if (catRes.data && catRes.data.path_from_root) {
+                  return { category_id: o.category_id, category_name: catRes.data.path_from_root.map(p => p.name).join(' > ') };
+                }
+              } catch (e) {}
+              return { category_id: o.category_id, category_name: o.category_name };
+            }));
+            if (categoryOpcoes.length > 0) {
+              categoryId = categoryOpcoes[0].category_id;
+              categorySugerida = true;
+            }
+          } catch {}
+        }
+      }
+
+      // O texto da descrição vem de item associado, ou do text_plain, ou do fallback do catálogo
+      const descricaoFinal = desc?.plain_text || desc?.text || prod.short_description?.content || '';
+
+      res.json({
+        id: prod.id || produtoId,
+        title: prod.name || prod.title || prod.family_name || '',
+        category_id: categoryId,
+        category_sugerida: categorySugerida,
+        category_opcoes: categoryOpcoes,
+        price: prod.price || null,
+        available_quantity: prod.available_quantity || 1,
+        condition: prod.condition || 'new',
+        listing_type_id: prod.listing_type_id || 'gold_special',
+        seller_custom_field: prod.seller_custom_field || '',
+        attributes,
+        pictures,
+        shipping: prod.shipping || {},
+        description: descricaoFinal,
+        _tipo: 'produto_catalogo',
+      });
+    } catch (error) {
+      const status = error.response?.status || 500;
+      const msg = error.response?.data?.message || 'Produto de catálogo não encontrado';
+      res.status(status).json({ erro: msg });
+    }
+  },
+
   async getItemPictures(req, res) {
     try {
       const { itemId } = req.params;
@@ -191,8 +387,21 @@ Escreva uma descrição de 3 a 5 parágrafos, sem usar markdown, apenas texto si
   },
 
   async predictCategory(req, res) {
-    try { res.json(await mlService.predictCategory(req.query.title)); }
-    catch (error) { res.status(500).json({ erro: 'Falha ao prever' }); }
+    try {
+      const data = await mlService.predictCategory(req.query.title);
+      const enhanced = await Promise.all(data.map(async (cat) => {
+        try {
+          const catRes = await axios.get(`https://api.mercadolibre.com/categories/${cat.category_id}`);
+          if (catRes.data && catRes.data.path_from_root) {
+            cat.category_name = catRes.data.path_from_root.map(p => p.name).join(' > ');
+          }
+        } catch (e) {}
+        return cat;
+      }));
+      res.json(enhanced);
+    } catch (error) {
+      res.status(500).json({ erro: 'Falha ao prever' });
+    }
   },
 
   async simulateShipping(req, res) {
@@ -552,11 +761,12 @@ async syncAds(req, res) {
       if (search) {
         const searchCondition = searchType === 'titulo' ? [{ titulo: { contains: search, mode: 'insensitive' } }]
           : searchType === 'mlb'    ? [{ id: { contains: search, mode: 'insensitive' } }]
-          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }, { skusVariacoes: { has: search } }]
           : [
               { titulo: { contains: search, mode: 'insensitive' } },
               { sku: { contains: search, mode: 'insensitive' } },
-              { id: { contains: search, mode: 'insensitive' } }
+              { id: { contains: search, mode: 'insensitive' } },
+              { skusVariacoes: { has: search } },
             ];
 
         if (where.OR) {
@@ -570,7 +780,7 @@ async syncAds(req, res) {
           where.OR = searchCondition;
         }
       }
-      
+
       let [anuncios, total] = await Promise.all([
         prisma.anuncioML.findMany({
           where, skip, take: Number(limit),
@@ -627,6 +837,97 @@ async syncAds(req, res) {
       }
       res.json({ anuncios, total });
     } catch (error) { res.status(500).json({ erro: error.message }); }
+  },
+
+  // ============================================================
+  // Recomendações de Replicação — compara todas as contas do usuário
+  // usando os dados do banco (igual ao Gerenciar ML)
+  // ============================================================
+  async getRecomendacoesReplicacao(req, res) {
+    try {
+      const { userId } = req.query;
+      if (!userId) return res.status(400).json({ erro: 'userId obrigatório' });
+
+      const contas = await prisma.contaML.findMany({
+        where: { userId },
+        select: { id: true, nickname: true },
+      });
+      if (contas.length < 2) return res.json([]);
+
+      const todosAnuncios = await prisma.anuncioML.findMany({
+        where: { contaId: { in: contas.map(c => c.id) }, status: 'active' },
+        select: {
+          id: true, titulo: true, preco: true, thumbnail: true,
+          sku: true, skusVariacoes: true, contaId: true, dadosML: true, estoque: true,
+        },
+      });
+
+      const normTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+      const temSku = (s) => s && s !== '-1' && s !== 'S/ SKU' && s.trim() !== '';
+
+      // Mapa contaId → nickname
+      const contaMap = Object.fromEntries(contas.map(c => [c.id, c.nickname]));
+
+      // Fingerprint de cada anúncio: se tem skusVariacoes usa todas, senão usa sku, senão titulo
+      const getFingerprint = (ad) => {
+        const vars = Array.isArray(ad.skusVariacoes) ? ad.skusVariacoes.filter(temSku) : [];
+        if (vars.length > 0) return `sku:${[...vars].sort().join(',')}`;
+        if (temSku(ad.sku)) return `sku:${ad.sku}`;
+        return `titulo:${normTitle(ad.titulo)}`;
+      };
+
+      // Agrupa por fingerprint → { rep (anúncio representante), contas: Set de contaIds }
+      const grupos = new Map();
+      for (const ad of todosAnuncios) {
+        const fp = getFingerprint(ad);
+        if (!grupos.has(fp)) {
+          grupos.set(fp, { rep: ad, fp, contasPresentes: new Set() });
+        }
+        grupos.get(fp).contasPresentes.add(ad.contaId);
+        // Prefere o representante da conta com mais info (skusVariacoes populado)
+        const g = grupos.get(fp);
+        const varsCurrent = Array.isArray(g.rep.skusVariacoes) ? g.rep.skusVariacoes.filter(temSku) : [];
+        const varsNew = Array.isArray(ad.skusVariacoes) ? ad.skusVariacoes.filter(temSku) : [];
+        if (varsNew.length > varsCurrent.length) g.rep = ad;
+      }
+
+      // Filtra grupos que não estão em TODAS as contas
+      const resultado = [];
+      for (const { rep, contasPresentes } of grupos.values()) {
+        const contasAusentes = contas
+          .filter(c => !contasPresentes.has(c.id))
+          .map(c => ({ contaId: c.id, nickname: c.nickname }));
+        if (contasAusentes.length === 0) continue;
+
+        const allSkus = Array.isArray(rep.skusVariacoes) ? rep.skusVariacoes.filter(temSku) : [];
+        if (temSku(rep.sku) && !allSkus.includes(rep.sku)) allSkus.unshift(rep.sku);
+
+        // Extract variation details from dadosML
+        const dadosML = rep.dadosML || {};
+        const varsDetalhes = Array.isArray(dadosML.variations) ? dadosML.variations.map(v => ({
+          combinacao: (v.attribute_combinations || []).map(ac => `${ac.name || ac.id}: ${ac.value_name}`).join(' / '),
+          sku: (v.attributes || []).find(a => a.id === 'SELLER_SKU')?.value_name || '',
+        })).filter(v => v.combinacao) : [];
+
+        resultado.push({
+          id: rep.id,
+          titulo: rep.titulo,
+          preco: rep.preco,
+          thumbnail: rep.thumbnail,
+          estoque: rep.estoque ?? 0,
+          allSkus,
+          temVariacoes: varsDetalhes.length > 0,
+          variacoes: varsDetalhes,
+          listingType: dadosML.listing_type_id === 'gold_pro' ? 'Premium' : 'Clássico',
+          contaOrigemNick: contaMap[rep.contaId] || rep.contaId,
+          contasAusentes,
+        });
+      }
+
+      res.json(resultado);
+    } catch (e) {
+      res.status(500).json({ erro: e.message });
+    }
   },
 
 
@@ -727,11 +1028,12 @@ async syncAds(req, res) {
       if (search) {
         const searchCondition = searchType === 'titulo' ? [{ titulo: { contains: search, mode: 'insensitive' } }]
           : searchType === 'mlb'    ? [{ id: { contains: search, mode: 'insensitive' } }]
-          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }]
+          : searchType === 'sku'    ? [{ sku: { contains: search, mode: 'insensitive' } }, { skusVariacoes: { has: search } }]
           : [
               { titulo: { contains: search, mode: 'insensitive' } },
               { sku: { contains: search, mode: 'insensitive' } },
               { id: { contains: search, mode: 'insensitive' } },
+              { skusVariacoes: { has: search } },
             ];
         if (where.OR) {
           where.AND = [...(where.AND || []), { OR: where.OR }, { OR: searchCondition }];
@@ -887,118 +1189,13 @@ async syncAds(req, res) {
         return res.status(400).json({ erro: "itemIds (array) e userId são obrigatórios." });
       }
 
-      // Busca os anúncios no banco para descobrir o contaId de cada um
-      const anunciosBD = await prisma.anuncioML.findMany({
-        where: { id: { in: itemIds } },
-        select: { id: true, contaId: true }
+      const job = await mlSyncQueue.add('sync-selected-ads', {
+        mode: 'selected-ads',
+        itemIds: itemIds.map(String),
+        userId,
       });
 
-      // Agrupa por contaId para reutilizar o token por conta
-      const porConta = {};
-      for (const a of anunciosBD) {
-        if (!porConta[a.contaId]) porConta[a.contaId] = [];
-        porConta[a.contaId].push(a.id);
-      }
-
-      // Cache de tokens por conta
-      const tokenCache = {};
-      let atualizados = 0;
-      const erros = [];
-
-      for (const [contaId, ids] of Object.entries(porConta)) {
-        // Obtém e renova token da conta
-        if (!tokenCache[contaId]) {
-          const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
-          if (!conta) { erros.push(`Conta ${contaId} não encontrada.`); continue; }
-          const tokenRefreshRes = await mlService.refreshToken(conta.refreshToken).catch(() => null);
-          const activeToken = tokenRefreshRes ? tokenRefreshRes.access_token : conta.accessToken;
-          if (tokenRefreshRes) {
-            await prisma.contaML.update({
-              where: { id: conta.id },
-              data: { accessToken: activeToken, refreshToken: tokenRefreshRes.refresh_token }
-            });
-          }
-          tokenCache[contaId] = activeToken;
-        }
-
-        const token = tokenCache[contaId];
-
-        for (const itemId of ids) {
-          try {
-            const adData = await mlService.getSingleAdDetails(itemId, token);
-            const primaryTag = getPrimaryTag(adData);
-            await prisma.anuncioML.upsert({
-              where: { id: adData.id },
-              update: {
-                titulo: adData.title, preco: adData.price, precoOriginal: adData.original_price,
-                status: adData.status, estoque: adData.available_quantity, vendas: adData.sold_quantity,
-                visitas: adData.visitas || 0, thumbnail: adData.thumbnail, permalink: adData.permalink,
-                sku: extractSellerSku(adData), tagPrincipal: primaryTag, dadosML: adData,
-                conta: { connect: { id: contaId } }
-              },
-              create: {
-                id: adData.id, contaId, titulo: adData.title, preco: adData.price,
-                precoOriginal: adData.original_price, status: adData.status,
-                estoque: adData.available_quantity, vendas: adData.sold_quantity,
-                visitas: adData.visitas || 0, thumbnail: adData.thumbnail, permalink: adData.permalink,
-                sku: extractSellerSku(adData), tagPrincipal: primaryTag, dadosML: adData
-              }
-            });
-
-            // ✅ INJEÇÃO DIRETA DE PROMOÇÕES (BACKFILL FOCADO)
-            try {
-              const itemPromoRes = await axios.get(
-                `https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`,
-                { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 }
-              );
-              const memberships = Array.isArray(itemPromoRes.data) ? itemPromoRes.data : (itemPromoRes.data?.results || []);
-
-              for (const m of memberships) {
-                const promoId = m.promotion_id || m.id;
-                if (!promoId) continue;
-
-                const promoRecord = await prisma.promoML.findUnique({
-                  where: { id_contaId: { id: promoId, contaId } },
-                });
-
-                if (promoRecord && Array.isArray(promoRecord.itens)) {
-                  const jaExisteIndex = promoRecord.itens.findIndex(i => i.id === itemId);
-                  let novosItens = [...promoRecord.itens];
-                  
-                  const newItemData = {
-                    id: itemId,
-                    status: m.status || 'candidate',
-                    original_price: m.original_price ?? null,
-                    price: m.price ?? m.deal_price ?? null,
-                    offer_id: m.offer_id ?? null,
-                    meli_percentage: m.meli_percentage ?? null,
-                    seller_percentage: m.seller_percentage ?? null
-                  };
-
-                  if (jaExisteIndex >= 0) {
-                     novosItens[jaExisteIndex] = { ...novosItens[jaExisteIndex], ...newItemData };
-                  } else {
-                     novosItens.push(newItemData);
-                  }
-
-                  await prisma.promoML.update({
-                    where: { id_contaId: { id: promoId, contaId } },
-                    data: { itens: novosItens }
-                  });
-                }
-              }
-            } catch (e) {
-              // Ignora em silêncio se o item não tiver campanhas para evitar travar a sincronização
-            }
-
-            atualizados++;
-          } catch (e) {
-            erros.push(`${itemId}: ${e.message}`);
-          }
-        }
-      }
-
-      res.json({ ok: true, atualizados, erros });
+      return res.json({ ok: true, jobId: job.id });
     } catch (error) {
       res.status(500).json({ erro: error.message });
     }
@@ -1034,7 +1231,7 @@ async getAdsBySku(req, res) {
                 // Pesquisa o produto pelo SKU na Tiny
                 const tinySearchRes = await axios.post(
                     'https://api.tiny.com.br/api2/produtos.pesquisa.php',
-                    new URLSearchParams({ token: user.tinyToken, formato: 'JSON', pesquisa: sku })
+                    new URLSearchParams({ token: user.tinyToken, formato: 'JSON', pesquisa: String(sku).trim() })
                 );
                 const tinyRetorno = tinySearchRes.data?.retorno;
 
@@ -1234,6 +1431,7 @@ async getAdsBySku(req, res) {
                         }
 
                         // Salva no banco de dados local
+                        const varSkus = extractVariationSkus(adData);
                         const adSalvo = await prisma.anuncioML.upsert({
                             where: { id: adData.id },
                             update: {
@@ -1243,6 +1441,7 @@ async getAdsBySku(req, res) {
                                 sku: savedSku,
                                 tagPrincipal: primaryTag,
                                 dadosML: adData,
+                                skusVariacoes: varSkus,
                             },
                             create: {
                                 id: adData.id, contaId: conta.id, titulo: adData.title, preco: adData.price, precoOriginal: adData.original_price,
@@ -1250,7 +1449,8 @@ async getAdsBySku(req, res) {
                                 thumbnail: adData.thumbnail, permalink: adData.permalink,
                                 sku: savedSku,
                                 tagPrincipal: primaryTag,
-                                dadosML: adData
+                                dadosML: adData,
+                                skusVariacoes: varSkus,
                             },
                             include: { conta: { select: { nickname: true } } }
                         });
@@ -1597,30 +1797,35 @@ async corrigirPreco(req, res) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
+      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes };
+
       const tarefa = await prisma.tarefaFila.create({
         data: {
           userId: userId,
           tipo: 'Corrigir Preço em Massa',
           alvo: `${items.length} anúncio(s)`,
           conta: 'Várias Contas',
-          status: 'PENDENTE'
+          status: 'PENDENTE',
+          payload: jobPayload
         }
       });
 
-      const job = await priceQueue.add('update-price', {
-        tarefaId: tarefa.id,
-        userId,
-        items, 
-        modo,
-        regraId,
-        precoManual,
-        precoBaseManual,
-        inflar,
-        reduzir,
-        removerPromocoes,
-        enviarAtacado,    // ✅ CORREÇÃO
-        ativarPromocoes   // ✅ CORREÇÃO
-      });
+      let job;
+      try {
+        job = await priceQueue.add('update-price', {
+          tarefaId: tarefa.id,
+          userId,
+          items,
+          ...jobPayload
+        });
+      } catch (queueErr) {
+        // Se o job não foi para a fila, marca a tarefa como FALHA para não ficar presa em PENDENTE
+        await prisma.tarefaFila.updateMany({
+          where: { id: tarefa.id },
+          data: { status: 'FALHA', detalhes: `Falha ao enfileirar: ${queueErr.message}` }
+        });
+        return res.status(500).json({ erro: 'Falha ao enfileirar correção de preço', detalhes: queueErr.message });
+      }
 
       await prisma.tarefaFila.updateMany({
         where: { id: tarefa.id },

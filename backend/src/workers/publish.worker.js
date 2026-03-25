@@ -32,7 +32,7 @@ async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal) {
     }
 
     const inflarNum = Number(inflar) || 0;
-    const precoAlvo = inflarNum > 0 ? precoFinal / (1 + inflarNum / 100) : precoFinal;
+    const precoAlvo = inflarNum > 0 ? precoFinal * (1 - inflarNum / 100) : precoFinal;
     let ativadas = 0;
     let erros = [];
 
@@ -196,6 +196,8 @@ export const publishWorker = new Worker('publish-ml', async (job) => {
 let idsCriados = [];
 let logCriacao = "";
 
+// backend/src/workers/publish.worker.js
+
 try {
   // TENTATIVA 1: Tenta publicar
   const result = await mlService.publishSmart({ accessToken, payload, description });
@@ -207,7 +209,7 @@ try {
   let payloadCorrigido = JSON.parse(JSON.stringify(payload)); 
   let precisaTentarNovamente = false;
 
-  // --- AUTO-HEALER ---
+  // --- AUTO-HEALER BÁSICO ---
   if (erroStr.includes('user has not mode')) {
       if (payloadCorrigido.shipping) delete payloadCorrigido.shipping.mode;
       precisaTentarNovamente = true;
@@ -233,12 +235,34 @@ try {
       if (payloadCorrigido.shipping) payloadCorrigido.shipping.free_shipping = true;
       precisaTentarNovamente = true;
   }
-  if (erroStr.includes('invalid_fields') && erroStr.includes('title')) {
-        delete payloadCorrigido.title;
-        precisaTentarNovamente = true;
+
+  // ✅ CORREÇÃO: Auto-healer para anúncios simples que rejeitam "family_name" em contas não-migradas
+  // A condição foi ajustada para só remover o family_name se o erro for de "campo inválido", e não de "campo ausente".
+  if (erroStr.includes('invalid_fields') && (erroStr.includes('family name') || erroStr.includes('family_name')) && (!payloadCorrigido.variations || payloadCorrigido.variations.length === 0) && payloadCorrigido.family_name) {
+      delete payloadCorrigido.family_name;
+      precisaTentarNovamente = true;
   }
 
-  if (precisaTentarNovamente && !erroStr.includes('variations_not_allowed')) {
+  // ✅ CORREÇÃO: Auto-healer para anúncios simples em contas migradas para User Products.
+  // No novo modelo, o campo "title" não deve ser enviado na publicação.
+  if (erroStr.includes('invalid_fields') && erroStr.includes('title') && (!payloadCorrigido.variations || payloadCorrigido.variations.length === 0) && payloadCorrigido.title) {
+      delete payloadCorrigido.title;
+      precisaTentarNovamente = true;
+  }
+
+  // Se tem variações e o ML rejeitou com invalid_fields, variations_not_allowed ou family_name
+
+  // Se tem variações e o ML rejeitou com invalid_fields, variations_not_allowed ou family_name
+  // Isso indica que a conta já foi migrada para o modelo "User Products" ou a categoria não aceita variações
+  const isVariationsError = payloadCorrigido.variations && payloadCorrigido.variations.length > 0 && 
+    (erroStr.includes('variations_not_allowed') || 
+     erroStr.includes('invalid_fields') || 
+     erroStr.includes('family name') || 
+     erroStr.includes('family_name') || 
+     erroStr.includes('variations is invalid'));
+
+  // Só tenta reenviar o payload corrigido se NÃO for um erro crônico de variações (que exige desmembramento total)
+  if (precisaTentarNovamente && !isVariationsError) {
       try {
           const retryRes = await mlService.publishSmart({ accessToken, payload: payloadCorrigido, description });
           idsCriados.push(retryRes.id);
@@ -248,52 +272,71 @@ try {
           erroStr = JSON.stringify(e).toLowerCase(); 
       }
   }
-    
-    // --- DESMEMBRAMENTO DE VARIAÇÕES ---
-    const erroVariacaoNaoPermitida = erroStr.includes('variations_not_allowed');
-    if (idsCriados.length === 0 && erroVariacaoNaoPermitida && payloadCorrigido.variations && payloadCorrigido.variations.length > 0) {
-        try {
-            for (const variacao of payloadCorrigido.variations) {
-                const payloadSeparado = { ...payloadCorrigido };
-                delete payloadSeparado.variations; 
-                payloadSeparado.price = variacao.price;
-                payloadSeparado.available_quantity = variacao.available_quantity;
-                
-                if (variacao.picture_ids && variacao.picture_ids.length > 0) {
-                     payloadSeparado.pictures = variacao.picture_ids.map(img => typeof img === 'string' ? { source: img } : img);
-                }
-                
-                const mapAtributos = new Map();
-                [...(payloadCorrigido.attributes || []), ...(variacao.attributes || []), ...(variacao.attribute_combinations || [])].forEach(attr => mapAtributos.set(attr.id, attr));
-                payloadSeparado.attributes = Array.from(mapAtributos.values());
-                
-                const r = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
-                idsCriados.push(r.id);
-            }
-            logCriacao = `Sucesso (Desmembrado)! IDs: ${idsCriados.join(', ')}`;
-        } catch (e) {
-            erroObjAtual = e; 
-        }
-    }
 
-    // Se falhou mesmo com os healers, lança o erro
-    if (idsCriados.length === 0) {
-      let erroTxt = "Erro desconhecido ao tentar publicar.";
-      const dataML = erroObjAtual.details;
-      if (dataML?.cause && Array.isArray(dataML.cause) && dataML.cause.length > 0) {
-          erroTxt = dataML.cause.map(c => c.message || c.code).join(' | ');
-      } else if (dataML?.message) {
-          erroTxt = dataML.message;
-      } else if (erroObjAtual.message) {
-          erroTxt = erroObjAtual.message;
+  // --- DESMEMBRAMENTO DE VARIAÇÕES (NOVO MODELO: USER PRODUCTS) ---
+  if (idsCriados.length === 0 && isVariationsError) {
+      try {
+          // O family_name é a "cola" que unirá os anúncios criados na visão do comprador
+          const familyName = payloadCorrigido.family_name || (payloadCorrigido.title ? payloadCorrigido.title.substring(0, 60) : 'Produto');
+          
+          for (const variacao of payloadCorrigido.variations) {
+              const payloadSeparado = { ...payloadCorrigido };
+              delete payloadSeparado.variations;
+              
+              payloadSeparado.family_name = familyName;
+              payloadSeparado.price = variacao.price || payloadCorrigido.price;
+              payloadSeparado.available_quantity = variacao.available_quantity || 1;
+
+              if (variacao.picture_ids && variacao.picture_ids.length > 0) {
+                  payloadSeparado.pictures = variacao.picture_ids.map(img => typeof img === 'string' ? { source: img } : img);
+              }
+
+              // Mescla os atributos do Produto Pai com as Características e Combinações (cores/tamanhos) da Variação
+              const mapAtributos = new Map();
+              [...(payloadCorrigido.attributes || [])].forEach(attr => { if (attr.id) mapAtributos.set(attr.id, attr); });
+              [...(variacao.attributes || []), ...(variacao.attribute_combinations || [])].forEach(attr => { if (attr.id) mapAtributos.set(attr.id, attr); });
+              payloadSeparado.attributes = Array.from(mapAtributos.values());
+
+              try {
+                  const r = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
+                  idsCriados.push(r.id);
+              } catch (eFilho) {
+                  const erroFilhoStr = JSON.stringify(eFilho).toLowerCase();
+                  // No modelo User Products, o Mercado Livre frequentemente rejeita o campo "title".
+                  // Se falhar de novo por invalid_fields focado no título, nós removemos e enviamos novamente.
+                  if (erroFilhoStr.includes('invalid_fields') && erroFilhoStr.includes('title')) {
+                      delete payloadSeparado.title;
+                      const r2 = await mlService.publishSmart({ accessToken, payload: payloadSeparado, description });
+                      idsCriados.push(r2.id);
+                  } else {
+                      throw eFilho; // Caso seja erro de imagem, marca, etc.
+                  }
+              }
+          }
+          logCriacao = `Sucesso (Variações Desmembradas / User Products)! IDs criados: ${idsCriados.join(', ')}`;
+      } catch (e) {
+          erroObjAtual = e;
       }
-      await prisma.tarefaFila.updateMany({
-          where: { id: tarefaId },
-          data: { status: 'FALHA', detalhes: erroTxt, tentativas: { increment: 1 } }
-      });
-      throw new Error(erroTxt);
-    }
   }
+
+  // Se falhou mesmo passando por todos os "healers", lança o erro para travar a fila
+  if (idsCriados.length === 0) {
+    let erroTxt = "Erro desconhecido ao tentar publicar.";
+    const dataML = erroObjAtual.details;
+    if (dataML?.cause && Array.isArray(dataML.cause) && dataML.cause.length > 0) {
+        erroTxt = dataML.cause.map(c => c.message || c.code).join(' | ');
+    } else if (dataML?.message) {
+        erroTxt = dataML.message;
+    } else if (erroObjAtual.message) {
+        erroTxt = erroObjAtual.message;
+    }
+    await prisma.tarefaFila.updateMany({
+        where: { id: tarefaId },
+        data: { status: 'FALHA', detalhes: erroTxt, tentativas: { increment: 1 } }
+    });
+    throw new Error(erroTxt);
+  }
+}
 
   // ✅ CORREÇÃO CHAVE: Fase 2 - Processar Atacado e Promoções para os IDs criados
   let logAtacadoPromo = "";

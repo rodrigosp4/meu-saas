@@ -2,6 +2,16 @@ import { Router } from 'express';
 import prisma from '../config/prisma.js';
 import { syncQueue, mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
 
+function parseErrorIds(detalhes) {
+  if (!detalhes) return [];
+  const ids = new Set();
+  for (const line of detalhes.split('\n')) {
+    const m = line.match(/^\[ID:\s*([A-Z0-9]+)\].*Erro:/);
+    if (m) ids.add(m[1]);
+  }
+  return [...ids];
+}
+
 const router = Router();
 
 const QUEUES_BY_TIPO = {
@@ -39,7 +49,23 @@ router.get('/api/fila', async (req, res) => {
   }
 });
 
-// 2. Excluir tarefa individual (cancela o job no BullMQ se ainda estiver pendente)
+// 2. Buscar detalhes de uma tarefa específica (para polling ao vivo no frontend)
+router.get('/api/fila/:tarefaId/detalhes', async (req, res) => {
+  try {
+    const { tarefaId } = req.params;
+    const { userId } = req.query;
+    const tarefa = await prisma.tarefaFila.findFirst({
+      where: { id: tarefaId, userId },
+      select: { status: true, detalhes: true }
+    });
+    if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada.' });
+    res.json(tarefa);
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 3. Excluir tarefa individual (cancela o job no BullMQ se ainda estiver pendente)
 router.delete('/api/fila/:tarefaId', async (req, res) => {
   try {
     const { tarefaId } = req.params;
@@ -68,7 +94,7 @@ router.delete('/api/fila/:tarefaId', async (req, res) => {
   }
 });
 
-// 3. Limpar Fila (Excluir todos os status)
+// 3. Limpar Fila (Excluir concluídos/falhas do banco)
 router.delete('/api/fila/limpar/:userId', async (req, res) => {
   try {
     await prisma.tarefaFila.deleteMany({
@@ -79,6 +105,77 @@ router.delete('/api/fila/limpar/:userId', async (req, res) => {
     });
 
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 4. Forçar limpeza total do Redis (drain de todos os jobs pendentes/ativos)
+router.post('/api/fila/forcar-limpar/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Deleta todos os registros do banco para este usuário
+    await prisma.tarefaFila.deleteMany({ where: { userId } });
+
+    // Obliterate remove TODOS os jobs do Redis, incluindo os que têm lock ativo
+    await Promise.allSettled([
+      priceQueue.obliterate({ force: true }),
+      priceCheckQueue.obliterate({ force: true }),
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 5. Reprocessar apenas os itens com erro de uma tarefa concluída
+// payloadOverride: parâmetros manuais quando a tarefa não tem payload salvo (tarefas antigas)
+router.post('/api/fila/:tarefaId/reprocessar-erros', async (req, res) => {
+  try {
+    const { tarefaId } = req.params;
+    const { userId, payloadOverride } = req.body;
+
+    const tarefa = await prisma.tarefaFila.findFirst({ where: { id: tarefaId, userId } });
+    if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada.' });
+
+    // Usa payload salvo da tarefa; se não houver, usa o override enviado pelo frontend
+    const payload = tarefa.payload || payloadOverride;
+    if (!payload) return res.status(400).json({ erro: 'Tarefa sem payload. Informe os parâmetros manualmente.' });
+
+    const errorIds = parseErrorIds(tarefa.detalhes);
+    if (errorIds.length === 0) return res.status(400).json({ erro: 'Nenhum item com erro encontrado no log.' });
+
+    // Busca contaId e sku para cada item com erro
+    const anuncios = await prisma.anuncioML.findMany({
+      where: { id: { in: errorIds }, conta: { userId } },
+      select: { id: true, contaId: true, sku: true }
+    });
+
+    if (anuncios.length === 0) return res.status(400).json({ erro: 'Itens com erro não encontrados no banco.' });
+
+    const novaTarefa = await prisma.tarefaFila.create({
+      data: {
+        userId,
+        tipo: 'Corrigir Preço em Massa',
+        alvo: `${anuncios.length} erro(s) reprocessado(s)`,
+        conta: 'Várias Contas',
+        status: 'PENDENTE',
+        payload
+      }
+    });
+
+    const job = await priceQueue.add('update-price', {
+      tarefaId: novaTarefa.id,
+      userId,
+      items: anuncios,
+      ...payload
+    });
+
+    await prisma.tarefaFila.updateMany({ where: { id: novaTarefa.id }, data: { jobId: job.id } });
+
+    res.json({ ok: true, tarefaId: novaTarefa.id, itens: anuncios.length });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }

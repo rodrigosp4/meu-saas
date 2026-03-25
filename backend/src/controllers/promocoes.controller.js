@@ -2,6 +2,7 @@
 import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
+import { promoQueue } from '../workers/queue.js';
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -489,6 +490,37 @@ export const promocoesController = {
     }
   },
 
+  // ─── POST /api/promocoes/massa-fila ─────────────────────────────────────────
+  async ativarRemoverMassaFila(req, res) {
+    try {
+      const { userId, itens, acao } = req.body;
+      if (!userId || !itens || !Array.isArray(itens)) {
+        return res.status(400).json({ erro: 'userId e array de itens são obrigatórios' });
+      }
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId,
+          tipo: acao === 'ATIVAR' ? 'PROMO_ATIVAR' : 'PROMO_REMOVER',
+          status: 'PENDENTE',
+          detalhes: `Aguardando processamento de ${itens.length} itens...`,
+        },
+      });
+
+      await promoQueue.add('processar-massa', {
+        tarefaId: tarefa.id,
+        userId,
+        itens,
+        acao
+      }, { removeOnComplete: true, removeOnFail: true });
+
+      res.json({ ok: true, tarefaId: tarefa.id, message: 'Enviado para a fila de processamento.' });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ erro: 'Erro ao enviar para fila', detalhes: err.message });
+    }
+  },
+
   // ─── POST /api/orquestrador/executar ────────────────────────────────────────
   async executarOrquestrador(req, res) {
     try {
@@ -510,9 +542,11 @@ export const promocoesController = {
       const contas = await prisma.contaML.findMany({ where: contasWhere });
       if (contas.length === 0) return res.status(404).json({ erro: 'Nenhuma conta encontrada' });
 
-      const joined = [];
+      const itensFila = [];
       const skipped = [];
-      const errors = [];
+
+      const TIPOS_COM_OFFER_ID_ORC = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
+      const TIPOS_COM_PRECO_ORC = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
 
       for (const regra of regras) {
         const tipos = regra.tiposPermitidos || regra.tipos_permitidos || [];
@@ -520,7 +554,6 @@ export const promocoesController = {
         const tolerancia = parseFloat(regra.tolerancia) || 0;
         const limiteMax = maxPct + tolerancia;
 
-        // Get stored promotions matching this rule's types
         const promos = await prisma.promoML.findMany({
           where: {
             contaId: { in: contas.map(c => c.id) },
@@ -529,62 +562,59 @@ export const promocoesController = {
           },
         });
 
-        // Build token cache
-        const tokenCache = {};
-        for (const conta of contas) {
-          tokenCache[conta.id] = { token: conta.accessToken, conta };
-        }
-
         for (const promo of promos) {
-          const contaEntry = tokenCache[promo.contaId];
-          if (!contaEntry) continue;
-
-          // Refresh token lazily
-          if (!contaEntry.refreshed) {
-            contaEntry.token = await refreshContaToken(contaEntry.conta);
-            contaEntry.refreshed = true;
-          }
-
           const items = Array.isArray(promo.itens) ? promo.itens : [];
           const candidates = items.filter(item => {
             if (item.status !== 'candidate') return false;
             const sp = item.seller_percentage ?? item.sellerPercentage ?? null;
-            if (sp === null) return true; // join if no % info (e.g. DEAL items)
+            if (sp === null) return true;
             return sp <= limiteMax;
           });
 
           for (const item of candidates) {
-            try {
-              const headers = { Authorization: `Bearer ${contaEntry.token}`, 'Content-Type': 'application/json' };
-              const body = {
-                promotion_id: promo.id,
-                promotion_type: promo.tipo,
-              };
-              if (item.offer_id) body.offer_id = item.offer_id;
+            const filaItem = {
+              itemId: item.id,
+              contaId: promo.contaId,
+              promoTipo: promo.tipo,
+              promoId: promo.id,
+            };
 
-              await axios.post(
-                `https://api.mercadolibre.com/seller-promotions/items/${item.id}?app_version=v2`,
-                body,
-                { headers, timeout: 10000 }
-              );
+            if (item.offer_id && TIPOS_COM_OFFER_ID_ORC.has(promo.tipo)) filaItem.offerId = item.offer_id;
 
-              joined.push({ promoId: promo.id, itemId: item.id, tipo: promo.tipo, sellerPct: item.seller_percentage });
-              await delay(200);
-            } catch (joinErr) {
-              errors.push({
-                promoId: promo.id,
-                itemId: item.id,
-                erro: joinErr.response?.data?.message || joinErr.message,
-              });
+            if (TIPOS_COM_PRECO_ORC.has(promo.tipo)) {
+              const priceToUse = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
+              if (priceToUse && !isNaN(priceToUse)) filaItem.dealPrice = Number(priceToUse);
             }
+
+            itensFila.push(filaItem);
           }
 
           const nonCandidates = items.filter(i => i.status !== 'candidate');
-          skipped.push(...nonCandidates.map(i => ({ promoId: promo.id, itemId: i.id, motivo: `status: ${i.status}` })));
+          skipped.push(...nonCandidates.map(i => ({ promoId: promo.id, itemId: i.id })));
         }
       }
 
-      res.json({ ok: true, joined: joined.length, skipped: skipped.length, errors: errors.length, detalhes: { joined, errors } });
+      if (itensFila.length === 0) {
+        return res.json({ ok: true, joined: 0, skipped: skipped.length, errors: 0, message: 'Nenhum candidato encontrado para ativar.' });
+      }
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: {
+          userId,
+          tipo: 'PROMO_ATIVAR',
+          status: 'PENDENTE',
+          detalhes: `Aguardando processamento de ${itensFila.length} itens...`,
+        },
+      });
+
+      await promoQueue.add('processar-massa', {
+        tarefaId: tarefa.id,
+        userId,
+        itens: itensFila,
+        acao: 'ATIVAR',
+      }, { removeOnComplete: true, removeOnFail: true });
+
+      res.json({ ok: true, tarefaId: tarefa.id, joined: itensFila.length, skipped: skipped.length, errors: 0 });
     } catch (err) {
       console.error('[PromoML] executarOrquestrador error:', err);
       res.status(500).json({ erro: 'Erro ao executar orquestrador', detalhes: err.message });

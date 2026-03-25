@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { useContasML } from '../contexts/ContasMLContext';
 
 export default function Configuracoes({ usuarioId }) {
+  const { role } = useAuth();
+  const { refresh: refreshContas } = useContasML();
   const [tinyToken, setTinyToken] = useState('');
+  const [tinyPlano, setTinyPlano] = useState('descontinuado');
   const [isTokenSalvo, setIsTokenSalvo] = useState(false);
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
@@ -36,6 +41,20 @@ export default function Configuracoes({ usuarioId }) {
   const [removeBgSalvo, setRemoveBgSalvo] = useState(false);
   const [salvandoRemoveBg, setSalvandoRemoveBg] = useState(false);
 
+  // ===== SUB-USUÁRIOS =====
+  const [subUsuarios, setSubUsuarios] = useState([]);
+  const [modalSubUser, setModalSubUser] = useState(null); // null | 'criar' | { ...subUser }
+  const [subEmail, setSubEmail] = useState('');
+  const [subSenha, setSubSenha] = useState('');
+  const [subRole, setSubRole] = useState('OPERATOR');
+  const [subPermissoesCustom, setSubPermissoesCustom] = useState([]);
+  const [salvandoSub, setSalvandoSub] = useState(false);
+
+  // ===== SUPORTE =====
+  const [suporteAtivo, setSuporteAtivo] = useState(false);
+  const [suporteExpira, setSuporteExpira] = useState(null);
+  const [salvandoSuporteToggle, setSalvandoSuporteToggle] = useState(false);
+
 // 1. CARREGA TUDO DO BANCO DE DADOS
   const carregarConfig = (id) => {
     // O Date.now() impede que a Vercel entregue dados cacheados (antigos)
@@ -47,6 +66,7 @@ export default function Configuracoes({ usuarioId }) {
       .then(data => {
         if (data.tinyToken) {
           setTinyToken(data.tinyToken);
+          setTinyPlano(data.tinyPlano || 'descontinuado');
           setIsTokenSalvo(true);
         }
         setContasML(data.contasML || []);
@@ -69,8 +89,6 @@ export default function Configuracoes({ usuarioId }) {
           setRemoveBgApiKey(data.removeBgApiKey);
           setRemoveBgSalvo(true);
         }
-        localStorage.setItem('saas_contas_ml', JSON.stringify(data.contasML || []));
-        localStorage.setItem('saas_regras_preco', JSON.stringify(data.regrasPreco || []));
       });
   };
 
@@ -80,17 +98,15 @@ export default function Configuracoes({ usuarioId }) {
     carregarConfig(usuarioId);
   }, [usuarioId]);
 
-  // 2. SALVAR TOKEN TINY NO BANCO
   const salvarTokenTiny = async () => {
     if (!tinyToken) return alert("Insira um token.");
     await fetch(`/api/usuario/${usuarioId}/tiny`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tinyToken })
+      body: JSON.stringify({ tinyToken, tinyPlano })
     });
-    const userDb = JSON.parse(localStorage.getItem('saas_usuario'));
-    localStorage.setItem('saas_usuario', JSON.stringify({...userDb, tinyToken}));
+    refreshContas();
     setIsTokenSalvo(true);
-    alert('Token Tiny Salvo no banco de dados!');
+    alert('Configurações do Tiny salvas no banco de dados!');
   };
 
   // 3. EXCLUIR CONTA NO BANCO
@@ -125,9 +141,7 @@ export default function Configuracoes({ usuarioId }) {
       });
       if (!res.ok) throw new Error("Erro na API");
       setContasML(prev => prev.map(c => c.id === id ? { ...c, envioSuportado: novoModo } : c));
-      const contasSalvas = JSON.parse(localStorage.getItem('saas_contas_ml')) ||[];
-      const novasContas = contasSalvas.map(c => c.id === id ? { ...c, envioSuportado: novoModo } : c);
-      localStorage.setItem('saas_contas_ml', JSON.stringify(novasContas));
+      refreshContas();
     } catch (error) {
       alert("Erro ao alterar logística.");
     }
@@ -338,6 +352,117 @@ export default function Configuracoes({ usuarioId }) {
     setRemoveBgSalvo(false);
   };
 
+  // ===== HANDLERS SUB-USUÁRIOS =====
+  const carregarSubUsuarios = async () => {
+    try {
+      const res = await fetch('/api/sub-usuarios');
+      if (!res.ok) return;
+      const data = await res.json();
+      setSubUsuarios(data);
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    if (role === 'OWNER') {
+      carregarSubUsuarios();
+      carregarStatusSuporte();
+    }
+  }, [role]);
+
+  const abrirModalCriar = () => {
+    setSubEmail(''); setSubSenha(''); setSubRole('OPERATOR'); setSubPermissoesCustom([]);
+    setModalSubUser('criar');
+  };
+
+  const abrirModalEditar = (sub) => {
+    setSubEmail(sub.email); setSubSenha(''); setSubRole(sub.role);
+    setSubPermissoesCustom(sub.permissoesCustom || []);
+    setModalSubUser(sub);
+  };
+
+  const fecharModal = () => setModalSubUser(null);
+
+  const salvarSubUsuario = async () => {
+    setSalvandoSub(true);
+    try {
+      if (modalSubUser === 'criar') {
+        const res = await fetch('/api/sub-usuarios', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: subEmail, password: subSenha, role: subRole,
+            permissoesCustom: subPermissoesCustom.length > 0 ? subPermissoesCustom : null,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.erro); return; }
+        setSubUsuarios(prev => [...prev, data]);
+      } else {
+        const body = { role: subRole, permissoesCustom: subPermissoesCustom.length > 0 ? subPermissoesCustom : null };
+        if (subSenha) body.password = subSenha;
+        const res = await fetch(`/api/sub-usuarios/${modalSubUser.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) { alert(data.erro); return; }
+        setSubUsuarios(prev => prev.map(s => s.id === data.id ? data : s));
+      }
+      fecharModal();
+    } finally {
+      setSalvandoSub(false);
+    }
+  };
+
+  const toggleSubAtivo = async (sub) => {
+    const res = await fetch(`/api/sub-usuarios/${sub.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !sub.ativo }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSubUsuarios(prev => prev.map(s => s.id === data.id ? data : s));
+    }
+  };
+
+  const excluirSubUsuario = async (sub) => {
+    if (!confirm(`Excluir sub-usuário "${sub.email}"?`)) return;
+    const res = await fetch(`/api/sub-usuarios/${sub.id}`, { method: 'DELETE' });
+    if (res.ok) setSubUsuarios(prev => prev.filter(s => s.id !== sub.id));
+  };
+
+  // ===== HANDLERS SUPORTE =====
+  const carregarStatusSuporte = async () => {
+    try {
+      const res = await fetch('/api/usuario/suporte-status');
+      if (!res.ok) return;
+      const data = await res.json();
+      setSuporteAtivo(data.suporteAtivo);
+      setSuporteExpira(data.suporteExpira);
+    } catch (_) {}
+  };
+
+  const toggleSuporteAcesso = async () => {
+    setSalvandoSuporteToggle(true);
+    try {
+      const novoEstado = !suporteAtivo;
+      const res = await fetch('/api/usuario/suporte-toggle', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ativo: novoEstado }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuporteAtivo(data.suporteAtivo);
+        setSuporteExpira(data.suporteExpira);
+      }
+    } finally {
+      setSalvandoSuporteToggle(false);
+    }
+  };
+
   const formatarPrecoBaseText = (tipo) => {
     if (tipo === 'venda') return 'Preço de Venda';
     if (tipo === 'custo') return 'Preço de Custo';
@@ -368,25 +493,46 @@ export default function Configuracoes({ usuarioId }) {
       {/* 1. TINY ERP */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
         <h4 className="text-lg font-bold" style={{ color: c.orange }}>Conexão Tiny ERP</h4>
-        <div className="mt-4 flex gap-4">
-          <input 
-            type="text" 
-            value={tinyToken}
-            onChange={(e) => setTinyToken(e.target.value)}
-            className="flex-1 px-3 py-2 border rounded-md"
-            placeholder="Token API Tiny..."
-            disabled={isTokenSalvo}
-          />
-          <button 
-            onClick={salvarTokenTiny} 
-            disabled={isTokenSalvo} 
-            className="px-4 py-2 text-white rounded transition"
-            style={{ backgroundColor: c.orange }}
-            onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = c.orangeHover; }}
-            onMouseOut={e => e.target.style.backgroundColor = c.orange}
-          >
-            Salvar
-          </button>
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="flex gap-4">
+            <input 
+              type="text" 
+              value={tinyToken}
+              onChange={(e) => {
+                setTinyToken(e.target.value);
+                setIsTokenSalvo(false);
+              }}
+              className="flex-1 px-3 py-2 border rounded-md"
+              placeholder="Token API Tiny..."
+            />
+            <select
+              title="Ajuste do Limite da API conforme o plano configurado do Tiny ERP"
+              value={tinyPlano}
+              onChange={(e) => {
+                setTinyPlano(e.target.value);
+                setIsTokenSalvo(false);
+              }}
+              className="w-48 px-3 py-2 border rounded-md bg-white"
+            >
+              <option value="comecar">Plano Começar (Sem API)</option>
+              <option value="crescer">Plano Crescer (30 reqs/min)</option>
+              <option value="evoluir">Plano Evoluir (60 reqs/min)</option>
+              <option value="potencializar">Plano Potencializar (120 reqs/min)</option>
+              <option value="descontinuado">Planos Descontinuados (20 reqs/min)</option>
+            </select>
+          </div>
+          <div className="flex justify-end">
+            <button 
+              onClick={salvarTokenTiny} 
+              disabled={isTokenSalvo} 
+              className="px-4 py-2 text-white rounded transition disabled:opacity-50"
+              style={{ backgroundColor: c.orange }}
+              onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = c.orangeHover; }}
+              onMouseOut={e => e.target.style.backgroundColor = c.orange}
+            >
+              {isTokenSalvo ? 'Salvo' : 'Salvar'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -956,6 +1102,197 @@ export default function Configuracoes({ usuarioId }) {
           </button>
         </div>
       </div>
+
+
+    {/* ================================================================
+        SEÇÃO: CONTROLE DE USUÁRIOS (apenas OWNER)
+        ================================================================ */}
+    {role === 'OWNER' && (
+      <>
+        {/* SUB-USUÁRIOS */}
+        <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-lg font-bold" style={{ color: c.heading }}>Sub-usuários</h2>
+              <p className="text-sm mt-1" style={{ color: c.muted }}>
+                Crie usuários adicionais para sua equipe. Eles compartilham os mesmos dados da conta.
+              </p>
+            </div>
+            <button
+              onClick={abrirModalCriar}
+              className="px-4 py-2 text-white font-bold rounded shadow text-sm"
+              style={{ backgroundColor: c.orange }}
+              onMouseOver={e => e.currentTarget.style.backgroundColor = c.orangeHover}
+              onMouseOut={e => e.currentTarget.style.backgroundColor = c.orange}
+            >
+              + Adicionar
+            </button>
+          </div>
+
+          {subUsuarios.length === 0 ? (
+            <p className="text-sm text-center py-4" style={{ color: c.muted }}>
+              Nenhum sub-usuário cadastrado.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {subUsuarios.map(sub => (
+                <div key={sub.id} className="flex items-center justify-between p-3 rounded-md" style={{ border: `1px solid ${c.border}`, backgroundColor: '#f9f9f9' }}>
+                  <div className="flex items-center gap-3">
+                    <span style={{
+                      fontSize: '0.7em', fontWeight: 700, padding: '2px 8px', borderRadius: '4px',
+                      backgroundColor: sub.role === 'OPERATOR' ? '#eaf4fb' : '#f0f4c3',
+                      color: sub.role === 'OPERATOR' ? '#2980b9' : '#827717',
+                    }}>
+                      {sub.role === 'OPERATOR' ? 'Operador' : 'Visualizador'}
+                    </span>
+                    <span className="text-sm font-medium" style={{ color: c.headingSub }}>{sub.email}</span>
+                    {!sub.ativo && (
+                      <span style={{ fontSize: '0.7em', color: '#c0392b', fontWeight: 700 }}>INATIVO</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => abrirModalEditar(sub)}
+                      className="px-3 py-1 text-xs font-bold rounded"
+                      style={{ color: c.orange, border: `1px solid ${c.orange}40`, backgroundColor: '#fef5e7' }}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => toggleSubAtivo(sub)}
+                      className="px-3 py-1 text-xs font-bold rounded"
+                      style={{ color: sub.ativo ? '#c0392b' : c.green, border: `1px solid ${sub.ativo ? '#c0392b' : c.green}40`, backgroundColor: sub.ativo ? '#fdf2f2' : '#eafaf1' }}
+                    >
+                      {sub.ativo ? 'Desativar' : 'Ativar'}
+                    </button>
+                    <button
+                      onClick={() => excluirSubUsuario(sub)}
+                      className="px-3 py-1 text-xs font-bold rounded"
+                      style={{ color: '#c0392b', border: '1px solid #c0392b40', backgroundColor: '#fdf2f2' }}
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Perfis resumo */}
+          <div className="mt-4 p-3 rounded text-xs" style={{ backgroundColor: '#f4f6f8', color: c.muted }}>
+            <strong style={{ color: c.headingSub }}>Perfis disponíveis:</strong>
+            {' '}
+            <strong>Operador</strong> — acesso a todas as telas exceto Configurações e Cliente API.
+            {' · '}
+            <strong>Visualizador</strong> — acesso somente leitura às telas principais.
+          </div>
+        </div>
+
+        {/* ACESSO DE SUPORTE */}
+        <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
+          <h2 className="text-lg font-bold mb-1" style={{ color: c.heading }}>Acesso de Suporte</h2>
+          <p className="text-sm mb-4" style={{ color: c.muted }}>
+            Permite que a equipe de suporte acesse sua conta temporariamente para resolver problemas.
+            O acesso expira automaticamente em <strong>24 horas</strong>.
+          </p>
+          <div className="flex items-center justify-between p-4 rounded-lg" style={{ border: `1px solid ${suporteAtivo ? '#27ae60' : c.border}`, backgroundColor: suporteAtivo ? '#eafaf1' : '#f9f9f9' }}>
+            <div>
+              <p className="font-bold text-sm" style={{ color: suporteAtivo ? c.green : c.headingSub }}>
+                {suporteAtivo ? '✓ Acesso de suporte ATIVO' : 'Acesso de suporte inativo'}
+              </p>
+              {suporteAtivo && suporteExpira && (
+                <p className="text-xs mt-1" style={{ color: c.muted }}>
+                  Expira em: {new Date(suporteExpira).toLocaleString('pt-BR')}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={toggleSuporteAcesso}
+              disabled={salvandoSuporteToggle}
+              className="px-5 py-2 text-white font-bold rounded text-sm disabled:opacity-60"
+              style={{ backgroundColor: suporteAtivo ? '#c0392b' : c.green }}
+              onMouseOver={e => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = suporteAtivo ? '#e74c3c' : c.greenHover; }}
+              onMouseOut={e => e.currentTarget.style.backgroundColor = suporteAtivo ? '#c0392b' : c.green}
+            >
+              {salvandoSuporteToggle ? 'Salvando...' : suporteAtivo ? 'Revogar acesso' : 'Permitir acesso (24h)'}
+            </button>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* MODAL SUB-USUÁRIO */}
+    {modalSubUser && (
+      <div style={{
+        position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+      }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '8px', padding: '28px', width: '420px', maxWidth: '90vw', boxShadow: '0 8px 30px rgba(0,0,0,0.15)' }}>
+          <h3 className="text-lg font-bold mb-4" style={{ color: c.heading }}>
+            {modalSubUser === 'criar' ? 'Novo Sub-usuário' : `Editar: ${modalSubUser.email}`}
+          </h3>
+
+          {modalSubUser === 'criar' && (
+            <div className="mb-3">
+              <label className="text-xs font-bold block mb-1" style={{ color: c.headingSub }}>E-mail</label>
+              <input
+                type="email"
+                value={subEmail}
+                onChange={e => setSubEmail(e.target.value)}
+                className="w-full px-3 py-2 border rounded text-sm"
+                style={{ border: `1px solid ${c.border}` }}
+                placeholder="usuario@empresa.com"
+              />
+            </div>
+          )}
+
+          <div className="mb-3">
+            <label className="text-xs font-bold block mb-1" style={{ color: c.headingSub }}>
+              Senha{modalSubUser !== 'criar' && ' (deixe em branco para manter)'}
+            </label>
+            <input
+              type="password"
+              value={subSenha}
+              onChange={e => setSubSenha(e.target.value)}
+              className="w-full px-3 py-2 border rounded text-sm"
+              style={{ border: `1px solid ${c.border}` }}
+              placeholder={modalSubUser === 'criar' ? 'Mínimo 6 caracteres' : '••••••••'}
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="text-xs font-bold block mb-1" style={{ color: c.headingSub }}>Perfil</label>
+            <select
+              value={subRole}
+              onChange={e => setSubRole(e.target.value)}
+              className="w-full px-3 py-2 border rounded text-sm"
+              style={{ border: `1px solid ${c.border}` }}
+            >
+              <option value="OPERATOR">Operador — todas as telas exceto Configurações</option>
+              <option value="VIEWER">Visualizador — apenas telas de consulta</option>
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={fecharModal}
+              className="px-4 py-2 text-sm font-bold rounded"
+              style={{ color: c.muted, border: `1px solid ${c.border}` }}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={salvarSubUsuario}
+              disabled={salvandoSub}
+              className="px-5 py-2 text-white text-sm font-bold rounded disabled:opacity-60"
+              style={{ backgroundColor: c.orange }}
+            >
+              {salvandoSub ? 'Salvando...' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     </div>
   );

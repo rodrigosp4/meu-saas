@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { useContasML } from '../contexts/ContasMLContext';
 
-export default function Anuncios({ onAnunciar, usuarioId }) { 
+export default function Anuncios({ onAnunciar, usuarioId }) {
+  const { tinyToken } = useContasML();
   const [produtos, setProdutos] = useState([]);
   const [totalProdutos, setTotalProdutos] = useState(0);
   const[syncProgress, setSyncProgress] = useState(null);
@@ -74,8 +76,8 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
     try {
       const res = await fetch(`/api/produtos?userId=${usuarioId}&page=${currentPage}&limit=${itemsPerPage}&search=${searchTerm}&status=${statusFilter}`);
       const data = await res.json();
-      setProdutos(data.produtos);
-      setTotalProdutos(data.total);
+      setProdutos(Array.isArray(data.produtos) ? data.produtos : []);
+      setTotalProdutos(Number(data.total) || 0);
     } catch (error) {
       console.error("Erro ao buscar produtos:", error);
     } finally {
@@ -89,8 +91,6 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
   
   // ✅ MODIFICADO: para aceitar 'ids' e limpar seleção
   const iniciarSincronizacao = async (mode = 'all', sku = '', ids =[]) => {
-    const userDb = JSON.parse(localStorage.getItem('saas_usuario'));
-    const tinyToken = userDb?.tinyToken;
     if (!tinyToken) {
       alert("Vá em Configurações e salve seu Token do Tiny ERP primeiro!");
       return;
@@ -293,14 +293,12 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
               </th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>SKU</th>
               <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Produto</th>
-              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Estoque</th>
-              <th className="px-6 py-3 text-left text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Preço</th>
               <th className="px-6 py-3 text-right text-xs font-semibold uppercase" style={{ color: '#34495e' }}>Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y" style={{ backgroundColor: '#ffffff' }}>
             {isLoading ? (
-              <tr><td colSpan="6" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Buscando no banco de dados...</td></tr>
+              <tr><td colSpan="4" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Buscando no banco de dados...</td></tr>
             ) : produtos.length > 0 ? (
               produtos.map((produto) => {
                 const varInfo = getVariacoesInfo(produto);
@@ -340,12 +338,6 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm">
-                        <span className="font-semibold" style={{ color: produto.estoque > 0 ? '#27ae60' : '#7f8c8d' }}>
-                           {produto.estoque} un
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm font-medium">R$ {produto.preco.toFixed(2).replace('.', ',')}</td>
                       <td className="px-6 py-4 text-right text-sm font-medium" onClick={e => e.stopPropagation()}>
                         <button onClick={(e) => {
                             e.stopPropagation();
@@ -371,7 +363,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                     </tr>
                     {isExpanded && (
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <td colSpan="6" className="p-0">
+                        <td colSpan="4" className="p-0">
                           <div className="p-4 bg-slate-50/50 shadow-inner">
                             <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
                               Status de Publicação por Conta
@@ -428,7 +420,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                 )
               })
             ) : (
-              <tr><td colSpan="6" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Nenhum produto encontrado com os filtros atuais.</td></tr>
+              <tr><td colSpan="4" className="px-6 py-8 text-center text-sm" style={{ color: '#7f8c8d' }}>Nenhum produto encontrado com os filtros atuais.</td></tr>
             )}
           </tbody>
         </table>

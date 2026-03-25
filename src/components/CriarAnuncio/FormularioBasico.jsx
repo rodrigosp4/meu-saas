@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 
 export default function FormularioBasico(props) {
   const {
@@ -12,6 +12,7 @@ export default function FormularioBasico(props) {
     detalhesProduto, setImagemAmpliada,
     // Gerenciamento de imagens
     imagensOrdenadas, onImagensChange, uploadando, onUploadImagem,
+    onRemoverFundo, removendoFundo,
   } = props;
 
   const [dragOver, setDragOver] = useState(false);
@@ -47,6 +48,20 @@ export default function FormularioBasico(props) {
     const imgItem = items.find(i => i.type.startsWith('image/'));
     if (imgItem) { e.preventDefault(); onUploadImagem(imgItem.getAsFile()); }
   };
+
+  // Listener global de paste — funciona sem precisar clicar na zona antes
+  useEffect(() => {
+    const handleGlobalPaste = (e) => {
+      const active = document.activeElement;
+      const isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+      if (isTyping) return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const imgItem = items.find(i => i.type.startsWith('image/'));
+      if (imgItem) { e.preventDefault(); onUploadImagem(imgItem.getAsFile()); }
+    };
+    document.addEventListener('paste', handleGlobalPaste);
+    return () => document.removeEventListener('paste', handleGlobalPaste);
+  }, [onUploadImagem]);
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
@@ -202,6 +217,21 @@ export default function FormularioBasico(props) {
                   placeholder={idx === 0 ? 'URL da capa...' : 'URL...'}
                   className="w-full text-[9px] px-1.5 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-300"
                 />
+
+                {/* Botão remover fundo — só na capa */}
+                {idx === 0 && url && (
+                  <button
+                    onClick={e => { e.stopPropagation(); onRemoverFundo(0); }}
+                    disabled={removendoFundo}
+                    className="w-full flex items-center justify-center gap-1 text-[9px] font-bold px-1.5 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded disabled:opacity-50 transition-colors"
+                    title="Remove o fundo via Remove.bg, converte para JPG 1000x1000 e hospeda no Imgur"
+                  >
+                    {removendoFundo
+                      ? <><span className="animate-spin inline-block w-2 h-2 border border-white border-t-transparent rounded-full" />Processando...</>
+                      : <>✨ Remover fundo e otimizar</>
+                    }
+                  </button>
+                )}
               </div>
             ))}
 

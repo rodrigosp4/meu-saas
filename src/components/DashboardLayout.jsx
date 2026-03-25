@@ -1,4 +1,5 @@
 import React from 'react';
+// ícone de escudo para o admin
 
 // Ícones SVG inline para não depender de Font Awesome CDN
 const icons = {
@@ -117,10 +118,23 @@ const icons = {
       <path d="M3.27 6.96L12 12.01l8.73-5.05" />
     </svg>
   ),
+  shield: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  ),
+  clock: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
 };
 
 // Mapa de labels bonitos para o header
 const pageTitles = {
+  adminPanel: 'Painel Super Admin',
+  agendadorTarefas: 'Agendador de Tarefas',
   home: 'Início',
   produtosErp: 'Produtos do ERP',
   cadastramentoMassa: 'Cadastramento em Massa com IA', // <-- NOVA LINHA
@@ -141,11 +155,15 @@ const pageTitles = {
   clienteAPI: 'Cliente API (ML & Tiny)',
 };
 
-export default function DashboardLayout({ children, setActivePage, activePage, onLogout }) {
+export default function DashboardLayout({ children, setActivePage, activePage, onLogout, canAccess, impersonating, role }) {
+
+  const isSuperAdmin = role === 'SUPER_ADMIN' && !impersonating;
 
   // Itens do menu principal
-  const menuItems = [
-    { id: 'home',            label: 'Início',              icon: icons.home },
+  const allMenuItems = [
+    { id: 'adminPanel',        label: 'Painel Admin',          icon: icons.shield },
+    { id: 'agendadorTarefas',  label: 'Agendador de Tarefas',  icon: icons.clock },
+    { id: 'home',              label: 'Início',                icon: icons.home },
     { id: 'produtosErp',     label: 'Produtos do ERP',     icon: icons.box },
     { id: 'cadastramentoMassa', label: 'Cadastro em Massa (IA)', icon: icons.mass }, // <-- NOVA LINHA
     { id: 'gerenciadorML',   label: 'Gerenciador ML',      icon: icons.list },
@@ -163,6 +181,10 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     { id: 'configuracoes',       label: 'Configurações API',             icon: icons.settings },
     { id: 'fila',            label: 'Gerenciador de Fila',  icon: icons.queue },
   ];
+
+  const menuItems = canAccess
+    ? allMenuItems.filter((item) => canAccess(item.id))
+    : allMenuItems;
 
   // Estilo base do item do menu
   const menuItemStyle = (isActive) => ({
@@ -195,7 +217,49 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
   });
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', backgroundColor: '#f4f6f8', fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', backgroundColor: '#f4f6f8', fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" }}>
+
+      {/* Banner modo impersonação */}
+      {impersonating && (
+        <div style={{
+          backgroundColor: role === 'SUPER_ADMIN' ? '#8e44ad' : '#e67e22',
+          color: 'white',
+          padding: '8px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '12px',
+          fontSize: '0.88em',
+          fontWeight: 600,
+          flexShrink: 0,
+          zIndex: 2000,
+        }}>
+          {role === 'SUPER_ADMIN' ? icons.shield : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          )}
+          {role === 'SUPER_ADMIN' ? 'Super Admin' : 'Modo Suporte'}: visualizando conta de <strong>{impersonating.targetUser?.email}</strong>
+          <button
+            onClick={onLogout}
+            style={{
+              marginLeft: '8px',
+              padding: '3px 10px',
+              backgroundColor: 'rgba(0,0,0,0.25)',
+              border: '1px solid rgba(255,255,255,0.4)',
+              borderRadius: '4px',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: '0.9em',
+              fontFamily: 'inherit',
+            }}
+          >
+            Sair da conta
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
       
       {/* ========== SIDEBAR ========== */}
       <nav style={{
@@ -222,19 +286,29 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             width: '32px',
             height: '32px',
             borderRadius: '6px',
-            background: 'linear-gradient(135deg, #e67e22, #f1c40f)',
+            background: isSuperAdmin
+              ? 'linear-gradient(135deg, #8e44ad, #6c3483)'
+              : 'linear-gradient(135deg, #e67e22, #f1c40f)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
           }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
+            {isSuperAdmin ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            )}
           </div>
-          <span style={{ fontSize: '1.15em', fontWeight: 600, color: '#ecf0f1' }}>MeuSaaS Hub</span>
+          <span style={{ fontSize: '1.15em', fontWeight: 600, color: '#ecf0f1' }}>
+            {isSuperAdmin ? 'Admin Panel' : 'MeuSaaS Hub'}
+          </span>
         </div>
 
         {/* Lista de Menu */}
@@ -269,8 +343,8 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             </button>
           ))}
 
-          {/* Item extra "Criar Anúncio" só quando ativo */}
-          {activePage === 'criarAnuncio' && (
+          {/* Item extra "Criar Anúncio" só quando ativo e não for super admin */}
+          {!isSuperAdmin && activePage === 'criarAnuncio' && (
             <button
               onClick={() => setActivePage('criarAnuncio')}
               style={menuItemStyle(true)}
@@ -294,7 +368,14 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             gap: '8px',
           }}>
             <span style={{ color: '#7f8c8d', display: 'flex' }}>{icons.user}</span>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Usuário</span>
+            <div style={{ overflow: 'hidden', flex: 1 }}>
+              <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {impersonating ? impersonating.targetUser?.email : 'Usuário'}
+              </span>
+              {isSuperAdmin && (
+                <span style={{ fontSize: '0.78em', color: '#8e44ad', fontWeight: 600 }}>Super Admin</span>
+              )}
+            </div>
           </div>
           <button
             onClick={onLogout}
@@ -326,14 +407,14 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
       </nav>
 
       {/* ========== CONTEÚDO PRINCIPAL ========== */}
-      <div style={{ 
-        flex: 1, 
-        display: 'flex', 
-        flexDirection: 'column', 
-        height: '100vh', 
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
         overflow: 'hidden',
+        minWidth: 0,
       }}>
-        
+
         {/* Header Principal */}
         <header style={{
           backgroundColor: '#ffffff',
@@ -347,16 +428,16 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
           boxSizing: 'border-box',
           flexShrink: 0,
         }}>
-          <h1 style={{ 
-            margin: 0, 
-            fontSize: '1.5em', 
-            color: '#34495e', 
+          <h1 style={{
+            margin: 0,
+            fontSize: '1.5em',
+            color: '#34495e',
             fontWeight: 600,
           }}>
             {pageTitles[activePage] || activePage}
           </h1>
-          <div style={{ 
-            fontSize: '0.85em', 
+          <div style={{
+            fontSize: '0.85em',
             color: '#555',
             display: 'inline-flex',
             alignItems: 'center',
@@ -369,15 +450,18 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
           </div>
         </header>
 
-        {/* Área de Conteúdo (com scroll) */}
+        {/* Área de Conteúdo (com scroll global) */}
         <main style={{
           flex: 1,
-          padding: '20px 25px',
+          padding: '20px 12px',
           overflowY: 'auto',
+          overflowX: 'auto',
           backgroundColor: '#f4f6f8',
+          minHeight: 0,
         }}>
           {children}
         </main>
+      </div>
       </div>
     </div>
   );

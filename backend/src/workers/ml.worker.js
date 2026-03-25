@@ -107,8 +107,9 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
   for (const item of items) {
     const primaryTag = getPrimaryTag(item);
     const sku = extractSellerSku(item);
+    const varSkus = extractVariationSkus(item);
 
-    // 14 Valores do banco de dados passados por parâmetro
+    // 15 Valores do banco de dados passados por parâmetro
     values.push(
       item.id,                                   // 1
       String(contaId),                           // 2
@@ -123,20 +124,22 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
       item.thumbnail || null,                    // 11
       item.permalink || null,                    // 12
       JSON.stringify(item),                      // 13
-      primaryTag || null                         // 14
+      primaryTag || null,                        // 14
+      varSkus                                    // 15
     );
 
     const rowPlaceholders = [];
-    for (let i = 0; i < 14; i++) {
-      if (i === 12) { // Índice 12 corresponde ao 13º parâmetro (dadosML)
+    for (let i = 0; i < 15; i++) {
+      if (i === 12) { // dadosML → cast jsonb
         rowPlaceholders.push(`$${paramIndex}::jsonb`);
+      } else if (i === 14) { // skusVariacoes → cast text[]
+        rowPlaceholders.push(`$${paramIndex}::text[]`);
       } else {
         rowPlaceholders.push(`$${paramIndex}`);
       }
       paramIndex++;
     }
-    
-    // 👇 A CORREÇÃO ESTÁ AQUI: Adiciona o NOW() como o 15º valor para a coluna "updatedAt"
+
     rowPlaceholders.push('NOW()');
 
     placeholders.push(`(${rowPlaceholders.join(', ')})`);
@@ -146,7 +149,7 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
     INSERT INTO "AnuncioML" (
       "id", "contaId", "sku", "titulo", "preco", "precoOriginal",
       "status", "estoque", "vendas", "visitas", "thumbnail",
-      "permalink", "dadosML", "tagPrincipal", "updatedAt"
+      "permalink", "dadosML", "tagPrincipal", "skusVariacoes", "updatedAt"
     )
     VALUES ${placeholders.join(',\n')}
     ON CONFLICT ("id") DO UPDATE SET
@@ -162,6 +165,7 @@ async function batchUpsertAnuncios(items, contaId, visitsMap) {
       "sku"           = EXCLUDED."sku",
       "dadosML"       = EXCLUDED."dadosML",
       "tagPrincipal"  = EXCLUDED."tagPrincipal",
+      "skusVariacoes" = EXCLUDED."skusVariacoes",
       "updatedAt"     = NOW()
   `;
 
@@ -453,7 +457,52 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
 // =============================================================================
 export const mlWorker = new Worker('sync-ml', async (job) => {
   // ✅ RECEBE O PARÂMETRO "importarApenasNovos" DA FILA
-  const { contaId, accessToken: initialToken, refreshToken, contas, importarApenasNovos } = job.data;
+  const { contaId, accessToken: initialToken, refreshToken, contas, importarApenasNovos, mode, itemIds, userId } = job.data;
+
+  // ─── MODO SELECTED-ADS (sincronizar anúncios selecionados) ──────────────────
+  if (mode === 'selected-ads' && Array.isArray(itemIds) && itemIds.length > 0) {
+    await job.updateProgress(2);
+    console.log(`  🔄 Modo selected-ads: ${itemIds.length} anúncio(s) selecionado(s).`);
+
+    const itemIdsStr = itemIds.map(String);
+    const anunciosBD = await prisma.anuncioML.findMany({
+      where: { id: { in: itemIdsStr } },
+      select: { id: true, contaId: true }
+    });
+
+    const porConta = {};
+    for (const a of anunciosBD) {
+      if (!porConta[a.contaId]) porConta[a.contaId] = [];
+      porConta[a.contaId].push(a.id);
+    }
+
+    let totalSaved = 0;
+    const contaIds = Object.keys(porConta);
+    for (let ci = 0; ci < contaIds.length; ci++) {
+      const cId = contaIds[ci];
+      const ids = porConta[cId];
+
+      const conta = await prisma.contaML.findFirst({ where: { id: cId, ...(userId ? { userId } : {}) } });
+      if (!conta) { console.warn(`  ⚠️ Conta ${cId} não encontrada.`); continue; }
+
+      const freshToken = await ensureFreshToken(cId, conta.accessToken, conta.refreshToken);
+
+      const CHUNK_SIZE = 20;
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE);
+        const result = await processChunkWithRetry(chunk, freshToken, cId);
+        const saved = await batchUpsertAnuncios(result.items, cId, {});
+        totalSaved += saved;
+
+        const pct = 2 + Math.floor(((ci / contaIds.length) + ((i + chunk.length) / ids.length) / contaIds.length) * 95);
+        await job.updateProgress(Math.min(pct, 97));
+      }
+    }
+
+    await job.updateProgress(100);
+    console.log(`  ✅ selected-ads concluído. Salvos: ${totalSaved}`);
+    return { success: true, saved: totalSaved };
+  }
 
   // ─── MODO MULTI-CONTA ───────────────────────────────────────────────────────
   if (contas && Array.isArray(contas) && contas.length > 0) {
@@ -658,6 +707,25 @@ function extractSellerSku(itemData) {
     if (skuAttr && skuAttr.value_name && skuAttr.value_name !== '-1') {
       return skuAttr.value_name;
     }
+    // ✅ ADICIONADO: Fallback para PART_NUMBER conforme lógica do python
+    const partAttr = itemData.attributes.find(a => a.id === 'PART_NUMBER');
+    if (partAttr && partAttr.value_name && partAttr.value_name !== '-1') {
+      return partAttr.value_name;
+    }
   }
   return itemData.seller_custom_field || null;
+}
+
+function extractVariationSkus(itemData) {
+  if (!itemData.variations || !Array.isArray(itemData.variations)) return [];
+  const skus = [];
+  for (const v of itemData.variations) {
+    if (v.attributes && Array.isArray(v.attributes)) {
+      const attr = v.attributes.find(a => a.id === 'SELLER_SKU');
+      if (attr && attr.value_name && attr.value_name !== '-1') {
+        skus.push(attr.value_name);
+      }
+    }
+  }
+  return skus;
 }

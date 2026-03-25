@@ -17,6 +17,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ModalCompatibilidade, ModalPosicao, getTagBadge } from './GerenciadorAnuncios.jsx';
+import { useContasML } from '../contexts/ContasMLContext';
 
 const API_BASE = '/api/compat';
 
@@ -131,8 +132,8 @@ const ATTR_LABELS = {
   VEHICLE_TRANSMISSION: 'Transmissão', TRANSMISSION: 'Transmissão',
 };
 
-function ModalPreenchimentoRapido({ ads, usuarioId, onClose, onSuccess }) {
-  const contaId = ads[0]?.contaId;
+export function ModalPreenchimentoRapido({ ads, contaId: contaIdProp, usuarioId, onClose, onSuccess, onAplicarLocal }) {
+  const contaId = contaIdProp || ads?.[0]?.contaId;
   const [domainConfig, setDomainConfig] = useState(null);
   const [attrValues, setAttrValues] = useState({});
   const [attrSelected, setAttrSelected] = useState({});
@@ -259,6 +260,12 @@ function ModalPreenchimentoRapido({ ads, usuarioId, onClose, onSuccess }) {
       const v = resultados[i];
       return { catalog_product_id: v.id, name: v.name, note: '', restrictions: [], creation_source: 'DEFAULT' };
     });
+    // Modo local (Cadastramento de Anúncio): apenas retorna os veículos sem enfileirar
+    if (onAplicarLocal) {
+      onAplicarLocal(compatibilities);
+      onClose();
+      return;
+    }
     const items = ads.map(ad => ({ id: ad.id, contaId: ad.contaId || contaId }));
     setLoading(true);
     setStatus('Enviando para a fila...', 'info');
@@ -286,9 +293,11 @@ function ModalPreenchimentoRapido({ ads, usuarioId, onClose, onSuccess }) {
           <div>
             <div style={{ fontWeight: 700, fontSize: '1em', color: '#2c3e50' }}>⚡ Preenchimento Rápido</div>
             <div style={{ fontSize: '0.76em', color: '#888', marginTop: 3, maxWidth: 380 }}>
-              {ads.length === 1
-                ? <>{ads[0].id} — <span style={{ color: '#555' }}>{ads[0].titulo}</span></>
-                : <span style={{ color: '#555', fontWeight: 600 }}>{ads.length} anúncios selecionados</span>
+              {ads && ads.length > 0
+                ? (ads.length === 1
+                    ? <>{ads[0].id} — <span style={{ color: '#555' }}>{ads[0].titulo}</span></>
+                    : <span style={{ color: '#555', fontWeight: 600 }}>{ads.length} anúncios selecionados</span>)
+                : <span style={{ color: '#555' }}>Selecione os veículos compatíveis</span>
               }
             </div>
           </div>
@@ -373,7 +382,7 @@ function ModalPreenchimentoRapido({ ads, usuarioId, onClose, onSuccess }) {
                 disabled={loading || selecionados.size === 0}
                 style={{ ...S.btnSuccess, flex: 2, marginTop: 0, display: 'block', opacity: selecionados.size === 0 ? 0.5 : 1 }}
               >
-                {loading ? '⏳ Enviando...' : `🚀 Enviar para Fila — ${selecionados.size} veículo(s) × ${ads.length} anúncio(s)`}
+                {loading ? '⏳ Enviando...' : onAplicarLocal ? `✅ Usar ${selecionados.size} veículo(s)` : `🚀 Enviar para Fila — ${selecionados.size} veículo(s) × ${ads.length} anúncio(s)`}
               </button>
             </div>
           </div>
@@ -389,6 +398,7 @@ function ModalPreenchimentoRapido({ ads, usuarioId, onClose, onSuccess }) {
 const COMPAT_PENDING_TAGS = ['incomplete_compatibilities', 'incomplete_position_compatibilities'];
 
 function PendentesCompatibilidade({ usuarioId, onAbrirNoEditor }) {
+  const { contas: contasMLCtx } = useContasML();
   const [anuncios, setAnuncios] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [contasML, setContasML] = useState([]);
@@ -434,7 +444,7 @@ function PendentesCompatibilidade({ usuarioId, onAbrirNoEditor }) {
     setIsLoading(true);
     setSelectedIds(new Set());
     try {
-      const contas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
+      const contas = contasMLCtx;
       setContasML(contas);
       const idsPermitidos = contas.map(c => c.id).join(',');
       if (!idsPermitidos) return;
@@ -773,6 +783,7 @@ function PendentesCompatibilidade({ usuarioId, onAbrirNoEditor }) {
 // COMPONENTE PRINCIPAL
 // =====================================================================
 export default function CompatibilidadeAutopecas({ usuarioId }) {
+  const { contas: contasMLCtx } = useContasML();
 
   // --- Sub-abas ---
   const [activeSubTab, setActiveSubTab] = useState('editor');
@@ -843,12 +854,9 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
   // EFEITOS
   // =================================================================
   useEffect(() => {
-    try {
-      const salvas = JSON.parse(localStorage.getItem('saas_contas_ml') || '[]');
-      setContasML(salvas);
-      if (salvas.length > 0) setContaSelecionada(salvas[0].id);
-    } catch (_) {}
-  }, []);
+    setContasML(contasMLCtx);
+    if (contasMLCtx.length > 0) setContaSelecionada(contasMLCtx[0].id);
+  }, [contasMLCtx]);
 
   useEffect(() => {
     if (usuarioId) loadPerfis();

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 const ATRIBUTOS_CRITICOS_AUTOPECAS = [
   'BRAND',
@@ -74,6 +74,72 @@ ${listaAtributos}
 
 ## FORMATO DE SAÍDA ESPERADO
 ${exJson}`;
+}
+
+function ComboboxAtributo({ attr, value, onChange, inputClasses }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const containerRef = useRef(null);
+
+  // Texto exibido no input: value_name se for objeto, senão string direta
+  const displayValue = typeof value === 'object' && value !== null ? (value.value_name || '') : (value || '');
+
+  const filteredOptions = query.trim() === ''
+    ? attr.values
+    : attr.values.filter(v => v.name.toLowerCase().includes(query.toLowerCase()));
+
+  // Fecha ao clicar fora
+  useEffect(() => {
+    const handler = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const handleInputChange = (e) => {
+    const typed = e.target.value;
+    setQuery(typed);
+    setOpen(true);
+    // Salva como valor customizado enquanto digita
+    onChange(typed ? { value_id: '', value_name: typed } : '');
+  };
+
+  const handleSelect = (option) => {
+    onChange({ value_id: String(option.id), value_name: option.name });
+    setOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={open ? query : displayValue}
+        onChange={handleInputChange}
+        onFocus={() => { setQuery(''); setOpen(true); }}
+        placeholder="Selecione ou digite..."
+        className={inputClasses}
+        autoComplete="off"
+      />
+      {open && filteredOptions.length > 0 && (
+        <ul className="absolute z-50 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-52 overflow-y-auto text-sm">
+          {filteredOptions.map(v => (
+            <li
+              key={v.id}
+              onMouseDown={() => handleSelect(v)}
+              className="px-3 py-2 cursor-pointer hover:bg-blue-50 hover:text-blue-800"
+            >
+              {v.name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export default function FormularioAtributos({
@@ -182,20 +248,12 @@ export default function FormularioAtributos({
           </span>
         )}
         {attr.values && attr.values.length > 0 ? (
-          <select
-            value={(valoresAtributos[attr.id]?.value_id) || ''}
-            onChange={(e) => {
-              const selectedId = e.target.value;
-              const selected = (attr.values || []).find(v => String(v.id) === String(selectedId));
-              handleAtributoChange(attr.id, selected ? { value_id: String(selected.id), value_name: selected.name } : '');
-            }}
-            className={inputClasses}
-          >
-            <option value="">Selecione...</option>
-            {(attr.values || []).map(v => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
+          <ComboboxAtributo
+            attr={attr}
+            value={valoresAtributos[attr.id]}
+            onChange={(val) => handleAtributoChange(attr.id, val)}
+            inputClasses={inputClasses}
+          />
         ) : (
           <input
             type="text"

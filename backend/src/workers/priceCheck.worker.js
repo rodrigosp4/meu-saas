@@ -1,7 +1,11 @@
 import { Worker } from 'bullmq';
+import axios from 'axios';
+import https from 'https';
+import http from 'http';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
+import { getTinyRateLimit } from '../utils/tinyRateLimit.js';
 
 const connection = {
   host: config.redisHost,
@@ -10,10 +14,174 @@ const connection = {
   ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
-// 👇 ADICIONE ESTA LINHA 👇
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-console.log('⚙️ Worker de Verificação de Preço Iniciado (v3 - Math Corrigida)...');
+const tinyHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 50 });
+const tinyHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 });
+const axiosTiny = axios.create({ httpAgent: tinyHttpAgent, httpsAgent: tinyHttpsAgent, timeout: 20000 });
+
+// ✅ CORREÇÃO: Função segura para ler preços do Tiny (Evita NaN por causa de vírgulas)
+function parseTinyPrice(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return val;
+  return Number(String(val).replace(',', '.'));
+}
+
+async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 4) {
+  const skuStr = String(sku).trim().toLowerCase();
+  const delayMs = Math.max(tinyLimits?.delayMs || 1500, 1500);
+
+  for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+    try {
+      let foundCandidateId = null;
+      let isParentCandidate = false;
+      let pagina = 1;
+      let totalPaginas = 1;
+      let falsoErroDaTiny = false;
+      let candidateIdsToInspect = [];
+
+      do {
+        await delay(delayMs);
+        const searchRes = await axiosTiny.post(
+          'https://api.tiny.com.br/api2/produtos.pesquisa.php',
+          new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: String(sku).trim(), pagina: String(pagina) })
+        );
+
+        const retorno = searchRes.data?.retorno;
+
+        if (retorno?.codigo_erro == 8 || String(retorno?.erros?.[0]?.erro || '').toLowerCase().includes('limite')) {
+          throw new Error('RATE_LIMIT_JSON');
+        }
+
+        if (retorno?.codigo_erro == 2) return { error: 'Token da Tiny inválido' };
+
+        if (retorno?.status === 'Erro' && retorno?.codigo_erro == 20) {
+            falsoErroDaTiny = true;
+            break;
+        }
+
+        if (retorno?.status !== 'OK') break;
+
+        totalPaginas = Number(retorno.numero_paginas || 1);
+        const produtos = retorno.produtos || [];
+
+        const exactMatch = produtos.map(p => p.produto).find(p => String(p.codigo || '').trim().toLowerCase() === skuStr);
+
+        if (exactMatch) {
+          foundCandidateId = exactMatch.id;
+          isParentCandidate = (exactMatch.tipoVariacao === 'P' || exactMatch.classe_produto === 'V');
+          break;
+        } else {
+          candidateIdsToInspect.push(...produtos.map(p => p.produto.id));
+        }
+
+        pagina++;
+        if (pagina > 10) break; // Limite de segurança de 10 páginas
+      } while (!foundCandidateId && pagina <= totalPaginas);
+
+      let variationMatchData = null;
+      if (!foundCandidateId && candidateIdsToInspect.length > 0) {
+        const paisParaInspecionar =[...new Set(candidateIdsToInspect)].slice(0, 10);
+        for (const paiId of paisParaInspecionar) {
+           await delay(delayMs);
+           const detRes = await axiosTiny.post(
+              'https://api.tiny.com.br/api2/produto.obter.php',
+              new URLSearchParams({ token: tinyToken, formato: 'JSON', id: paiId })
+           );
+
+           const pRetorno = detRes.data?.retorno;
+           if (pRetorno?.codigo_erro == 8) throw new Error('RATE_LIMIT_JSON');
+
+           const prod = pRetorno?.produto;
+           if (prod && prod.variacoes) {
+              let vars = Array.isArray(prod.variacoes) ? prod.variacoes : Object.values(prod.variacoes);
+              let varMatch = vars.map(v => v.variacao || v).find(v => String(v.codigo || '').trim().toLowerCase() === skuStr);
+
+              if (!varMatch) {
+                  for (const v of vars) {
+                      const itemVar = v.variacao || v;
+                      const idFilho = itemVar.idProdutoFilho || itemVar.id;
+                      if (!idFilho) continue;
+                      
+                      try {
+                          await delay(delayMs);
+                          const detFilho = await axiosTiny.post(
+                              'https://api.tiny.com.br/api2/produto.obter.php',
+                              new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idFilho })
+                          );
+                          const prodFilho = detFilho.data?.retorno?.produto;
+                          if (prodFilho && String(prodFilho.codigo || '').trim().toLowerCase() === skuStr) {
+                              varMatch = prodFilho;
+                              break;
+                          }
+                      } catch (e) {}
+                  }
+              }
+
+              if (varMatch) {
+                 // ✅ Usando o parseTinyPrice seguro
+                 variationMatchData = {
+                    preco: parseTinyPrice(varMatch.preco || prod.preco),
+                    preco_promocional: parseTinyPrice(varMatch.preco_promocional || prod.preco_promocional),
+                    preco_custo: parseTinyPrice(prod.preco_custo)
+                 };
+                 break;
+              }
+           }
+        }
+      }
+
+      if (variationMatchData) return variationMatchData;
+
+      if (!foundCandidateId) {
+          if (falsoErroDaTiny && tentativa < tentativas) {
+              await delay(4000 * tentativa);
+              continue;
+          }
+          return null; 
+      }
+
+      await delay(delayMs);
+      const detRes = await axiosTiny.post(
+        'https://api.tiny.com.br/api2/produto.obter.php',
+        new URLSearchParams({ token: tinyToken, formato: 'JSON', id: foundCandidateId })
+      );
+
+      const retornoDet = detRes.data?.retorno;
+      if (retornoDet?.codigo_erro == 8) throw new Error('RATE_LIMIT_JSON');
+      const prod = retornoDet?.produto;
+      if (!prod) throw new Error('FALHA_OBTER_DETALHE');
+      
+      // ✅ Usando o parseTinyPrice seguro
+      const precoBasico = { 
+        preco: parseTinyPrice(prod.preco), 
+        preco_promocional: parseTinyPrice(prod.preco_promocional), 
+        preco_custo: parseTinyPrice(prod.preco_custo) 
+      };
+      
+      if (isParentCandidate && prod.variacoes) {
+          let vars = Array.isArray(prod.variacoes) ? prod.variacoes : Object.values(prod.variacoes);
+          const varMatch = vars.map(v => v.variacao || v).find(v => String(v.codigo || '').trim().toLowerCase() === skuStr);
+          if (varMatch) {
+              precoBasico.preco = parseTinyPrice(varMatch.preco || prod.preco);
+              precoBasico.preco_promocional = parseTinyPrice(varMatch.preco_promocional || prod.preco_promocional);
+          }
+      }
+      return precoBasico;
+
+    } catch (err) {
+      const isRateLimit = err.message === 'RATE_LIMIT_JSON' || err.response?.status === 429;
+      const isNetwork =['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
+      if (tentativa < tentativas) { await delay(isRateLimit ? 10000 : (isNetwork ? 6000 * tentativa : 4000 * tentativa)); continue; }
+      if (isRateLimit) return { error: `Limite de requisições excedido na API da Tiny (Rate Limit).` };
+      if (isNetwork) return { error: `A API da Tiny recusou a conexão (Sobrecarga / Cloudflare).` };
+      return { error: `Falha na API Tiny: ${err.message}` };
+    }
+  }
+  return null;
+}
+
+console.log('⚙️ Worker de Verificação de Preço Iniciado (v3 - Conexões Estáveis)...');
 
 function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0) {
   if (!precoBase || !regra || isNaN(precoBase) || precoBase <= 0) return null;
@@ -78,7 +246,6 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
     historico.push({ descricao: `Reduzido para fugir do FG`, valor: -(precoAlvo - 78.99), tipo: 'custo' });
   }
 
-  // Taxas calculadas em cima do valor ALVO (O que o cliente paga de fato)
   const tarifaMLValor = precoAlvo * (tarifaML / 100);
   historico.push({ descricao: `Tarifa ML (${tipoML})`, valor: tarifaMLValor, isPerc: true, originalPerc: tarifaML, tipo: 'custo_ml' });
 
@@ -131,7 +298,6 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
   const { tarefaId, userId, anuncios, modo, regraId, precoManual, precoBaseManual, inflar, reduzir } = job.data;
   const totalAnuncios = anuncios.length;
 
-  // ✅ CORREÇÃO 1: Evita o Erro de "Record to update not found" se a fila for limpa
   const tarefaExiste = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
   if (!tarefaExiste) {
     console.warn(`⚠️ [Worker] Tarefa ${tarefaId} foi excluída da interface. Cancelando processamento silenciosamente.`);
@@ -143,22 +309,112 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
   try {
     const [regras, userConfig] = await Promise.all([
       prisma.regraPreco.findMany({ where: { userId } }),
-      prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true, tinyToken: true, tinyPlano: true } }),
     ]);
+    
     const cepOrigem = userConfig?.cepOrigem || '01001000';
+    const tinyToken = userConfig?.tinyToken || null;
+    const tinyLimits = getTinyRateLimit(userConfig?.tinyPlano);
+    
     const regra = regras.find(r => r.id === regraId);
-    const skus =[...new Set(anuncios.map(ad => ad.sku).filter(Boolean))];
-    const precosTinyRes = await prisma.produto.findMany({ where: { userId, sku: { in: skus } }, select: { sku: true, preco: true, dadosTiny: true } });
-    const precosTinyMap = precosTinyRes.reduce((acc, p) => {
-      acc[p.sku] = p.dadosTiny || { preco: p.preco };
-      return acc;
-    }, {});
+    const precosTinyMap = {};
+
+    // 1. Otimização: buscar todos os anúncios do banco de uma vez para garantir payload leve do frontend
+    // e capturar variações corretamente.
+    const inIds = [...new Set(anuncios.map(a => a.id))];
+    const dbAnunciosData = [];
+    const CHUNK_SIZE = 5000;
+    for (let i = 0; i < inIds.length; i += CHUNK_SIZE) {
+       const chunk = inIds.slice(i, i + CHUNK_SIZE);
+       const dbItems = await prisma.anuncioML.findMany({ where: { id: { in: chunk } } });
+       dbAnunciosData.push(...dbItems);
+    }
+    
+    const dbMap = {};
+    dbAnunciosData.forEach(item => { dbMap[item.id] = item; });
+    
+    const anunciosCompletos = anuncios.map(a => {
+        const dbAd = dbMap[a.id] || {};
+        const adDadosML = dbAd.dadosML || {};
+        
+        let sku = dbAd.sku || adDadosML.seller_custom_field;
+        if (!sku && adDadosML.attributes) {
+           sku = adDadosML.attributes.find(x => x.id === 'SELLER_SKU')?.value_name || 
+                 adDadosML.attributes.find(x => x.id === 'PART_NUMBER')?.value_name;
+        }
+        if (!sku && adDadosML.variations && adDadosML.variations.length > 0) {
+           sku = adDadosML.variations[0].seller_custom_field ||
+                 adDadosML.variations[0].attributes?.find(x => x.id === 'SELLER_SKU')?.value_name ||
+                 adDadosML.variations[0].attributes?.find(x => x.id === 'PART_NUMBER')?.value_name;
+        }
+        // Fallback: usa skusVariacoes salvo no banco (extraído pelo sync com ML)
+        if (!sku && dbAd.skusVariacoes && dbAd.skusVariacoes.length > 0) {
+           sku = dbAd.skusVariacoes[0];
+        }
+        if (sku) sku = String(sku).trim();
+
+        return {
+            id: a.id,
+            contaId: a.contaId,
+            sku: sku,
+            titulo: dbAd.titulo || a.titulo,
+            preco: dbAd.preco || a.preco,
+            dadosML: adDadosML,
+            precoOriginal: dbAd.precoOriginal || null
+        };
+    });
+
+    if (tinyToken && modo !== 'manual') {
+      const skusConhecidos = [...new Set(anunciosCompletos.map(a => a.sku).filter(Boolean))];
+      if (skusConhecidos.length > 0) {
+        const concSkus = tinyLimits.blocked ? 0
+          : tinyLimits.delayMs <= 500  ? 3
+          : tinyLimits.delayMs <= 1000 ? 2
+          : 1;
+
+        console.log(`[PriceCheck] Pré-carregando ${skusConhecidos.length} SKUs (concorrência: ${concSkus})...`);
+
+        let skusCarregados = 0;
+        await new Promise(resolve => {
+          const fila = [...skusConhecidos];
+          const emAndamento = new Set();
+
+          function despachar() {
+            while (emAndamento.size < concSkus && fila.length > 0) {
+              const sku = fila.shift();
+              const p = fetchPrecoTiny(sku, tinyToken, tinyLimits).then(precos => {
+                // ✅ CORREÇÃO: Trata o NOT_FOUND corretamente no mapa
+                precosTinyMap[sku] = (precos && !precos.error) ? precos : (precos?.error ? precos : 'NOT_FOUND');
+              }).catch(() => {
+                precosTinyMap[sku] = 'NOT_FOUND';
+              }).finally(() => {
+                skusCarregados++;
+                const pct = Math.floor((skusCarregados / skusConhecidos.length) * 100);
+                prisma.tarefaFila.updateMany({
+                  where: { id: tarefaId },
+                  data: { detalhes: `Processando... ${skusCarregados}/${skusConhecidos.length} (${pct}%)\n===\n>> Carregando preços do Tiny ERP...` }
+                }).catch(() => {});
+                emAndamento.delete(p);
+                if (fila.length > 0) despachar();
+                else if (emAndamento.size === 0) resolve();
+              });
+              emAndamento.add(p);
+            }
+            if (fila.length === 0 && emAndamento.size === 0) resolve();
+          }
+
+          if (concSkus > 0) despachar(); else resolve();
+        });
+
+        console.log(`[PriceCheck] Pré-carga concluída. ${Object.keys(precosTinyMap).length} SKUs em cache.`);
+      }
+    }
 
     const contasCache = {};
     const finalResults = {};
     let processedCount = 0;
 
-    for (const ad of anuncios) {
+    for (const ad of anunciosCompletos) {
       if (!contasCache[ad.contaId]) {
          const c = await prisma.contaML.findUnique({ where: { id: ad.contaId } });
          contasCache[ad.contaId] = c;
@@ -179,31 +435,48 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
       const tipoML = ad.dadosML?.listing_type_id?.includes('pro') ? 'premium' : 'classico';
       let resultadoCalculo = null;
 
+      let skuDoAnuncio = ad.sku; // Já extraído e tratado acima
+
+      // ✅ CORREÇÃO: Busca individual garantindo cache de 'NOT_FOUND' 
+      if (skuDoAnuncio && tinyToken && precosTinyMap[skuDoAnuncio] === undefined) {
+        const precosTiny = await fetchPrecoTiny(skuDoAnuncio, tinyToken, tinyLimits);
+        precosTinyMap[skuDoAnuncio] = (precosTiny && !precosTiny.error) ? precosTiny : (precosTiny?.error ? precosTiny : 'NOT_FOUND');
+      }
+
       if (modo === 'manual') {
         resultadoCalculo = calcularPrecoCorrigir(Number(precoManual), inflar, reduzir);
       } else if (regra) {
-        let precoBaseItem = Number(precoBaseManual);
-        if (ad.sku && precosTinyMap[ad.sku]) {
-          precoBaseItem = resolverPrecoBase(precosTinyMap[ad.sku], regra.precoBase || 'promocional');
+        let precoBaseItem = 0;
+        
+        // ✅ CORREÇÃO CRÍTICA: Bloqueia o uso do "precoBaseManual" vazado da interface caso a intenção seja usar o Tiny
+        if (tinyToken && skuDoAnuncio) {
+            const dadosTiny = precosTinyMap[skuDoAnuncio];
+            if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) {
+                precoBaseItem = resolverPrecoBase(dadosTiny, regra.precoBase || 'promocional');
+            } else {
+                precoBaseItem = 0; // Força falhar se o Tiny deu erro ou não encontrou
+            }
+        } else {
+            // Só usa o preço manual base se a conta NÃO tiver Token do Tiny ou o Anúncio não tiver SKU
+            precoBaseItem = Number(precoBaseManual) || 0;
         }
         
         if (precoBaseItem > 0) {
-        let custoFrete = 0;
-        if (conta.logistica !== 'ME1') {
-          // Pequeno delay para evitar Rate Limit
-          await delay(250);
-          const adDadosML = ad.dadosML || {};
-          custoFrete = await mlService.simulateShipping({
-            accessToken: conta.accessToken,
-            sellerId: conta.id,
-            itemPrice: precoBaseItem * 2,
-            categoryId: adDadosML.category_id,
-            listingTypeId: adDadosML.listing_type_id || 'gold_pro',
-            zipCode: cepOrigem,
-            itemId: ad.id,
-            dimensions: '20x15x10,500'
-          }).catch(() => 0);
-        }
+          let custoFrete = 0;
+          if (conta.logistica !== 'ME1') {
+            await delay(250); 
+            const adDadosML = ad.dadosML || {};
+            custoFrete = await mlService.simulateShipping({
+              accessToken: conta.accessToken,
+              sellerId: conta.id,
+              itemPrice: precoBaseItem * 2,
+              categoryId: adDadosML.category_id,
+              listingTypeId: adDadosML.listing_type_id || 'gold_pro',
+              zipCode: cepOrigem,
+              itemId: ad.id,
+              dimensions: '20x15x10,500'
+            }).catch(() => 0);
+          }
           resultadoCalculo = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar, reduzir, custoFrete);
         }
       }
@@ -211,19 +484,15 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
       if (resultadoCalculo && resultadoCalculo.precoFinal > 0) {
         const { precoFinal: precoInflado, precoAlvo, historico } = resultadoCalculo;
         
-        // Verifica se tem promoção ativa lendo o banco (precoOriginal)
-        const dbAd = await prisma.anuncioML.findUnique({ where: { id: ad.id }, select: { precoOriginal: true, preco: true } });
-        const temPromoAtiva = dbAd?.precoOriginal && dbAd.precoOriginal > dbAd.preco;
+        const temPromoAtiva = ad.precoOriginal && ad.precoOriginal > ad.preco;
 
-        let precoComparacao = dbAd.preco; // Preço que o ML tá cobrando
-        let precoReferencia = precoInflado; // O que a gente espera cobrar
+        let precoComparacao = ad.preco;
+        let precoReferencia = precoInflado;
 
         if (inflar > 0) {
            if (temPromoAtiva) {
-              // Se a promo tá ativa, o preço principal (ad.preco) precisa bater com o Alvo (já descontado)
               precoReferencia = precoAlvo;
            } else {
-              // Se não tá ativa, o preço principal do ML ainda é o Cheio (Inflado)
               precoReferencia = precoInflado;
            }
         }
@@ -231,7 +500,6 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         const diferenca = ((precoComparacao - precoReferencia) / precoReferencia) * 100;
         let status = 'perfeito';
         
-        // Tolerância de até 0.5% (alguns centavos de arredondamento do ML)
         if (Math.abs(diferenca) > 0.5) {
            status = diferenca > 0 ? 'lucro' : 'prejuizo';
         } else if (temPromoAtiva && inflar > 0) {
@@ -239,8 +507,8 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         }
 
         finalResults[ad.id] = {
-          precoCalculado: precoAlvo, // O valor que vc quer ganhar na mão
-          precoDE: precoInflado,     // O valor cheio no ML
+          precoCalculado: precoAlvo,
+          precoDE: precoInflado,
           diferenca,
           status,
           titulo: ad.titulo,
@@ -251,23 +519,56 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         if (inflar > 0 && (status === 'perfeito' || status === 'perfeito_promo')) {
           await prisma.anuncioML.updateMany({ where: { id: ad.id }, data: { margemPromocional: true } });
         }
+        
+      } else {
+         let msgErro = "Cálculo falhou";
+         if (!skuDoAnuncio) {
+            msgErro = "Anúncio sem SKU configurado ou PART_NUMBER.";
+         } else if (tinyToken) {
+            const dadosTiny = precosTinyMap[skuDoAnuncio];
+            if (dadosTiny && dadosTiny.error) {
+               msgErro = `Tiny ERP: ${dadosTiny.error}`;
+            } else if (!dadosTiny || dadosTiny === 'NOT_FOUND') {
+               msgErro = `Não localizado na Tiny (SKU: ${skuDoAnuncio})`;
+            } else {
+               msgErro = `Preço base zerado na Tiny (SKU: ${skuDoAnuncio})`;
+            }
+         } else {
+            msgErro = "Faltando preço base manual e API Tiny não conectada.";
+         }
+
+         finalResults[ad.id] = {
+             precoCalculado: 0,
+             precoDE: 0,
+             diferenca: 0,
+             status: 'erro',
+             titulo: ad.titulo,
+             inflar: inflar || 0,
+             historico:[{ descricao: 'Erro', valor: 0, tipo: 'valor', msg: msgErro }]
+         };
       }
+
       processedCount++;
       await job.updateProgress(Math.floor((processedCount / totalAnuncios) * 100));
 
-      if (processedCount % 20 === 0 || processedCount === totalAnuncios) {
-         // ✅ CORREÇÃO 2: Usa updateMany. Assim se o usuário deletar a tarefa, não "crasha" o servidor.
-         await prisma.tarefaFila.updateMany({
-            where: { id: tarefaId },
-            data: { detalhes: `Processando: ${processedCount} de ${totalAnuncios} anúncios (${Math.floor((processedCount / totalAnuncios) * 100)}%)...` }
-         });
+      await prisma.tarefaFila.updateMany({
+        where: { id: tarefaId },
+        data: { detalhes: `Processando... ${processedCount}/${totalAnuncios} (${Math.floor((processedCount / totalAnuncios) * 100)}%)` }
+      });
+
+      if (processedCount % 5 === 0) {
+        const ainda = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
+        if (!ainda) {
+          console.warn(`⚠️ [Worker] Tarefa ${tarefaId} deletada durante execução. Abortando.`);
+          return { success: false, message: 'Tarefa cancelada pelo usuário' };
+        }
       }
     }
 
-    // ✅ CORREÇÃO 3: Lógica de Mesclar JSON mantida (resolve o problema da UI não atualizar os lotes)
     const registroExistente = await prisma.verificacaoPreco.findUnique({
       where: { userId }
     });
+    
     const resultadosAtuais = registroExistente?.resultados || {};
     const resultadosMesclados = { ...resultadosAtuais, ...finalResults };
 
@@ -277,7 +578,6 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
       create: { userId, resultados: resultadosMesclados }
     });
 
-    // ✅ CORREÇÃO 4: Usa updateMany para finalização segura
     await prisma.tarefaFila.updateMany({
       where: { id: tarefaId },
       data: { status: 'CONCLUIDO', detalhes: `Verificação concluída para ${Object.keys(finalResults).length} anúncios.` }
@@ -286,7 +586,6 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
     return { success: true, count: Object.keys(finalResults).length };
 
   } catch (error) {
-    // ✅ CORREÇÃO 5: Usa updateMany para erro seguro
     await prisma.tarefaFila.updateMany({
       where: { id: tarefaId },
       data: { status: 'FALHA', detalhes: error.message }
@@ -296,7 +595,7 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
 }, {
   connection,
   concurrency: 1,
-  stalledInterval: 120000,
+  stalledInterval: 300000,
   lockDuration: 300000,
 });
 

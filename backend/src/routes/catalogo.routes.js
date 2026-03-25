@@ -29,6 +29,7 @@ router.get('/api/catalogo/moderacoes', catalogoController.getModeracoes);
 router.post('/api/catalogo/publicar-direto', catalogoController.publishDirect);
 router.post('/api/catalogo/optin', catalogoController.optinItem);
 router.post('/api/catalogo/match-price', catalogoController.matchPrice);
+router.post('/api/catalogo/ativar-campanhas-auto', catalogoController.ativarCampanhasAuto);
 
 // Utilitários
 router.post('/api/catalogo/calcular-preco', catalogoController.calcularPreco);

@@ -577,4 +577,80 @@ export const catalogoController = {
       res.status(error.response?.status || 500).json({ erro: 'Falha ao comparar item com produto', detalhes: error.response?.data || error.message });
     }
   },
+
+  // ──────────────────────────────────────────────────────────────────
+  // ATIVAR CAMPANHAS AUTO: ativa promoções candidatas para um item recém-publicado
+  // ──────────────────────────────────────────────────────────────────
+  async ativarCampanhasAuto(req, res) {
+    try {
+      const { userId, contaId, itemId, inflar = 0, price = 0 } = req.body;
+      if (!userId || !contaId || !itemId) {
+        return res.status(400).json({ erro: 'userId, contaId e itemId são obrigatórios' });
+      }
+
+      const { token } = await getValidToken(contaId, userId);
+
+      const promoRes = await axios.get(
+        `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 12000 }
+      );
+
+      const lista = Array.isArray(promoRes.data) ? promoRes.data : (promoRes.data ? [promoRes.data] : []);
+      const candidatos = lista.filter(p => p && p.status === 'candidate' && p.type !== 'PRICE_DISCOUNT');
+
+      const inflarNum = Number(inflar) || 0;
+      const precoFinal = Number(price) || 0;
+      const precoAlvo = inflarNum > 0 ? precoFinal * (1 - inflarNum / 100) : precoFinal;
+
+      const TIPOS_SEM_ID = new Set(['DOD', 'LIGHTNING']);
+      const TIPOS_COM_OFFER = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
+      const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
+
+      let ativadas = 0;
+      const erros = [];
+
+      for (const promo of candidatos) {
+        const sellerPct = typeof promo.seller_percentage === 'number' ? promo.seller_percentage : null;
+        const maxPrice = promo.max_discounted_price || 0;
+        const origPrice = promo.original_price || 0;
+
+        let deveAtivar = false;
+        if (inflarNum === 0) deveAtivar = true;
+        else if (sellerPct !== null) deveAtivar = sellerPct <= inflarNum;
+        else if (maxPrice > 0 && origPrice > 0) {
+          const minPct = ((origPrice - maxPrice) / origPrice) * 100;
+          deveAtivar = minPct <= inflarNum;
+        } else deveAtivar = true;
+
+        if (!deveAtivar) continue;
+
+        const body = { promotion_type: promo.type };
+        if (!TIPOS_SEM_ID.has(promo.type) && promo.id) body.promotion_id = promo.id;
+        const offerId = promo.offer_id || promo.offerId || promo.ref_id || null;
+        if (offerId && TIPOS_COM_OFFER.has(promo.type)) body.offer_id = offerId;
+        if (TIPOS_COM_PRECO.has(promo.type) && precoFinal > 0) {
+          let dealPrice = sellerPct !== null ? precoFinal * (1 - sellerPct / 100) : precoAlvo;
+          if (maxPrice > 0 && dealPrice > maxPrice) dealPrice = maxPrice;
+          const minPrice = promo.min_discounted_price || 0;
+          if (minPrice > 0 && dealPrice < minPrice) dealPrice = minPrice;
+          body.deal_price = Math.round(dealPrice * 100) / 100;
+        }
+
+        try {
+          await axios.post(
+            `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
+            body,
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 }
+          );
+          ativadas++;
+        } catch (e) {
+          erros.push({ tipo: promo.type, erro: e.response?.data?.message || e.message });
+        }
+      }
+
+      res.json({ ok: true, candidatos: candidatos.length, ativadas, erros });
+    } catch (error) {
+      res.status(500).json({ erro: 'Erro ao ativar campanhas', detalhes: error.message });
+    }
+  },
 };

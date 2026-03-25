@@ -21,6 +21,9 @@ router.post('/api/promocoes/delete-massivo', promocoesController.deleteOfertasMa
 // ✅ NOVO: Endpoint para adicionar/remover um item da "blacklist" de promos automáticas
 router.post('/api/promocoes/exclusao', promocoesController.gerenciarExclusaoItem);
 
+// ✅ NOVO: Ativação/Remoção em massa via fila BullMQ
+router.post('/api/promocoes/massa-fila', promocoesController.ativarRemoverMassaFila);
+
 
 // Orquestrador
 router.get('/api/orquestrador/regras', promocoesController.getRegras);

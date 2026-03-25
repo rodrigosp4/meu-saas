@@ -57,6 +57,7 @@ function Field({ label, type, value, onChange, placeholder }) {
   );
 }
 
+// onLogin(userData, token) - chamado pelo componente pai (App.jsx)
 export default function Login({ onLogin, initialToken }) {
   const [mode, setMode] = useState(initialToken ? 'reset' : 'login');
   const [email, setEmail] = useState('');
@@ -81,7 +82,8 @@ export default function Login({ onLogin, initialToken }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
-      onLogin(data);
+      // Passa user e token para o App.jsx tratar (inclusive SUPPORT role)
+      onLogin(data.user, data.token);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -151,7 +153,6 @@ export default function Login({ onLogin, initialToken }) {
       setMode('login');
       setPassword('');
       setConfirmPassword('');
-      // Remove o token da URL sem recarregar a página
       window.history.replaceState({}, '', window.location.pathname);
     } catch (err) {
       setError(err.message);

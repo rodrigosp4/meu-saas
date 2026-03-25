@@ -1,5 +1,6 @@
 // src/components/Catalogo.jsx
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -104,11 +105,11 @@ const buildSuggestionFromItem = (item, inlineSearches = {}, comparacoesCatalogo 
 };
 
 const getSuggestionDecision = (s) => {
-  if (!s?.suggestedProductId) return { action: 'NAO_SUGERIR', label: 'Sem sugestão' };
-  if (s.confidence === 'FORTE') return { action: 'ASSOCIAR_DIRETO', label: 'Associar direto' };
-  if (s.confidence === 'MEDIA') return { action: 'REVISAR_E_ASSOCIAR', label: 'Revisar e associar' };
-  if (s.confidence === 'FRACA') return { action: 'REVISAR_MANUAL', label: 'Revisão manual' };
-  return { action: 'NAO_SUGERIR', label: 'Sem sugestão' };
+  if (!s?.suggestedProductId) return { action: 'NAO_SUGERIR', label: 'Sem sugestão', class: 'bg-gray-100 text-gray-500' };
+  if (s.confidence === 'FORTE') return { action: 'ASSOCIAR_DIRETO', label: 'Associar Confiança Alta', class: 'bg-green-600 text-white hover:bg-green-700' };
+  if (s.confidence === 'MEDIA') return { action: 'REVISAR_E_ASSOCIAR', label: 'Associar (Confiança Média)', class: 'bg-emerald-500 text-white hover:bg-emerald-600' };
+  if (s.confidence === 'FRACA') return { action: 'ABRIR_BUSCA', label: 'Abrir Buscador (Risco)', class: 'bg-orange-500 text-white hover:bg-orange-600' };
+  return { action: 'NAO_SUGERIR', label: 'Sem sugestão', class: 'bg-gray-100' };
 };
 
 const sortBySuggestionPriority = (items = [], catalogSuggestionsMap = {}, comparacoesCatalogo = {}) =>
@@ -204,67 +205,313 @@ function EligBadge({ status }) {
 }
 
 // ─── Card de produto do catálogo (Aba Buscar) ────────────────────────────────
-function ProductCard({ produto, contasML }) {
+function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {}, onPublished }) {
   const [expanded, setExpanded] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
-  const [publishConfig, setPublishConfig] = useState({ contaId: contasML[0]?.id || '', preco: '', listingType: 'gold_special', quantity: 1 });
   const [publishing, setPublishing] = useState(false);
-  const [publishMsg, setPublishMsg] = useState(null);
+  const [publishLog, setPublishLog] = useState([]);
+  const { usuarioAtual: user } = useAuth();
+
+  // Estratégia global
+  const [strategy, setStrategy] = useState({ inflar: 0, ativarCampanhas: false, atacado: false });
+
+  // Preço base compartilhado
+  const [precoBase, setPrecoBase] = useState('');
+
+  // Config por conta: { [contaId]: { ativo, tipo } }
+  const [accountConfigs, setAccountConfigs] = useState(() => {
+    const cfg = {};
+    for (const conta of contasML) {
+      cfg[conta.id] = { ativo: true, tipo: 'ambos' };
+    }
+    return cfg;
+  });
+
+
 
   const isAtivo = produto.status === 'active';
   const temFilhos = produto.children_ids?.length > 0;
   const isPublicavel = isAtivo && !temFilhos;
+  const publishedAccounts = publishedMap[produto.id] || {};
+
+  const setAccountField = (contaId, campo, val) =>
+    setAccountConfigs(p => ({ ...p, [contaId]: { ...p[contaId], [campo]: val } }));
+
+  const calcPrecoFinal = (base) => {
+    const n = parseFloat(base) || 0;
+    return strategy.inflar > 0 ? Math.round(n * (1 + strategy.inflar / 100) * 100) / 100 : n;
+  };
 
   const handlePublish = async () => {
-    if (!publishConfig.contaId || !publishConfig.preco) { setPublishMsg({ tipo: 'erro', texto: 'Informe a conta e o preço.' }); return; }
-    setPublishing(true); setPublishMsg(null);
-    try {
-      const user = JSON.parse(localStorage.getItem('saas_usuario') || '{}');
-      const resp = await fetch('/api/catalogo/publicar-direto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.id, contaId: publishConfig.contaId, catalogProductId: produto.id, categoryId: produto.domain_id, price: Number(publishConfig.preco), listingTypeId: publishConfig.listingType, quantity: Number(publishConfig.quantity) }) });
-      const data = await resp.json();
-      if (data.ok) { setPublishMsg({ tipo: 'ok', texto: `✅ Publicado! Item ID: ${data.item?.id}` }); setShowPublish(false); }
-      else { setPublishMsg({ tipo: 'erro', texto: `❌ ${data.erro}: ${JSON.stringify(data.detalhes?.message || data.detalhes)}` }); }
-    } catch { setPublishMsg({ tipo: 'erro', texto: '❌ Erro de rede.' }); }
+    if (!user) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Usuário não logado.' }]); return; }
+    const precoFinal = calcPrecoFinal(precoBase);
+    if (!precoFinal) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe um preço base válido.' }]); return; }
+
+    const contasAtivas = contasML.filter(c => accountConfigs[c.id]?.ativo);
+    if (!contasAtivas.length) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Selecione ao menos uma conta.' }]); return; }
+
+    setPublishing(true);
+    setPublishLog([]);
+    const log = [];
+
+    for (const conta of contasAtivas) {
+      const cfg = accountConfigs[conta.id];
+      const tipos = cfg.tipo === 'ambos'
+        ? [{ id: 'gold_special', label: 'Clássico' }, { id: 'gold_pro', label: 'Premium' }]
+        : cfg.tipo === 'premium'
+          ? [{ id: 'gold_pro', label: 'Premium' }]
+          : [{ id: 'gold_special', label: 'Clássico' }];
+
+      for (const { id: listingTypeId, label: tipoLabel } of tipos) {
+        try {
+          const resp = await fetch('/api/catalogo/publicar-direto', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: user.id, contaId: conta.id,
+              catalogProductId: produto.id, categoryId: produto.domain_id,
+              price: precoFinal, listingTypeId, quantity: 1,
+            })
+          });
+          const data = await resp.json();
+
+          if (data.ok) {
+            const newItemId = data.item?.id;
+            log.push({ conta: conta.nickname, tipo: 'ok', texto: `✅ ${tipoLabel}: ${newItemId}` });
+
+            // Ativar campanhas automáticas
+            if (strategy.ativarCampanhas && newItemId) {
+              try {
+                await fetch('/api/catalogo/ativar-campanhas-auto', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: user.id, contaId: conta.id, itemId: newItemId, inflar: strategy.inflar, price: precoFinal })
+                });
+                log.push({ conta: conta.nickname, tipo: 'ok', texto: `  🎯 Campanhas ativadas para ${newItemId}` });
+              } catch { log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ⚠️ Erro ao ativar campanhas para ${newItemId}` }); }
+            }
+
+            // Preço de atacado
+            if (strategy.atacado && configAtacado?.faixas?.length && newItemId) {
+              try {
+                await fetch('/api/ml/atacado-preco', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: user.id, contaId: conta.id, itemId: newItemId, precoAlvo: precoFinal, faixas: configAtacado.faixas })
+                });
+                log.push({ conta: conta.nickname, tipo: 'ok', texto: `  📦 Atacado B2B enviado para ${newItemId}` });
+              } catch { log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ⚠️ Erro ao enviar atacado para ${newItemId}` }); }
+            }
+
+            // Registrar publicação
+            onPublished(produto.id, conta.id);
+          } else {
+            const erroDetalhado = data.detalhes?.message || JSON.stringify(data.detalhes?.cause || data.detalhes || data.erro);
+            log.push({ conta: conta.nickname, tipo: 'erro', texto: `❌ ${tipoLabel}: ${erroDetalhado}` });
+          }
+        } catch (err) {
+          log.push({ conta: conta.nickname, tipo: 'erro', texto: `❌ ${tipoLabel}: Erro de rede – ${err.message}` });
+        }
+      }
+    }
+
+    setPublishLog(log);
     setPublishing(false);
   };
 
+  const precoFinalPreview = calcPrecoFinal(precoBase);
+
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden mb-3">
+      {/* ── Header ── */}
       <div className="flex gap-4 p-4">
-        {produto.pictures?.[0] && <img src={produto.pictures[0].url} alt={produto.name} className="w-20 h-20 object-contain rounded border bg-gray-50 flex-shrink-0" />}
+        {produto.pictures?.[0] && (
+          <img src={produto.pictures[0].url} alt={produto.name}
+            className="w-20 h-20 object-contain rounded border bg-gray-50 flex-shrink-0" />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-2 flex-wrap">
-            <span className={`px-2 py-0.5 rounded text-xs font-bold ${isAtivo ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'}`}>{isAtivo ? 'ATIVO' : 'INATIVO'}</span>
-            {temFilhos && <span className="px-2 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-bold">Produto Pai</span>}
+            <span className={`px-2 py-0.5 rounded text-xs font-bold ${isAtivo ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'}`}>
+              {isAtivo ? 'ATIVO' : 'INATIVO'}
+            </span>
+            {temFilhos && <span className="px-2 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-bold">Produto Pai (Não publicável)</span>}
+            {Object.keys(publishedAccounts).length > 0 && (
+              <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 font-bold">
+                Publicado em: {Object.keys(publishedAccounts).map(cid => contasML.find(c => c.id === cid)?.nickname || cid).join(', ')}
+              </span>
+            )}
           </div>
           <p className="font-semibold text-gray-800 mt-1 text-sm leading-tight">{produto.name}</p>
           <p className="text-xs text-gray-400 mt-0.5">ID: {produto.id} · Domínio: {produto.domain_id}</p>
-          {produto.buy_box_winner_price_range && <p className="text-xs text-blue-600 mt-1">Faixa: {fmt(produto.buy_box_winner_price_range.min?.price)} — {fmt(produto.buy_box_winner_price_range.max?.price)}</p>}
+          {produto.buy_box_winner_price_range && (
+            <p className="text-xs text-blue-600 mt-1">
+              Faixa buy box: {fmt(produto.buy_box_winner_price_range.min?.price)} — {fmt(produto.buy_box_winner_price_range.max?.price)}
+            </p>
+          )}
         </div>
         <div className="flex flex-col gap-2 flex-shrink-0">
-          {isPublicavel && <button onClick={() => setShowPublish(v => !v)} className="px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded hover:bg-green-700">Anunciar</button>}
-          <button onClick={() => setExpanded(v => !v)} className="px-3 py-1.5 bg-gray-50 text-gray-600 text-xs rounded border hover:bg-gray-100">{expanded ? 'Fechar' : 'Detalhes'}</button>
+          {isPublicavel && (
+            <button onClick={() => setShowPublish(v => !v)}
+              className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded hover:bg-emerald-700">
+              {showPublish ? 'Fechar' : 'Anunciar'}
+            </button>
+          )}
+          <button onClick={() => setExpanded(v => !v)}
+            className="px-3 py-1.5 bg-gray-50 text-gray-600 text-xs rounded border hover:bg-gray-100">
+            {expanded ? 'Fechar' : 'Detalhes'}
+          </button>
         </div>
       </div>
-      {publishMsg && <div className={`mx-4 mb-2 p-2 rounded text-xs ${publishMsg.tipo === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{publishMsg.texto}</div>}
-      {showPublish && (
-        <div className="mx-4 mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-          <h4 className="font-bold text-green-800 mb-3 text-sm">Anunciar no Catálogo</h4>
-          <div className="flex gap-3 flex-wrap">
-            <div><label className="text-xs font-semibold text-gray-600">Preço (R$)</label><input type="number" min="0" step="0.01" value={publishConfig.preco} onChange={e => setPublishConfig(p => ({ ...p, preco: e.target.value }))} className="w-full mt-1 text-sm border rounded px-2 py-1" /></div>
+
+      {/* ── Painel de publicação ── */}
+      {showPublish && isPublicavel && (
+        <div className="mx-4 mb-4 p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-4">
+          <h4 className="font-bold text-emerald-900 text-sm">Publicar no Catálogo</h4>
+
+          {/* ── Preço base + Estratégia ── */}
+          <div className="bg-white rounded-lg border border-emerald-100 p-4">
+            <h5 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Preço e Estratégia</h5>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">Preço Base (R$)</label>
+                <input type="number" min="0" step="0.01" placeholder="Ex: 1599,90"
+                  value={precoBase} onChange={e => setPrecoBase(e.target.value)}
+                  className="w-full px-2 py-1.5 border rounded text-sm focus:border-emerald-400 focus:outline-none" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-purple-700 block mb-1">Inflar Preço (%)</label>
+                <input type="number" min="0" placeholder="0"
+                  value={strategy.inflar} onChange={e => setStrategy(p => ({ ...p, inflar: Number(e.target.value) }))}
+                  className="w-full px-2 py-1.5 border border-purple-200 rounded text-sm focus:outline-none" />
+                <p className="text-[10px] text-gray-400 mt-0.5">Para margem de desconto</p>
+              </div>
+              <div className="flex flex-col gap-1 justify-center">
+                {precoBase && (
+                  <div className="text-center bg-emerald-100 text-emerald-800 rounded p-2">
+                    <div className="text-[10px] font-bold uppercase">Preço Final</div>
+                    <div className="text-lg font-black">{fmt(precoFinalPreview)}</div>
+                    {strategy.inflar > 0 && <div className="text-[10px] text-emerald-600">Base: {fmt(parseFloat(precoBase))} + {strategy.inflar}%</div>}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-col gap-2 justify-center">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" className="w-4 h-4 accent-purple-600"
+                    checked={strategy.ativarCampanhas}
+                    onChange={e => setStrategy(p => ({ ...p, ativarCampanhas: e.target.checked }))} />
+                  <div>
+                    <span className="text-xs font-bold text-purple-700">Ativar campanhas</span>
+                    <p className="text-[10px] text-gray-500">Auto após publicar</p>
+                  </div>
+                </label>
+                {configAtacado?.ativo && configAtacado?.faixas?.length > 0 && (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 accent-green-600"
+                      checked={strategy.atacado}
+                      onChange={e => setStrategy(p => ({ ...p, atacado: e.target.checked }))} />
+                    <div>
+                      <span className="text-xs font-bold text-green-700">Atacado B2B</span>
+                      <p className="text-[10px] text-gray-500">{configAtacado.faixas.length} faixa(s)</p>
+                    </div>
+                  </label>
+                )}
+              </div>
+            </div>
+            {strategy.ativarCampanhas && strategy.inflar === 0 && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                💡 Dica: configure um % de inflação para ativar apenas campanhas dentro da sua margem.
+              </p>
+            )}
           </div>
-          <div className="flex gap-2 mt-3">
-            <button onClick={handlePublish} disabled={publishing} className="px-4 py-2 bg-green-600 text-white text-sm font-bold rounded hover:bg-green-700 disabled:opacity-60">{publishing ? 'Publicando...' : '✅ Confirmar Publicação'}</button>
-            <button onClick={() => setShowPublish(false)} className="px-4 py-2 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300">Cancelar</button>
+
+          {/* ── Tabela de contas ── */}
+          <div className="bg-white rounded-lg border border-emerald-100 overflow-hidden">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50 text-gray-600 text-xs border-b">
+                  <th className="p-3 w-10">Pub?</th>
+                  <th className="p-3">Conta</th>
+                  <th className="p-3">Tipo</th>
+                  <th className="p-3 text-right">Preço Final</th>
+                  <th className="p-3 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contasML.map(conta => {
+                  const cfg = accountConfigs[conta.id] || { ativo: true, tipo: 'ambos' };
+                  const jaPublicado = !!publishedAccounts[conta.id];
+                  return (
+                    <tr key={conta.id} className={`border-b last:border-0 ${cfg.ativo ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                      <td className="p-3">
+                        <input type="checkbox" className="w-4 h-4 cursor-pointer accent-emerald-600"
+                          checked={cfg.ativo}
+                          onChange={e => setAccountField(conta.id, 'ativo', e.target.checked)} />
+                      </td>
+                      <td className="p-3 font-bold text-sm text-gray-800">{conta.nickname}</td>
+                      <td className="p-3">
+                        <select disabled={!cfg.ativo}
+                          value={cfg.tipo}
+                          onChange={e => setAccountField(conta.id, 'tipo', e.target.value)}
+                          className="border rounded px-2 py-1 text-xs w-full max-w-[140px] focus:outline-none disabled:opacity-50">
+                          <option value="classico">Clássico</option>
+                          <option value="premium">Premium</option>
+                          <option value="ambos">Clássico + Premium</option>
+                        </select>
+                      </td>
+                      <td className="p-3 text-right font-black text-emerald-700 text-sm">
+                        {precoFinalPreview ? fmt(precoFinalPreview) : '—'}
+                        {cfg.tipo === 'ambos' && <span className="block text-[10px] font-normal text-gray-400">2 anúncios</span>}
+                      </td>
+                      <td className="p-3 text-center">
+                        {jaPublicado
+                          ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">Já publicado</span>
+                          : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-500">Pendente</span>
+                        }
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ── Log de resultados ── */}
+          {publishLog.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-1 max-h-40 overflow-y-auto">
+              {publishLog.map((entry, i) => (
+                <div key={i} className={`text-xs flex gap-2 ${entry.tipo === 'ok' ? 'text-green-700' : entry.tipo === 'warn' ? 'text-amber-700' : 'text-red-700'}`}>
+                  {entry.conta && <span className="font-bold">[{entry.conta}]</span>}
+                  <span>{entry.texto}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Ações ── */}
+          <div className="flex gap-2">
+            <button onClick={handlePublish} disabled={publishing || !precoBase}
+              className="px-5 py-2 bg-emerald-600 text-white text-sm font-bold rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2">
+              {publishing && <span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full" />}
+              {publishing ? 'Publicando...' : '✅ Publicar nas Contas Selecionadas'}
+            </button>
+            <button onClick={() => { setShowPublish(false); setPublishLog([]); }}
+              className="px-4 py-2 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300">
+              Cancelar
+            </button>
           </div>
         </div>
       )}
+
+      {/* ── Ficha técnica ── */}
       {expanded && produto.attributes?.length > 0 && (
         <div className="border-t bg-gray-50 p-4">
-          <p className="text-xs font-bold text-gray-600 mb-2">Ficha Técnica</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-1">
-            {produto.attributes.slice(0, 18).map(a => (
-              <div key={a.id} className="text-xs"><span className="text-gray-500">{a.name}: </span><span className="font-medium text-gray-800">{a.value_name}</span></div>
+          <p className="text-xs font-bold text-gray-600 mb-2">Ficha Técnica do Catálogo</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1">
+            {produto.attributes.slice(0, 12).map(a => (
+              <div key={a.id} className="text-xs truncate">
+                <span className="text-gray-500">{a.name}: </span>
+                <span className="font-medium text-gray-800">{a.value_name}</span>
+              </div>
             ))}
           </div>
         </div>
@@ -328,6 +575,7 @@ function BuyBoxRow({ itemId, itemInfo, contaId, userId }) {
 
 // ─── Componente principal ────────────────────────────────────────────────────
 export default function Catalogo({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const [aba, setAba] = useState('elegibilidade');
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]); // eslint-disable-line
@@ -378,6 +626,15 @@ export default function Catalogo({ usuarioId }) {
   const [buyBoxItems, setBuyBoxItems] = useState([]);
   const [loadingBuyBox, setLoadingBuyBox] = useState(false);
 
+  // Config atacado
+  const [configAtacado, setConfigAtacado] = useState(null);
+
+  // Rastro de publicações no catálogo: { [catalogProductId]: { [contaId]: true } }
+  const [publishedCatalogItems, setPublishedCatalogItems] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(`catalogo_published_${usuarioId}`) || '{}'); } catch { return {}; }
+  });
+  const [hidePublished, setHidePublished] = useState(false);
+
   // ── Carga inicial ──
   useEffect(() => {
     if (!usuarioId) return;
@@ -385,7 +642,23 @@ export default function Catalogo({ usuarioId }) {
       if (d.contasML) { setContasML(d.contasML); setContaSelecionada(d.contasML[0]?.id || ''); }
       if (d.regras) setRegrasPreco(d.regras);
     });
+    fetch(`/api/usuario/${usuarioId}/config-atacado`).then(r => r.json()).then(d => {
+      if (d && (d.ativo || d.faixas)) setConfigAtacado(d);
+    }).catch(() => {});
   }, [usuarioId]);
+
+  // Salvar rastro de publicações no localStorage quando mudar
+  useEffect(() => {
+    if (!usuarioId) return;
+    localStorage.setItem(`catalogo_published_${usuarioId}`, JSON.stringify(publishedCatalogItems));
+  }, [publishedCatalogItems, usuarioId]);
+
+  const handleCatalogoPublished = (catalogProductId, contaId) => {
+    setPublishedCatalogItems(prev => ({
+      ...prev,
+      [catalogProductId]: { ...(prev[catalogProductId] || {}), [contaId]: true }
+    }));
+  };
 
   // ── Filtro com sugestões ──
   const filteredEligResults = eligResults.filter(item => {
@@ -478,24 +751,41 @@ export default function Catalogo({ usuarioId }) {
     const targetCatalogId = forceCatalogId || inlineOptins[itemId]?.catalogProductId;
     if (!targetCatalogId?.trim()) return;
     setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: true, msg: null } }));
+    
     let varId = inlineOptins[itemId]?.variationId?.trim();
     if (!varId && item.elegibilidade?.variations?.length > 0) {
       const readyVar = item.elegibilidade.variations.find(v => v.status === 'READY_FOR_OPTIN' || v.status === 'CATALOG_PRODUCT_ID_NULL') || item.elegibilidade.variations[0];
       varId = readyVar.id;
     }
+    
     try {
       const resp = await fetch('/api/catalogo/optin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: usuarioId, contaId: contaSelecionada, itemId, catalogProductId: targetCatalogId.trim(), variationId: varId || undefined }) });
       const data = await resp.json();
+      
       if (data.ok) {
-        setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: false, msg: { tipo: 'ok', texto: `✅ Optin feito! Novo item: ${data.item?.id}` } } }));
+        setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: false, msg: { tipo: 'ok', texto: `✅ Sucesso! Anúncio associado ao catálogo: ${data.item?.id}` } } }));
       } else {
         let msgErro = data.erro || 'Falha ao associar';
-        if (data.detalhes?.cause?.length > 0) msgErro = data.detalhes.cause.map(c => c.message).join(' | ');
-        else if (data.detalhes?.message) msgErro = data.detalhes.message;
+        
+        // --- INÍCIO DA MELHORIA DOS ERROS ---
+        if (data.detalhes?.cause?.length > 0) {
+          const causaStr = data.detalhes.cause.map(c => c.message).join(' | ');
+          if (causaStr.includes('is not related with')) {
+            msgErro = 'ID Incompatível: O catálogo informado não pertence à mesma família deste anúncio. Verifique se escolheu o produto correto.';
+          } else if (causaStr.includes('not a child of')) {
+            msgErro = 'Você tentou associar a um Produto Pai (família). É obrigatório informar o ID da variação exata (Produto Filho).';
+          } else {
+            msgErro = causaStr;
+          }
+        } else if (data.detalhes?.message) {
+          msgErro = data.detalhes.message;
+        }
+        // --- FIM DA MELHORIA ---
+
         setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: false, msg: { tipo: 'erro', texto: `❌ ${msgErro}` } } }));
       }
     } catch {
-      setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: false, msg: { tipo: 'erro', texto: '❌ Erro de rede' } } }));
+      setInlineOptins(p => ({ ...p, [itemId]: { ...p[itemId], loading: false, msg: { tipo: 'erro', texto: '❌ Erro de conexão com o servidor.' } } }));
     }
   };
 
@@ -708,115 +998,114 @@ const handleCompareCatalogProduct = async (item, productId) => {
     const suggestionDecision = getSuggestionDecision(suggestion);
     const inputValue = ninja.catalogProductId !== undefined ? ninja.catalogProductId : (recomendacaoML || '');
 
+    // Função auxiliar para abrir a busca
+    const abrirBusca = () => {
+      const newQuery = buildSmartCatalogQuery(item);
+      setInlineSearches(p => ({ ...p, [item.id]: { open: true, query: newQuery, results: [] } }));
+      setTimeout(() => handleExecuteInlineSearchFor(item.id, newQuery, item.elegibilidade?.domain_id), 50);
+    };
+
     return (
-      <div key={item.id} className="bg-white border border-gray-200 rounded-xl p-3 mb-3 shadow-sm">
-        <div className="flex gap-3 items-start">
-          <div className="pt-1">
-            <input type="checkbox" checked={isItemSelecionado(item.id, eligSelecionados)} onChange={() => toggleEligSelecionado(item.id, setEligSelecionados)} className="w-4 h-4" />
+      <div key={item.id} className="bg-white border border-gray-200 rounded-xl p-4 mb-3 shadow-sm hover:shadow-md transition-shadow">
+        <div className="flex flex-col md:flex-row gap-4 items-start">
+          
+          {/* Checkbox e Imagem */}
+          <div className="flex gap-3 items-center md:items-start w-full md:w-auto">
+            <input type="checkbox" checked={isItemSelecionado(item.id, eligSelecionados)} onChange={() => toggleEligSelecionado(item.id, setEligSelecionados)} className="w-4 h-4 mt-1 cursor-pointer" />
+            {item.thumbnail && <img src={item.thumbnail} alt={item.titulo} className="w-16 h-16 object-contain rounded border border-gray-200 bg-white flex-shrink-0" />}
           </div>
 
-          {item.thumbnail && <img src={item.thumbnail} alt={item.titulo} className="w-14 h-14 object-contain rounded border bg-gray-50 flex-shrink-0" />}
-
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-semibold text-gray-800 text-sm leading-tight">{item.titulo}</p>
+          {/* Dados Principais */}
+          <div className="flex-1 min-w-0 w-full">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <p className="font-bold text-gray-900 text-sm leading-tight">{item.titulo}</p>
               <EligBadge status={badgeStatus} />
             </div>
-            <p className="text-xs text-gray-500 mt-1">{item.id}{item.sku ? ` · SKU: ${item.sku}` : ''}{item.preco ? ` · ${fmt(item.preco)}` : ''}</p>
-            {domainId && <p className="text-xs text-blue-700 mt-1 font-medium">Domínio: {domainId}</p>}
-
-            <div className="flex flex-wrap gap-2 mt-2">
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${getPriorityBadgeClass(priorityData.prioridade)}`}>Prioridade: {priorityData.prioridade}</span>
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${getRiskBadgeClass(priorityData.risco)}`}>Risco: {priorityData.risco}</span>
-              {recomendacaoML && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-yellow-100 text-yellow-800">Sugestão ML: {recomendacaoML}</span>}
-              {hasVariations && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-800">Possui variações</span>}
-              {isCatalogRequired && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800">Catálogo obrigatório</span>}
-              {suggestion?.suggestedProductId && <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${getSuggestionConfidenceClass(suggestion.confidence)}`}>Sugestão: {suggestion.confidence}</span>}
+            
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mb-2">
+              <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">{item.id}</span>
+              {item.sku && <span>SKU: <strong>{item.sku}</strong></span>}
+              {item.preco && <span className="font-semibold text-gray-700">{fmt(item.preco)}</span>}
+              {domainId && <span className="text-blue-600 font-medium">Domínio: {domainId}</span>}
             </div>
 
-            {priorityData.motivos.length > 0 && (
-              <div className="mt-1 text-[11px] text-gray-600"><span className="font-semibold">Leitura automática:</span> {priorityData.motivos.slice(0, 4).join(' · ')}</div>
-            )}
+            {/* Badges de Status (Limpos) */}
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${getPriorityBadgeClass(priorityData.prioridade)}`}>Prio: {priorityData.prioridade}</span>
+              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${getRiskBadgeClass(priorityData.risco)}`}>Risco: {priorityData.risco}</span>
+              {hasVariations && <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-orange-100 text-orange-800">Possui variações</span>}
+              {isCatalogRequired && <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-red-100 text-red-800">Catálogo obrigatório</span>}
+            </div>
 
-            {recomendacaoML && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button onClick={() => { setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: recomendacaoML } })); handleCompareCatalogProduct(item, recomendacaoML); }} className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-bold rounded border border-yellow-300 hover:bg-yellow-200">Usar sugestão ML</button>
-                <button onClick={() => handleInlineOptin(item, recomendacaoML)} disabled={ninja.loading} className="px-2 py-1 bg-green-600 text-white text-xs font-bold rounded hover:bg-green-700 disabled:opacity-60">{ninja.loading ? 'Associando...' : 'Associar sugestão'}</button>
+            {/* Box de Sugestão Mais Intuitivo */}
+            {(recomendacaoML || suggestion?.suggestedProductId) && (
+              <div className="mt-2 p-3 rounded-lg border border-indigo-100 bg-indigo-50/50">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-bold text-indigo-900 flex items-center gap-1">
+                      💡 Sugestão do Sistema: <span className="font-mono bg-white border px-1.5 py-0.5 rounded">{recomendacaoML || suggestion.suggestedProductId}</span>
+                    </span>
+                    {suggestion?.confidence && (
+                      <span className="text-[11px] text-gray-600">
+                        Nível de confiança: <span className={`font-bold ${getSuggestionConfidenceClass(suggestion.confidence)} px-1.5 rounded`}>{suggestion.confidence}</span>
+                        {suggestion.score > 0 && ` (${suggestion.score}% similar)`}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Botões da Sugestão */}
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => handleCompareCatalogProduct(item, recomendacaoML || suggestion.suggestedProductId)} className="px-3 py-1.5 bg-white text-indigo-700 text-xs font-bold rounded border border-indigo-200 hover:bg-indigo-50 transition-colors">Comparar</button>
+                    
+                    {/* Se for confiança FRACA, abre a busca em vez de forçar o envio */}
+                    {canUseResource('catalogo.optin') && (suggestion?.confidence === 'FRACA' ? (
+                      <button onClick={abrirBusca} className={`px-3 py-1.5 text-xs font-bold rounded shadow-sm ${suggestionDecision.class}`}>{suggestionDecision.label}</button>
+                    ) : (
+                      <button onClick={() => handleInlineOptin(item, recomendacaoML || suggestion.suggestedProductId)} disabled={ninja.loading} className={`px-3 py-1.5 text-xs font-bold rounded shadow-sm ${suggestionDecision.class || 'bg-green-600 text-white hover:bg-green-700'} disabled:opacity-60`}>
+                        {ninja.loading ? 'Associando...' : (suggestionDecision.label || 'Associar')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
-            {suggestion?.suggestedProductId && (
-              <div className="mt-2 p-2 rounded-lg border bg-indigo-50 border-indigo-200">
-                <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                  <span className="font-bold text-indigo-900">Sugestão automática:</span>
-                  <span className="font-mono text-indigo-800">{suggestion.suggestedProductId}</span>
-                  <span className={`px-2 py-0.5 rounded-full font-bold ${getSuggestionConfidenceClass(suggestion.confidence)}`}>{suggestion.confidence}</span>
-                  <span className="text-indigo-700">Origem: {suggestion.source || '-'}</span>
-                  {suggestion.score > 0 && <span className="text-indigo-700">Score: {suggestion.score}%</span>}
-                  {suggestion.divergencias > 0 && <span className="text-red-700 font-semibold">Divergências: {suggestion.divergencias}</span>}
-                </div>
-                {suggestion.motivos?.length > 0 && <div className="mt-1 text-[11px] text-indigo-800">{suggestion.motivos.join(' · ')}</div>}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button onClick={() => setInlineOptins(prev => ({ ...prev, [item.id]: { ...prev[item.id], catalogProductId: suggestion.suggestedProductId } }))} className="px-2 py-1 bg-white text-indigo-700 text-xs font-bold rounded border border-indigo-300 hover:bg-indigo-100">Usar sugestão</button>
-                  <button onClick={() => handleCompareCatalogProduct(item, suggestion.suggestedProductId)} className="px-2 py-1 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700">Comparar</button>
-                  <button onClick={() => handleInlineOptin(item, suggestion.suggestedProductId)} className="px-2 py-1 bg-green-600 text-white text-xs font-bold rounded hover:bg-green-700">{suggestionDecision.label}</button>
-                </div>
-              </div>
-            )}
-
+            {/* Mensagem de Erro/Sucesso */}
             {ninja.msg && (
-              <div className={`mt-2 text-xs font-semibold ${ninja.msg.tipo === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{ninja.msg.texto}</div>
+              <div className={`mt-3 p-2.5 rounded text-xs font-medium border ${ninja.msg.tipo === 'ok' ? 'bg-green-50 text-green-800 border-green-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
+                {ninja.msg.texto}
+              </div>
             )}
           </div>
 
-          <div className="flex flex-col gap-2 flex-shrink-0">
-            <button
-              onClick={() => {
-                const current = inlineSearches[item.id] || {};
-                const isOpening = !current.open;
-                const newQuery = current.query !== undefined ? current.query : buildSmartCatalogQuery(item);
-                setInlineSearches(p => ({ ...p, [item.id]: { ...current, open: isOpening, query: newQuery, results: current.results || [] } }));
-                if (isOpening && (!current.results || current.results.length === 0)) {
-                  setTimeout(() => handleExecuteInlineSearchFor(item.id, newQuery, item.elegibilidade?.domain_id), 50);
-                }
-              }}
-              className="px-3 py-2 bg-blue-50 text-blue-700 text-xs font-bold rounded border border-blue-200 hover:bg-blue-100"
-            >
-              🔍 Pesquisar
+          {/* Coluna da Direita (Ações Manuais) */}
+          <div className="flex flex-col gap-2 w-full md:w-48 flex-shrink-0 bg-gray-50 p-3 rounded-lg border border-gray-100">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 text-center">Ações Manuais</p>
+            
+            <button onClick={abrirBusca} className="w-full px-3 py-2 bg-white text-blue-700 text-xs font-bold rounded border border-blue-200 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+              Buscar Catálogo
             </button>
 
-            <input
-              type="text"
-              value={inputValue}
-              onChange={e => setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: e.target.value } }))}
-              placeholder="Ex: MLB15996644"
-              className="px-2 py-1.5 border rounded text-xs w-36"
-            />
+            <div className="relative mt-2">
+              <input type="text" value={inputValue} onChange={e => setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: e.target.value } }))} placeholder="Ex: MLB123456" className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs text-center focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all" />
+            </div>
 
-            <button
-              onClick={() => handleCompareCatalogProduct(item, inputValue)}
-              disabled={!inputValue.trim()}
-              className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700 disabled:opacity-60"
-            >
-              Comparar
-            </button>
-
-            <button
-              onClick={() => { setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: inputValue } })); setTimeout(() => handleInlineOptin(item), 50); }}
-              disabled={ninja.loading || !inputValue.trim()}
-              className="px-3 py-1.5 bg-green-500 text-white text-xs font-bold rounded hover:bg-green-600 disabled:opacity-60"
-            >
-              {ninja.loading ? '...' : 'Associar'}
-            </button>
-
-            <button
-              onClick={() => handleLoadCompetition(item.id)}
-              className="px-3 py-1.5 bg-white text-gray-700 text-xs rounded border border-gray-400 hover:bg-gray-50"
-            >
-              Competição
+            <div className="flex gap-1">
+              <button onClick={() => handleCompareCatalogProduct(item, inputValue)} disabled={!inputValue.trim()} className="flex-1 px-2 py-1.5 bg-gray-200 text-gray-700 text-[11px] font-bold rounded hover:bg-gray-300 disabled:opacity-50 transition-colors">Comparar</button>
+              {canUseResource('catalogo.optin') && (
+              <button onClick={() => { setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: inputValue } })); setTimeout(() => handleInlineOptin(item), 50); }} disabled={ninja.loading || !inputValue.trim()} className="flex-1 px-2 py-1.5 bg-green-600 text-white text-[11px] font-bold rounded hover:bg-green-700 disabled:opacity-50 transition-colors">
+                {ninja.loading ? '...' : 'Associar ID'}
+              </button>
+              )}
+            </div>
+            
+            <button onClick={() => handleLoadCompetition(item.id)} className="w-full mt-1 px-3 py-1.5 bg-white text-purple-700 text-[11px] font-bold rounded border border-purple-200 hover:bg-purple-50 transition-colors">
+              Ver Competição
             </button>
           </div>
         </div>
+
 
         {/* Painel de comparação para ID manual */}
         {(() => {
@@ -1053,6 +1342,7 @@ const handleCompareCatalogProduct = async (item, productId) => {
                         for (const item of melhores) { const s = catalogSuggestionsMap[item.id]; if (s?.suggestedProductId) setInlineOptins(p => ({ ...p, [item.id]: { ...p[item.id], catalogProductId: s.suggestedProductId } })); }
                         setLoteMsg({ tipo: 'ok', texto: `${melhores.length} melhores sugestões automáticas aplicadas.` });
                       }} className="px-3 py-2 bg-indigo-100 text-indigo-800 text-xs font-bold rounded border border-indigo-300 hover:bg-indigo-200">Aplicar melhores sugestões</button>
+                      {canUseResource('catalogo.optin') && (
                       <button onClick={async () => {
                         const selecionados = getSelectedEligibilityItems(filteredEligResultsWithSuggestions, eligSelecionados).filter(item => (inlineOptins[item.id]?.catalogProductId || '').trim());
                         if (!selecionados.length) return;
@@ -1065,6 +1355,7 @@ const handleCompareCatalogProduct = async (item, productId) => {
                         setLoteMsg({ tipo: erro ? 'erro' : 'ok', texto: `Lote concluído. Sucesso: ${ok} | Erros: ${erro}` });
                         setLoteLoading(false);
                       }} disabled={loteLoading} className="px-3 py-2 bg-green-600 text-white text-xs font-bold rounded hover:bg-green-700 disabled:opacity-60">Associar em lote</button>
+                      )}
                       <button onClick={async () => {
                         const selecionados = getSelectedEligibilityItems(filteredEligResultsWithSuggestions, eligSelecionados);
                         if (!selecionados.length) return;
@@ -1162,14 +1453,46 @@ const handleCompareCatalogProduct = async (item, productId) => {
       {aba === 'buscar' && (
         <div className="space-y-4">
           <div className="bg-white p-4 rounded-lg border shadow-sm">
-            <h3 className="font-bold text-gray-800 mb-3">Pesquisar Manualmente no Catálogo ML</h3>
-            <div className="flex gap-2 flex-wrap">
-              <input type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} placeholder="Ex: Samsung Galaxy S8" className="flex-1 min-w-48 px-3 py-2 border rounded text-sm" />
-              <button onClick={handleSearch} disabled={searching} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded">Buscar</button>
+            <h3 className="font-bold text-gray-800 mb-2">Pesquisar Manualmente no Catálogo ML</h3>
+            <div className="flex gap-2 flex-wrap mb-3">
+              <input type="text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} placeholder="Ex: Samsung Galaxy S8 ou ID MLB123456" className="flex-1 min-w-48 px-3 py-2 border rounded text-sm" />
+              <button onClick={handleSearch} disabled={searching} className="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded hover:bg-blue-700 disabled:opacity-60">
+                {searching ? 'Buscando...' : 'Buscar'}
+              </button>
+            </div>
+            <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <input type="checkbox" className="w-4 h-4 accent-blue-600"
+                  checked={hidePublished}
+                  onChange={e => setHidePublished(e.target.checked)} />
+                <span>Ocultar já publicados na conta selecionada</span>
+              </label>
+              {searchResults.length > 0 && (
+                <span className="text-xs text-gray-400">
+                  {(() => {
+                    const visible = hidePublished
+                      ? searchResults.filter(p => !publishedCatalogItems[p.id]?.[contaSelecionada])
+                      : searchResults;
+                    return `${visible.length} de ${searchResults.length} resultado(s)`;
+                  })()}
+                </span>
+              )}
             </div>
           </div>
           {searching && <div className="text-center py-8 text-gray-400 animate-pulse">Buscando...</div>}
-          {!searching && searchResults.map(p => <ProductCard key={p.id} produto={p} contasML={contasML} />)}
+          {!searching && searchResults
+            .filter(p => !hidePublished || !publishedCatalogItems[p.id]?.[contaSelecionada])
+            .map(p => (
+              <ProductCard
+                key={p.id}
+                produto={p}
+                contasML={contasML}
+                configAtacado={configAtacado}
+                publishedMap={publishedCatalogItems}
+                onPublished={handleCatalogoPublished}
+              />
+            ))
+          }
         </div>
       )}
 

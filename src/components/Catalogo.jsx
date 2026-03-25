@@ -285,12 +285,23 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
             // Ativar campanhas automáticas
             if (strategy.ativarCampanhas && newItemId) {
               try {
-                await fetch('/api/catalogo/ativar-campanhas-auto', {
+                const promoRes = await fetch('/api/catalogo/ativar-campanhas-auto', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ userId: user.id, contaId: conta.id, itemId: newItemId, inflar: strategy.inflar, price: precoFinal })
                 });
-                log.push({ conta: conta.nickname, tipo: 'ok', texto: `  🎯 Campanhas ativadas para ${newItemId}` });
+                const promoData = await promoRes.json();
+                if (promoData.ok && promoData.status === 'activating') {
+                  log.push({ conta: conta.nickname, tipo: 'ok', texto: `  🎯 Campanhas sendo ativadas em background para ${newItemId}` });
+                } else if (promoData.ok && promoData.ativadas > 0) {
+                  log.push({ conta: conta.nickname, tipo: 'ok', texto: `  🎯 ${promoData.ativadas} campanha(s) ativadas para ${newItemId}` });
+                } else if (promoData.ok && promoData.candidatos === 0) {
+                  log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ℹ️ Nenhuma campanha candidata encontrada para ${newItemId}` });
+                } else if (promoData.erros?.length) {
+                  log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ⚠️ Campanhas: ${promoData.erros.map(e => `${e.tipo}: ${e.erro}`).join(' | ')}` });
+                } else {
+                  log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ⚠️ Campanhas: candidatos=${promoData.candidatos}, ativadas=${promoData.ativadas}` });
+                }
               } catch { log.push({ conta: conta.nickname, tipo: 'warn', texto: `  ⚠️ Erro ao ativar campanhas para ${newItemId}` }); }
             }
 

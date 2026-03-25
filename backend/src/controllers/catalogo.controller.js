@@ -319,71 +319,47 @@ export const catalogoController = {
         return res.status(400).json({ erro: 'Não foi possível determinar category_id para o produto de catálogo.' });
       }
 
+      // Busca dimensões do produto no catálogo ML — garante que a embalagem seja >= produto
       let pkgDimensions = [];
-
-      // Se informou SKU, tenta buscar e extrair dimensões reais do banco ou da API do Tiny.
-      if (sku) {
-        try {
-          let prodERP = await prisma.produto.findFirst({ where: { userId, sku } });
-
-          // Se não encontrou no banco local, tenta na API diretamente
-          if (!prodERP) {
-            const userConf = await prisma.user.findUnique({ where: { id: userId }, select: { tinyToken: true } });
-            if (userConf?.tinyToken) {
-              const resPesq = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
-                new URLSearchParams({ token: userConf.tinyToken, formato: 'JSON', pesquisa: sku })
-              );
-              const items = resPesq.data?.retorno?.produtos || [];
-              const idProdutoMenu = items.find(p => String(p.produto.codigo) === String(sku))?.produto?.id;
-              
-              if (idProdutoMenu) {
-                const resObter = await axios.post('https://api.tiny.com.br/api2/produto.obter.php',
-                  new URLSearchParams({ token: userConf.tinyToken, formato: 'JSON', id: idProdutoMenu })
-                );
-                const pTiny = resObter.data?.retorno?.produto;
-                if (pTiny) {
-                  prodERP = { dadosTiny: pTiny };
-                  // Opcional: já cadastrar no banco local para futuros acessos
-                  await prisma.produto.create({
-                    data: {
-                      userId, sku, nome: pTiny.nome, preco: Number(pTiny.preco) || 0,
-                      estoque: Number(pTiny.estoque_atual || pTiny.saldo || 0),
-                      statusML: 'Não Publicado', dadosTiny: pTiny
-                    }
-                  }).catch(() => {});
-                }
-              }
-            }
+      try {
+        const resCatalog = await axios.get(`${ML_API}/catalog/products/${catalogProductId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 10000
+        });
+        const catalogAttrs = resCatalog.data?.attributes || [];
+        const getAttr = (...ids) => {
+          for (const id of ids) {
+            const attr = catalogAttrs.find(a => a.id === id);
+            const val = attr?.value_struct?.number || parseFloat(attr?.values?.[0]?.struct?.number || attr?.values?.[0]?.name || '0') || 0;
+            if (val > 0) return val;
           }
+          return 0;
+        };
+        const catL = Math.ceil(getAttr('PACKAGE_LENGTH', 'LENGTH'));
+        const catW = Math.ceil(getAttr('PACKAGE_WIDTH',  'WIDTH'));
+        const catH = Math.ceil(getAttr('PACKAGE_HEIGHT', 'HEIGHT'));
+        const catP = Math.ceil(getAttr('PACKAGE_WEIGHT', 'WEIGHT') * 1000); // converte kg→g se necessário
+        console.log('[publishDirect] dimensões do catálogo ML:', { catL, catW, catH, catP });
 
-          if (prodERP?.dadosTiny) {
-            const dt = prodERP.dadosTiny;
-            const l = Math.round(Number(dt.larguraEmbalagem || dt.largura)) || 16;
-            const a = Math.round(Number(dt.alturaEmbalagem || dt.altura)) || 11;
-            const c = Math.round(Number(dt.comprimentoEmbalagem || dt.comprimento)) || 11;
-            const pBruto = Math.round(Number(dt.peso_bruto || dt.peso_liquido || 0) * 1000) || 200;
-            
-            pkgDimensions = [
-              { id: 'SELLER_PACKAGE_LENGTH', value_name: `${l} cm` },
-              { id: 'SELLER_PACKAGE_WIDTH', value_name: `${a} cm` },
-              { id: 'SELLER_PACKAGE_HEIGHT', value_name: `${c} cm` },
-              { id: 'SELLER_PACKAGE_WEIGHT', value_name: `${pBruto} g` }
-            ];
-          } else {
-             console.log('[publishDirect] aviso: Nenhuma dimensão encontrada no Tiny ERP para o SKU', sku);
-          }
-        } catch (err) {
-          console.error('[publishDirect] erro ao buscar dimensões do Tiny ERP:', err.message);
+        if (catL > 0 && catW > 0 && catH > 0) {
+          pkgDimensions = [
+            { id: 'SELLER_PACKAGE_LENGTH', value_name: `${catL} cm` },
+            { id: 'SELLER_PACKAGE_WIDTH',  value_name: `${catW} cm` },
+            { id: 'SELLER_PACKAGE_HEIGHT', value_name: `${catH} cm` },
+            { id: 'SELLER_PACKAGE_WEIGHT', value_name: `${catP > 0 ? catP : 3000} g` }
+          ];
         }
+      } catch (err) {
+        console.warn('[publishDirect] não foi possível buscar dimensões do catálogo ML:', err.message);
       }
 
       if (pkgDimensions.length === 0) {
-        // Fallback padrão se Tiny der erro ou se os dados não renderem dimensões válidas
+        // Fallback: dimensões e peso grandes o suficiente para cobrir a maioria dos produtos
         pkgDimensions = [
-          { id: 'SELLER_PACKAGE_LENGTH', value_name: '16 cm' },
-          { id: 'SELLER_PACKAGE_WIDTH', value_name: '11 cm' },
-          { id: 'SELLER_PACKAGE_HEIGHT', value_name: '11 cm' },
-          { id: 'SELLER_PACKAGE_WEIGHT', value_name: '200 g' }
+          { id: 'SELLER_PACKAGE_LENGTH', value_name: '40 cm' },
+          { id: 'SELLER_PACKAGE_WIDTH',  value_name: '30 cm' },
+          { id: 'SELLER_PACKAGE_HEIGHT', value_name: '25 cm' },
+          { id: 'SELLER_PACKAGE_WEIGHT', value_name: '5000 g' }
         ];
       }
 
@@ -748,65 +724,115 @@ export const catalogoController = {
 
       const { token } = await getValidToken(contaId, userId);
 
-      const promoRes = await axios.get(
-        `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
-        { headers: { Authorization: `Bearer ${token}` }, timeout: 12000 }
-      );
+      // Responde imediatamente — ativação acontece em background com retry
+      res.json({ ok: true, status: 'activating', itemId });
 
-      const lista = Array.isArray(promoRes.data) ? promoRes.data : (promoRes.data ? [promoRes.data] : []);
-      const candidatos = lista.filter(p => p && p.status === 'candidate' && p.type !== 'PRICE_DISCOUNT');
+      // Função auxiliar que tenta ativar com retry (até 5 tentativas, delays crescentes)
+      const tentarAtivar = async () => {
+        const delays = [5000, 15000, 30000, 45000, 60000];
+        for (let i = 0; i < delays.length; i++) {
+          await delay(delays[i]);
+          try {
+            const promoRes = await axios.get(
+              `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
+              { headers: { Authorization: `Bearer ${token}` }, timeout: 12000 }
+            );
+            const lista = Array.isArray(promoRes.data) ? promoRes.data : (promoRes.data ? [promoRes.data] : []);
+            const candidatos = lista.filter(p => p && p.status === 'candidate');
+            if (candidatos.length === 0) continue;
 
-      const inflarNum = Number(inflar) || 0;
-      const precoFinal = Number(price) || 0;
-      const precoAlvo = inflarNum > 0 ? precoFinal * (1 - inflarNum / 100) : precoFinal;
+            const inflarNum = Number(inflar) || 0;
+            const precoFinal = Number(price) || 0;
+            const precoAlvo = inflarNum > 0 ? precoFinal * (1 - inflarNum / 100) : precoFinal;
 
-      const TIPOS_SEM_ID = new Set(['DOD', 'LIGHTNING']);
-      const TIPOS_COM_OFFER = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
-      const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
+            const TIPOS_SEM_ID = new Set(['DOD', 'LIGHTNING']);
+            const TIPOS_COM_OFFER = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
+            const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING', 'PRICE_DISCOUNT']);
 
-      let ativadas = 0;
-      const erros = [];
+            let ativadas = 0;
+            let temNoCandidates = false;
 
-      for (const promo of candidatos) {
-        const sellerPct = typeof promo.seller_percentage === 'number' ? promo.seller_percentage : null;
-        const maxPrice = promo.max_discounted_price || 0;
-        const origPrice = promo.original_price || 0;
+            for (const promo of candidatos) {
+              const sellerPct = typeof promo.seller_percentage === 'number' ? promo.seller_percentage : null;
+              const maxPrice = promo.max_discounted_price || 0;
+              const origPrice = promo.original_price || 0;
 
-        let deveAtivar = false;
-        if (inflarNum === 0) deveAtivar = true;
-        else if (sellerPct !== null) deveAtivar = sellerPct <= inflarNum;
-        else if (maxPrice > 0 && origPrice > 0) {
-          const minPct = ((origPrice - maxPrice) / origPrice) * 100;
-          deveAtivar = minPct <= inflarNum;
-        } else deveAtivar = true;
+              let deveAtivar = false;
+              if (inflarNum === 0) deveAtivar = true;
+              else if (sellerPct !== null) deveAtivar = sellerPct <= inflarNum;
+              else if (maxPrice > 0 && origPrice > 0) {
+                const minPct = ((origPrice - maxPrice) / origPrice) * 100;
+                deveAtivar = minPct <= inflarNum;
+              } else deveAtivar = true;
 
-        if (!deveAtivar) continue;
+              if (!deveAtivar) continue;
 
-        const body = { promotion_type: promo.type };
-        if (!TIPOS_SEM_ID.has(promo.type) && promo.id) body.promotion_id = promo.id;
-        const offerId = promo.offer_id || promo.offerId || promo.ref_id || null;
-        if (offerId && TIPOS_COM_OFFER.has(promo.type)) body.offer_id = offerId;
-        if (TIPOS_COM_PRECO.has(promo.type) && precoFinal > 0) {
-          let dealPrice = sellerPct !== null ? precoFinal * (1 - sellerPct / 100) : precoAlvo;
-          if (maxPrice > 0 && dealPrice > maxPrice) dealPrice = maxPrice;
-          const minPrice = promo.min_discounted_price || 0;
-          if (minPrice > 0 && dealPrice < minPrice) dealPrice = minPrice;
-          body.deal_price = Math.round(dealPrice * 100) / 100;
+              const body = { promotion_type: promo.type };
+              if (!TIPOS_SEM_ID.has(promo.type) && promo.id) body.promotion_id = promo.id;
+              const offerId = promo.offer_id || promo.offerId || promo.ref_id || null;
+              if (offerId && TIPOS_COM_OFFER.has(promo.type)) body.offer_id = offerId;
+              if (TIPOS_COM_PRECO.has(promo.type) && precoFinal > 0) {
+                let dealPrice = sellerPct !== null ? precoFinal * (1 - sellerPct / 100) : precoAlvo;
+                if (maxPrice > 0 && dealPrice > maxPrice) dealPrice = maxPrice;
+                const minPrice = promo.min_discounted_price || 0;
+                if (minPrice > 0 && dealPrice < minPrice) dealPrice = minPrice;
+                body.deal_price = Math.round(dealPrice * 100) / 100;
+              }
+              if (promo.type === 'PRICE_DISCOUNT') {
+                const toLocalFormat = (dateStr) => {
+                  const d = new Date(dateStr);
+                  if (isNaN(d.getTime())) return null;
+                  const pad = (n) => String(n).padStart(2, '0');
+                  const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000);
+                  return `${brt.getUTCFullYear()}-${pad(brt.getUTCMonth()+1)}-${pad(brt.getUTCDate())}T00:00:00`;
+                };
+                const rawStart = promo.start_date;
+                const rawFinish = promo.finish_date || promo.end_date;
+                if (rawStart && rawFinish) {
+                  body.start_date = toLocalFormat(rawStart) || rawStart;
+                  body.finish_date = toLocalFormat(rawFinish) || rawFinish;
+                } else {
+                  const now = new Date();
+                  const brtNow = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+                  const pad = (n) => String(n).padStart(2, '0');
+                  const fmt = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T00:00:00`;
+                  body.start_date = fmt(brtNow);
+                  body.finish_date = fmt(new Date(brtNow.getTime() + 14 * 24 * 60 * 60 * 1000));
+                }
+              }
+
+              try {
+                await axios.post(
+                  `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
+                  body,
+                  { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 }
+                );
+                console.log(`[CampanhasAuto BG] ✅ itemId=${itemId} type=${promo.type} ativado (tentativa ${i+1})`);
+                ativadas++;
+              } catch (e) {
+                const msg = e.response?.data?.message || e.message;
+                if (msg === 'No candidates found for item') {
+                  temNoCandidates = true;
+                } else {
+                  console.error(`[CampanhasAuto BG] ❌ itemId=${itemId} type=${promo.type}: ${msg}`);
+                }
+              }
+            }
+
+            if (ativadas > 0) {
+              console.log(`[CampanhasAuto BG] ✅ ${ativadas} campanha(s) ativadas para ${itemId}`);
+              return;
+            }
+            if (!temNoCandidates) return; // outros erros, não adianta retry
+          } catch (e) {
+            console.error(`[CampanhasAuto BG] erro ao buscar promos para ${itemId}:`, e.message);
+          }
         }
+        console.warn(`[CampanhasAuto BG] ⚠️ ${itemId}: não foi possível ativar após todas as tentativas`);
+      };
 
-        try {
-          await axios.post(
-            `${ML_API}/seller-promotions/items/${itemId}?app_version=v2`,
-            body,
-            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 }
-          );
-          ativadas++;
-        } catch (e) {
-          erros.push({ tipo: promo.type, erro: e.response?.data?.message || e.message });
-        }
-      }
-
-      res.json({ ok: true, candidatos: candidatos.length, ativadas, erros });
+      // Executa em background sem bloquear a resposta HTTP
+      tentarAtivar().catch(() => {});
     } catch (error) {
       res.status(500).json({ erro: 'Erro ao ativar campanhas', detalhes: error.message });
     }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 import { cronQueue } from '../workers/queue.js';
 
 const prisma = new PrismaClient();
@@ -74,6 +75,25 @@ router.put('/api/admin/usuarios/:id', requireSuperAdmin, async (req, res) => {
       select: { id: true, email: true, role: true, ativo: true, featureFlags: true, resourceFlags: true },
     });
     res.json(user);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/usuarios/:id/senha
+router.put('/api/admin/usuarios/:id/senha', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id === req.actualUserId) {
+      return res.status(400).json({ erro: 'Use as configurações de perfil para alterar sua própria senha.' });
+    }
+    const { novaSenha } = req.body;
+    if (!novaSenha || novaSenha.length < 6) {
+      return res.status(400).json({ erro: 'A senha deve ter pelo menos 6 caracteres.' });
+    }
+    const hash = await bcrypt.hash(novaSenha, 10);
+    await prisma.user.update({ where: { id }, data: { senha: hash } });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }

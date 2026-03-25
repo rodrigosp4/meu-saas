@@ -360,6 +360,77 @@ function SecaoPadroes() {
   );
 }
 
+// ── Modal de troca de senha ────────────────────────────────────────────────────
+function ModalTrocarSenha({ usuario, onClose }) {
+  const [novaSenha, setNovaSenha] = useState('');
+  const [confirmacao, setConfirmacao] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [erro, setErro] = useState('');
+  const [ok, setOk] = useState(false);
+
+  const salvar = async () => {
+    setErro('');
+    if (novaSenha.length < 6) return setErro('A senha deve ter pelo menos 6 caracteres.');
+    if (novaSenha !== confirmacao) return setErro('As senhas não coincidem.');
+    setSaving(true);
+    const res = await fetch(`/api/admin/usuarios/${usuario.id}/senha`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novaSenha }),
+    });
+    setSaving(false);
+    if (res.ok) {
+      setOk(true);
+      setTimeout(onClose, 1200);
+    } else {
+      const d = await res.json();
+      setErro(d.erro || 'Erro ao salvar.');
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '28px', width: '380px', maxWidth: '96vw', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+        <div style={{ fontWeight: 700, fontSize: '1.05em', marginBottom: '4px' }}>Trocar senha</div>
+        <div style={{ fontSize: '0.83em', color: '#7f8c8d', marginBottom: '20px' }}>{usuario.email}</div>
+
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ fontSize: '0.84em', color: '#495057', display: 'block', marginBottom: '4px' }}>Nova senha</label>
+          <input
+            type="password"
+            value={novaSenha}
+            onChange={e => setNovaSenha(e.target.value)}
+            placeholder="Mínimo 6 caracteres"
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', boxSizing: 'border-box' }}
+          />
+        </div>
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ fontSize: '0.84em', color: '#495057', display: 'block', marginBottom: '4px' }}>Confirmar senha</label>
+          <input
+            type="password"
+            value={confirmacao}
+            onChange={e => setConfirmacao(e.target.value)}
+            placeholder="Repita a senha"
+            style={{ width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', boxSizing: 'border-box' }}
+          />
+        </div>
+
+        {erro && <div style={{ color: '#e74c3c', fontSize: '0.84em', marginBottom: '12px' }}>{erro}</div>}
+        {ok  && <div style={{ color: '#27ae60', fontSize: '0.84em', marginBottom: '12px' }}>Senha alterada com sucesso!</div>}
+
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 18px', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', background: '#f8f8f8', fontSize: '0.9em' }}>
+            Cancelar
+          </button>
+          <button onClick={salvar} disabled={saving || ok} style={{ padding: '8px 20px', border: 'none', borderRadius: '6px', cursor: 'pointer', background: '#e67e22', color: '#fff', fontWeight: 600, fontSize: '0.9em', opacity: (saving || ok) ? 0.7 : 1 }}>
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 export default function AdminPanel({ setActivePage }) {
   const { setImpersonating } = useAuth();
@@ -369,6 +440,7 @@ export default function AdminPanel({ setActivePage }) {
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
   const [modalFlags, setModalFlags] = useState(null);
+  const [modalSenha, setModalSenha] = useState(null);
   const [erro, setErro] = useState('');
 
   const carregar = useCallback(async () => {
@@ -554,6 +626,7 @@ export default function AdminPanel({ setActivePage }) {
                       <td style={{ padding: '10px 16px', textAlign: 'center' }}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
                           <button onClick={() => setModalFlags(u)} style={btn('#3498db')}>Permissões</button>
+                          <button onClick={() => setModalSenha(u)} style={btn('#e67e22')}>Senha</button>
                           <button
                             onClick={() => toggleAtivo(u)}
                             style={btn(u.ativo ? '#e74c3c' : '#27ae60')}
@@ -591,6 +664,14 @@ export default function AdminPanel({ setActivePage }) {
           usuario={modalFlags}
           onClose={() => setModalFlags(null)}
           onSave={salvarFlags}
+        />
+      )}
+
+      {/* Modal de troca de senha */}
+      {modalSenha && (
+        <ModalTrocarSenha
+          usuario={modalSenha}
+          onClose={() => setModalSenha(null)}
         />
       )}
     </div>

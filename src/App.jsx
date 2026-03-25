@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
+import LandingPage from './components/LandingPage';
 import DashboardLayout from './components/DashboardLayout';
 import SuporteClienteSelector from './components/SuporteClienteSelector';
 import Configuracoes from './components/Configuracoes';
@@ -58,9 +59,19 @@ function App() {
   }, [isLoggedIn, activePage, canAccess]);
 
   const resetToken = new URLSearchParams(window.location.search).get('resetToken');
+  const [showLogin, setShowLogin] = useState(!!resetToken);
 
   if (!isLoggedIn || resetToken) {
-    return <Login onLogin={login} initialToken={resetToken} />;
+    if (!showLogin && !resetToken) {
+      return <LandingPage onLoginClick={() => setShowLogin(true)} />;
+    }
+    return (
+      <Login
+        onLogin={login}
+        initialToken={resetToken}
+        onShowLanding={() => setShowLogin(false)}
+      />
+    );
   }
 
   // Suporte logado mas sem impersonação: mostra seletor de cliente

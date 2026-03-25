@@ -619,7 +619,7 @@ export default function CadastramentoMassa({ usuarioId }) {
                 sku: prod.sku,
                 accessToken: token,
                 payload: payload,
-                description: prod.descricao || "Anúncio criado em massa pelo MeuSaaS Hub",
+                description: prod.descricao || "Anúncio criado em massa pelo MELIUNLOCKER",
                 enviarAtacado: strategy.enviarAtacado || false,
                 inflar: strategy.inflar || 0,
                 ativarPromocoes: strategy.ativarPromocoes || false,

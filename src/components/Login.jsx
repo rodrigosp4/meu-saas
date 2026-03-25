@@ -193,25 +193,17 @@ export default function Login({ onLogin, initialToken }) {
       >
         {/* Logo */}
         <div style={{ marginBottom: '8px' }}>
-          <div
+          <img
+            src="/logo.png"
+            alt="MELIUNLOCKER"
             style={{
-              width: '60px',
-              height: '60px',
-              borderRadius: '12px',
-              background: 'linear-gradient(135deg, #e67e22, #f1c40f)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              width: '80px',
+              height: '80px',
+              objectFit: 'contain',
               margin: '0 auto 16px',
-              boxShadow: '0 2px 10px rgba(230, 126, 34, 0.3)',
+              display: 'block',
             }}
-          >
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
+          />
         </div>
 
         <h2 style={{ color: '#ecf0f1', marginBottom: '20px', fontSize: '1.4em', fontWeight: 600 }}>

@@ -62,7 +62,7 @@ export const mlController = {
     if (code) {
       return res.redirect(`${config.frontendUrl}/?code=${code}`);
     }
-    res.send('Servidor backend do MeuSaaS Hub está online.');
+    res.send('Servidor backend do MELIUNLOCKER está online.');
   },
 
   async auth(req, res) {

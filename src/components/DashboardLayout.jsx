@@ -269,7 +269,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
         color: '#ecf0f1',
         display: 'flex',
         flexDirection: 'column',
-        height: '100vh',
+        height: '100%',
         boxShadow: '2px 0 5px rgba(0,0,0,0.1)',
         zIndex: 1000,
       }}>
@@ -299,15 +299,11 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
               </svg>
             ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
+              <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 32, height: 32, objectFit: 'contain' }} />
             )}
           </div>
           <span style={{ fontSize: '1.15em', fontWeight: 600, color: '#ecf0f1' }}>
-            {isSuperAdmin ? 'Admin Panel' : 'MeuSaaS Hub'}
+            {isSuperAdmin ? 'Admin Panel' : 'MELIUNLOCKER'}
           </span>
         </div>
 
@@ -446,7 +442,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 20V10M12 20V4M6 20v-6" />
             </svg>
-            MeuSaaS Hub v1.0
+            MELIUNLOCKER v1.0
           </div>
         </header>
 

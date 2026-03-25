@@ -784,7 +784,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
   // Filtros
   const [filtroSku, setFiltroSku] = useState('');
   const [filtroApenasCAviso, setFiltroApenasCAviso] = useState(true);
-  const [filtroSemCatalogo, setFiltroSemCatalogo] = useState(false);
+  const [filtroSemCatalogo, setFiltroSemCatalogo] = useState(true);
   const [filtroStatus, setFiltroStatus] = useState('Pendentes');
   const [filtroQualidadeMax, setFiltroQualidadeMax] = useState('');
   const [sortCol, setSortCol] = useState({ col: 'vendas', rev: true });

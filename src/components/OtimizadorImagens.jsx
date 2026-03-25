@@ -109,6 +109,7 @@ export default function OtimizadorImagens({ usuarioId }) {
   const [filtroThumbRuim, setFiltroThumbRuim] = useState(true);
   const [filtroFotoRuim, setFiltroFotoRuim] = useState(false);
   const [filtroApenasAtivos, setFiltroApenasAtivos] = useState(true);
+  const [ocultarCatalogo, setOcultarCatalogo] = useState(true);
   const [filtroTexto, setFiltroTexto] = useState('');
   const [filtroTextoDebouncado, setFiltroTextoDebouncado] = useState('');
   const [sortReverse, setSortReverse] = useState(true);
@@ -188,6 +189,7 @@ export default function OtimizadorImagens({ usuarioId }) {
         }
 
         if (filtroSemVendas && Number(ad.vendas || 0) > 0) return false;
+        if (ocultarCatalogo && ad.dadosML?.catalog_product_id) return false;
 
         if (termos.length > 0) {
           const haystack = normalize(`${ad.sku || ''} ${ad.id || ''} ${ad.titulo || ''}`);
@@ -200,7 +202,7 @@ export default function OtimizadorImagens({ usuarioId }) {
         const va = Number(a.vendas || 0), vb = Number(b.vendas || 0);
         return sortReverse ? vb - va : va - vb;
       });
-  }, [anuncios, filtroApenasAtivos, filtroThumbRuim, filtroFotoRuim, filtroSemVendas, filtroTextoDebouncado, sortReverse]);
+  }, [anuncios, filtroApenasAtivos, filtroThumbRuim, filtroFotoRuim, filtroSemVendas, filtroTextoDebouncado, sortReverse, ocultarCatalogo]);
 
   // Agrupamento por SKU — apenas ads COM sku real são agrupados
   const { listaAgrupada, semSkuAds } = useMemo(() => {
@@ -426,6 +428,10 @@ export default function OtimizadorImagens({ usuarioId }) {
         <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
           <input type="checkbox" checked={filtroApenasAtivos} onChange={e => setFiltroApenasAtivos(e.target.checked)} />
           Apenas Ativos
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+          <input type="checkbox" checked={ocultarCatalogo} onChange={e => setOcultarCatalogo(e.target.checked)} />
+          Ocultar Catálogo
         </label>
 
         <label

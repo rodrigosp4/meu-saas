@@ -256,11 +256,44 @@ export const catalogoController = {
       const { token } = await getValidToken(contaId, userId);
 
       // category_id deve ser um ID numérico (ex: MLB1053), não um domain_id (MLB-AUDIO...).
-      // Se apenas o domain_id foi enviado, buscamos a category_id real no produto de catálogo.
       let finalCategoryId = categoryId && !categoryId.includes('-') ? categoryId : undefined;
 
+      // 1) Se recebemos um domain_id do frontend, converte via catalog_domains (com token)
+      if (!finalCategoryId && categoryId?.includes('-')) {
+        try {
+          const domainResp = await axios.get(`${ML_API}/catalog_domains/${categoryId}/categories`, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 10000
+          });
+          const cats = domainResp.data;
+          if (Array.isArray(cats) && cats.length > 0) {
+            finalCategoryId = cats[0].id;
+            console.log('[publishDirect] category via catalog_domains:', finalCategoryId, '(domain:', categoryId, ')');
+          }
+        } catch (e) {
+          console.log('[publishDirect] aviso: erro ao converter domain_id para category_id:', e.message);
+        }
+      }
+
+      // 1b) domain_id do frontend direto no domain_discovery (fallback sem catalog_domains)
+      if (!finalCategoryId && categoryId?.includes('-')) {
+        try {
+          const parsedDomain = categoryId.replace(/^MLB-/, '').replace(/_/g, ' ');
+          const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
+            params: { limit: 1, q: parsedDomain },
+            timeout: 10000
+          });
+          if (domResp.data?.length > 0) {
+            finalCategoryId = domResp.data[0].category_id;
+            console.log('[publishDirect] category via domain_discovery (domain):', finalCategoryId);
+          }
+        } catch (e) {
+          console.log('[publishDirect] aviso: erro no domain_discovery via domain_id:', e.message);
+        }
+      }
+
       if (!finalCategoryId && catalogProductId) {
-        // 1) Tenta via buy_box_winner do produto
+        // 2) Tenta via buy_box_winner do produto
         try {
           const prodResp = await axios.get(`${ML_API}/products/${catalogProductId}`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -268,38 +301,40 @@ export const catalogoController = {
           });
           finalCategoryId = prodResp.data?.buy_box_winner?.category_id;
 
-          // 2) Fallback: domain_id to generic name string search
+          // 3) Fallback: domain_id do produto via catalog_domains
           if (!finalCategoryId && prodResp.data?.domain_id) {
             try {
-              const parsedDomain = prodResp.data.domain_id.replace(/^MLB-/, '').replace(/_/g, ' ');
-              const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
-                params: { limit: 1, q: parsedDomain },
+              const domainResp = await axios.get(`${ML_API}/catalog_domains/${prodResp.data.domain_id}/categories`, {
+                headers: { Authorization: `Bearer ${token}` },
                 timeout: 10000
               });
-              if (domResp.data && domResp.data.length > 0) {
-                finalCategoryId = domResp.data[0].category_id;
+              const cats = domainResp.data;
+              if (Array.isArray(cats) && cats.length > 0) {
+                finalCategoryId = cats[0].id;
+                console.log('[publishDirect] category via catalog_domains (produto):', finalCategoryId);
               }
             } catch (e) {
-              console.log('[publishDirect] aviso: erro no domain_discovery via domain_id:', e.message);
+              console.log('[publishDirect] aviso: erro no catalog_domains via domain_id do produto:', e.message);
             }
           }
 
-          // 3) Fallback: category predictor by product name
+          // 4) Fallback: nome do produto via domain_discovery
           if (!finalCategoryId && prodResp.data?.name) {
             try {
               const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
                 params: { limit: 1, q: prodResp.data.name },
                 timeout: 10000
               });
-              if (domResp.data && domResp.data.length > 0) {
+              if (domResp.data?.length > 0) {
                 finalCategoryId = domResp.data[0].category_id;
+                console.log('[publishDirect] category via domain_discovery (nome):', finalCategoryId);
               }
             } catch (e) {
-              console.log('[publishDirect] aviso: erro no domain_discovery via name:', e.message);
+              console.log('[publishDirect] aviso: erro no domain_discovery via nome do produto:', e.message);
             }
           }
 
-          // 3) Fallback: primeiro item competindo
+          // 5) Fallback: primeiro item competindo
           if (!finalCategoryId) {
             try {
               const itemsResp = await axios.get(`${ML_API}/products/${catalogProductId}/items`, {
@@ -308,6 +343,7 @@ export const catalogoController = {
                 timeout: 10000
               });
               finalCategoryId = itemsResp.data?.results?.[0]?.category_id;
+              if (finalCategoryId) console.log('[publishDirect] category via items:', finalCategoryId);
             } catch {}
           }
         } catch (e) {

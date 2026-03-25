@@ -33,6 +33,7 @@ export default function DimensoesEmbalagem({ usuarioId }) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos'); // todos | pendente | concluido
+  const [ocultarCatalogo, setOcultarCatalogo] = useState(true);
   const [loading, setLoading] = useState(false);
   const [selecionados, setSelecionados] = useState(new Set());
   const [modalAberto, setModalAberto] = useState(false);
@@ -74,6 +75,11 @@ export default function DimensoesEmbalagem({ usuarioId }) {
         lista = lista.filter(a => !!getDimStr(a));
       }
 
+      // Oculta anúncios de catálogo (catalog_product_id preenchido)
+      if (ocultarCatalogo) {
+        lista = lista.filter(a => !a.dadosML?.catalog_product_id);
+      }
+
       setAnuncios(lista);
       setTotal(filtroStatus === 'todos' ? (data.total || lista.length) : lista.length);
       setPage(pg);
@@ -82,11 +88,11 @@ export default function DimensoesEmbalagem({ usuarioId }) {
     } finally {
       setLoading(false);
     }
-  }, [contasSelecionadas, search, filtroStatus]);
+  }, [contasSelecionadas, search, filtroStatus, ocultarCatalogo]);
 
   useEffect(() => {
     if (contasSelecionadas.length > 0) buscarAnuncios(1);
-  }, [contasSelecionadas, filtroStatus]);
+  }, [contasSelecionadas, filtroStatus, ocultarCatalogo]);
 
   const toggleConta = (id) => {
     setContasSelecionadas(prev =>
@@ -248,6 +254,16 @@ export default function DimensoesEmbalagem({ usuarioId }) {
             <option value="concluido">Concluído (com dimensão)</option>
           </select>
         </div>
+
+        {/* Filtro catálogo */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85em', color: '#555', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input
+            type="checkbox"
+            checked={ocultarCatalogo}
+            onChange={e => setOcultarCatalogo(e.target.checked)}
+          />
+          Ocultar catálogo
+        </label>
 
         {/* Botão buscar */}
         <button

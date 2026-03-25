@@ -283,29 +283,59 @@ export const mlController = {
       let categoryOpcoes =[];
       let categorySugerida = false;
 
-      // Se não tem categoria válida (em /products só vem o domain_id), prediz pelo título
+      // Se não tem categoria válida (em /products só vem o domain_id), busca pelo domínio ou prediz pelo título
       if (!categoryValida) {
-        const titulo = prod.name || prod.title || prod.family_name || '';
-        if (titulo) {
+        let categoriaResolvida = false;
+
+        // 1. TENTA CONVERTER O DOMAIN_ID NA CATEGORIA EXATA (Recomendação oficial do ML)
+        if (prod.domain_id) {
           try {
-            const predRes = await axios.get(
-              `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=5&q=${encodeURIComponent(titulo)}`
-            );
-            const opcoes = predRes.data ||[];
-            categoryOpcoes = await Promise.all(opcoes.map(async o => {
+            const domainRes = await axios.get(`https://api.mercadolibre.com/catalog_domains/${prod.domain_id}/categories`);
+            if (domainRes.data && domainRes.data.length > 0) {
+              categoryId = domainRes.data[0].id;
+              
+              // Opcional: buscar o caminho completo da categoria para ficar bonito no front
+              let categoryName = domainRes.data[0].name;
               try {
-                const catRes = await axios.get(`https://api.mercadolibre.com/categories/${o.category_id}`);
-                if (catRes.data && catRes.data.path_from_root) {
-                  return { category_id: o.category_id, category_name: catRes.data.path_from_root.map(p => p.name).join(' > ') };
+                const catDetails = await axios.get(`https://api.mercadolibre.com/categories/${categoryId}`);
+                if (catDetails.data && catDetails.data.path_from_root) {
+                  categoryName = catDetails.data.path_from_root.map(p => p.name).join(' > ');
                 }
               } catch (e) {}
-              return { category_id: o.category_id, category_name: o.category_name };
-            }));
-            if (categoryOpcoes.length > 0) {
-              categoryId = categoryOpcoes[0].category_id;
-              categorySugerida = true;
+
+              categoryOpcoes = [{ category_id: categoryId, category_name: categoryName }];
+              categorySugerida = false; // False pois é a categoria exata do catálogo, não uma "sugestão"
+              categoriaResolvida = true;
             }
-          } catch {}
+          } catch (domainErr) {
+            console.warn(`Aviso: Não foi possível converter o domínio ${prod.domain_id} em categoria.`);
+          }
+        }
+
+        // 2. FALLBACK: Se falhar pelo domínio, tenta adivinhar pelo título (Como era antes)
+        if (!categoriaResolvida) {
+          const titulo = prod.name || prod.title || prod.family_name || '';
+          if (titulo) {
+            try {
+              const predRes = await axios.get(
+                `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=5&q=${encodeURIComponent(titulo)}`
+              );
+              const opcoes = predRes.data ||[];
+              categoryOpcoes = await Promise.all(opcoes.map(async o => {
+                try {
+                  const catRes = await axios.get(`https://api.mercadolibre.com/categories/${o.category_id}`);
+                  if (catRes.data && catRes.data.path_from_root) {
+                    return { category_id: o.category_id, category_name: catRes.data.path_from_root.map(p => p.name).join(' > ') };
+                  }
+                } catch (e) {}
+                return { category_id: o.category_id, category_name: o.category_name };
+              }));
+              if (categoryOpcoes.length > 0) {
+                categoryId = categoryOpcoes[0].category_id;
+                categorySugerida = true; // Avisa o usuário que foi adivinhado
+              }
+            } catch {}
+          }
         }
       }
 

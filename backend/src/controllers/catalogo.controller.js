@@ -247,7 +247,7 @@ export const catalogoController = {
     try {
       const {
         userId, contaId, catalogProductId, categoryId,
-        price, listingTypeId, quantity, attributes, siteId
+        price, listingTypeId, quantity, attributes, siteId, sku
       } = req.body;
       if (!userId || !contaId || !catalogProductId || !price) {
         return res.status(400).json({ erro: 'userId, contaId, catalogProductId e price são obrigatórios' });
@@ -255,13 +255,125 @@ export const catalogoController = {
 
       const { token } = await getValidToken(contaId, userId);
 
-      // category_id deve ser um ID numérico (ex: MLB1053), não um domain_id (MLB-CELLPHONES).
-      // Para publicação no catálogo com catalog_product_id, o ML deriva a categoria automaticamente.
-      const validCategoryId = categoryId && !categoryId.includes('-') ? categoryId : undefined;
+      // category_id deve ser um ID numérico (ex: MLB1053), não um domain_id (MLB-AUDIO...).
+      // Se apenas o domain_id foi enviado, buscamos a category_id real no produto de catálogo.
+      let finalCategoryId = categoryId && !categoryId.includes('-') ? categoryId : undefined;
+
+      if (!finalCategoryId && catalogProductId) {
+        // 1) Tenta via buy_box_winner do produto
+        try {
+          const prodResp = await axios.get(`${ML_API}/products/${catalogProductId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 10000
+          });
+          finalCategoryId = prodResp.data?.buy_box_winner?.category_id;
+
+          // 2) Fallback: category predictor by product name
+          if (!finalCategoryId && prodResp.data?.name) {
+            try {
+              const domResp = await axios.get(`${ML_API}/sites/${siteId || 'MLB'}/domain_discovery/search`, {
+                params: { limit: 1, q: prodResp.data.name },
+                timeout: 10000
+              });
+              if (domResp.data && domResp.data.length > 0) {
+                finalCategoryId = domResp.data[0].category_id;
+              }
+            } catch (e) {
+              console.log('[publishDirect] aviso: erro no domain_discovery:', e.message);
+            }
+          }
+
+          // 3) Fallback: primeiro item competindo
+          if (!finalCategoryId) {
+            try {
+              const itemsResp = await axios.get(`${ML_API}/products/${catalogProductId}/items`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params: { limit: 1 },
+                timeout: 10000
+              });
+              finalCategoryId = itemsResp.data?.results?.[0]?.category_id;
+            } catch {}
+          }
+        } catch (e) {
+          console.log('[publishDirect] aviso: não conseguiu buscar product details:', e.message);
+        }
+      }
+
+      if (!finalCategoryId) {
+        return res.status(400).json({ erro: 'Não foi possível determinar category_id para o produto de catálogo.' });
+      }
+
+      let pkgDimensions = [];
+
+      // Se informou SKU, tenta buscar e extrair dimensões reais do banco ou da API do Tiny.
+      if (sku) {
+        try {
+          let prodERP = await prisma.produto.findFirst({ where: { userId, sku } });
+
+          // Se não encontrou no banco local, tenta na API diretamente
+          if (!prodERP) {
+            const userConf = await prisma.user.findUnique({ where: { id: userId }, select: { tinyToken: true } });
+            if (userConf?.tinyToken) {
+              const resPesq = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
+                new URLSearchParams({ token: userConf.tinyToken, formato: 'JSON', pesquisa: sku })
+              );
+              const items = resPesq.data?.retorno?.produtos || [];
+              const idProdutoMenu = items.find(p => String(p.produto.codigo) === String(sku))?.produto?.id;
+              
+              if (idProdutoMenu) {
+                const resObter = await axios.post('https://api.tiny.com.br/api2/produto.obter.php',
+                  new URLSearchParams({ token: userConf.tinyToken, formato: 'JSON', id: idProdutoMenu })
+                );
+                const pTiny = resObter.data?.retorno?.produto;
+                if (pTiny) {
+                  prodERP = { dadosTiny: pTiny };
+                  // Opcional: já cadastrar no banco local para futuros acessos
+                  await prisma.produto.create({
+                    data: {
+                      userId, sku, nome: pTiny.nome, preco: Number(pTiny.preco) || 0,
+                      estoque: Number(pTiny.estoque_atual || pTiny.saldo || 0),
+                      statusML: 'Não Publicado', dadosTiny: pTiny
+                    }
+                  }).catch(() => {});
+                }
+              }
+            }
+          }
+
+          if (prodERP?.dadosTiny) {
+            const dt = prodERP.dadosTiny;
+            const l = Math.round(Number(dt.larguraEmbalagem || dt.largura)) || 16;
+            const a = Math.round(Number(dt.alturaEmbalagem || dt.altura)) || 11;
+            const c = Math.round(Number(dt.comprimentoEmbalagem || dt.comprimento)) || 11;
+            const pBruto = Math.round(Number(dt.peso_bruto || dt.peso_liquido || 0) * 1000) || 200;
+            
+            pkgDimensions = [
+              { id: 'SELLER_PACKAGE_LENGTH', value_name: `${l} cm` },
+              { id: 'SELLER_PACKAGE_WIDTH', value_name: `${a} cm` },
+              { id: 'SELLER_PACKAGE_HEIGHT', value_name: `${c} cm` },
+              { id: 'SELLER_PACKAGE_WEIGHT', value_name: `${pBruto} g` }
+            ];
+          } else {
+             console.log('[publishDirect] aviso: Nenhuma dimensão encontrada no Tiny ERP para o SKU', sku);
+          }
+        } catch (err) {
+          console.error('[publishDirect] erro ao buscar dimensões do Tiny ERP:', err.message);
+        }
+      }
+
+      if (pkgDimensions.length === 0) {
+        // Fallback padrão se Tiny der erro ou se os dados não renderem dimensões válidas
+        pkgDimensions = [
+          { id: 'SELLER_PACKAGE_LENGTH', value_name: '16 cm' },
+          { id: 'SELLER_PACKAGE_WIDTH', value_name: '11 cm' },
+          { id: 'SELLER_PACKAGE_HEIGHT', value_name: '11 cm' },
+          { id: 'SELLER_PACKAGE_WEIGHT', value_name: '200 g' }
+        ];
+      }
 
       const payload = {
         site_id: siteId || 'MLB',
-        ...(validCategoryId ? { category_id: validCategoryId } : {}),
+        category_id: finalCategoryId,
         price: Number(price),
         currency_id: 'BRL',
         available_quantity: Number(quantity) || 1,
@@ -269,18 +381,44 @@ export const catalogoController = {
         listing_type_id: listingTypeId || 'gold_special',
         pictures: [],
         attributes: attributes || [
-          { id: 'ITEM_CONDITION', value_id: '2230284', value_name: 'Novo' }
+          { id: 'ITEM_CONDITION', value_id: '2230284', value_name: 'Novo' },
+          ...pkgDimensions
         ],
         catalog_product_id: catalogProductId,
         catalog_listing: true
       };
 
+      console.log('[publishDirect] payload enviado ao ML:', JSON.stringify(payload, null, 2));
       const resp = await axios.post(`${ML_API}/items`, payload, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         timeout: 20000
       });
-      res.json({ ok: true, item: resp.data });
+      
+      const criado = resp.data;
+      if (criado && criado.id && sku) {
+        try {
+          await prisma.anuncioML.create({
+            data: {
+              id: criado.id,
+              contaId,
+              sku: String(sku).trim(),
+              titulo: criado.title,
+              preco: Number(criado.price),
+              status: criado.status,
+              estoque: Number(criado.available_quantity) || 0,
+              thumbnail: criado.thumbnail || criado.pictures?.[0]?.url || null,
+              permalink: criado.permalink,
+              dadosML: criado
+            }
+          });
+        } catch (e) {
+          console.error('[publishDirect] erro ao vincular anuncioML:', e.message);
+        }
+      }
+      
+      res.json({ ok: true, item: criado });
     } catch (error) {
+      console.error('[publishDirect] erro ML:', JSON.stringify(error.response?.data, null, 2));
       res.status(error.response?.status || 500).json({
         erro: 'Falha ao publicar no catálogo',
         detalhes: error.response?.data

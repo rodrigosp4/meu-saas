@@ -217,6 +217,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
 
   // Preço base compartilhado
   const [precoBase, setPrecoBase] = useState('');
+  const [skuBase, setSkuBase] = useState('');
 
   // Config por conta: { [contaId]: { ativo, tipo } }
   const [accountConfigs, setAccountConfigs] = useState(() => {
@@ -246,6 +247,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
     if (!user) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Usuário não logado.' }]); return; }
     const precoFinal = calcPrecoFinal(precoBase);
     if (!precoFinal) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe um preço base válido.' }]); return; }
+    if (!skuBase.trim()) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe o SKU do Tiny ERP.' }]); return; }
 
     const contasAtivas = contasML.filter(c => accountConfigs[c.id]?.ativo);
     if (!contasAtivas.length) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Selecione ao menos uma conta.' }]); return; }
@@ -271,6 +273,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
               userId: user.id, contaId: conta.id,
               catalogProductId: produto.id, categoryId: produto.domain_id,
               price: precoFinal, listingTypeId, quantity: 1,
+              sku: skuBase.trim()
             })
           });
           const data = await resp.json();
@@ -306,7 +309,8 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
             // Registrar publicação
             onPublished(produto.id, conta.id);
           } else {
-            const erroDetalhado = data.detalhes?.message || JSON.stringify(data.detalhes?.cause || data.detalhes || data.erro);
+            const causas = data.detalhes?.cause?.map(c => `${c.code}${c.references ? ' [' + c.references.join(', ') + ']' : ''}`).join(' | ');
+            const erroDetalhado = causas || data.detalhes?.message || data.detalhes?.error || JSON.stringify(data.detalhes || data.erro);
             log.push({ conta: conta.nickname, tipo: 'erro', texto: `❌ ${tipoLabel}: ${erroDetalhado}` });
           }
         } catch (err) {
@@ -371,7 +375,13 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
           {/* ── Preço base + Estratégia ── */}
           <div className="bg-white rounded-lg border border-emerald-100 p-4">
             <h5 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Preço e Estratégia</h5>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">SKU no Tiny ERP</label>
+                <input type="text" placeholder="Ex: ABC-123"
+                  value={skuBase} onChange={e => setSkuBase(e.target.value)}
+                  className="w-full px-2 py-1.5 border rounded text-sm focus:border-emerald-400 focus:outline-none" />
+              </div>
               <div>
                 <label className="text-xs font-semibold text-gray-600 block mb-1">Preço Base (R$)</label>
                 <input type="number" min="0" step="0.01" placeholder="Ex: 1599,90"
@@ -489,7 +499,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
 
           {/* ── Ações ── */}
           <div className="flex gap-2">
-            <button onClick={handlePublish} disabled={publishing || !precoBase}
+            <button onClick={handlePublish} disabled={publishing || !precoBase || !skuBase.trim()}
               className="px-5 py-2 bg-emerald-600 text-white text-sm font-bold rounded hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2">
               {publishing && <span className="animate-spin inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full" />}
               {publishing ? 'Publicando...' : '✅ Publicar nas Contas Selecionadas'}

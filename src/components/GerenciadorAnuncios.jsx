@@ -1518,6 +1518,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
   const [atacadoSendingIds, setAtacadoSendingIds] = useState(new Set());
+  const [isEnviandoAtacadoMassa, setIsEnviandoAtacadoMassa] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -1674,6 +1675,41 @@ const handleSelectAllFiltered = async () => {
     }
   };
 
+
+const handleEnviarAtacadoMassa = async () => {
+    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
+    if (!configAtacado?.faixas?.length) return alert('Configure as faixas de atacado em Configurações API antes de usar esta função.');
+    const adsSelecionados = Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean);
+    // filtra apenas itens pai (sem variações no ID — evita enviar para variações filhas)
+    const adsPai = adsSelecionados.filter(ad => ad && !String(ad.id).includes('-'));
+    if (adsPai.length === 0) return alert('Nenhum anúncio válido selecionado.');
+    if (!window.confirm(`Enviar preços de atacado (${configAtacado.faixas.length} faixa(s)) para ${adsPai.length} anúncio(s)?`)) return;
+
+    setIsEnviandoAtacadoMassa(true);
+    let ok = 0, erros = 0;
+    for (const ad of adsPai) {
+      try {
+        const res = await fetch('/api/ml/atacado-preco', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemId: ad.id, contaId: ad.contaId, userId: usuarioId, precoAlvo: ad.preco, faixas: configAtacado.faixas })
+        });
+        if (res.ok) {
+          ok++;
+          setAnuncios(prev => prev.map(a => {
+            if (a.id !== ad.id) return a;
+            const mlTags = a.dadosML?.tags || [];
+            if (!mlTags.includes('standard_price_by_quantity')) {
+              return { ...a, dadosML: { ...a.dadosML, tags: [...mlTags, 'standard_price_by_quantity'] } };
+            }
+            return a;
+          }));
+        } else erros++;
+      } catch { erros++; }
+    }
+    setIsEnviandoAtacadoMassa(false);
+    alert(`Preços de atacado enviados!\n✅ ${ok} com sucesso${erros > 0 ? `\n❌ ${erros} com erro` : ''}`);
+  };
 
 const handleEnviarAtacadoRapido = async (ad) => {
     if (!configAtacado?.ativo || !configAtacado?.faixas?.length) {
@@ -2798,6 +2834,16 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+
+                <button
+                  onClick={handleEnviarAtacadoMassa}
+                  disabled={isEnviandoAtacadoMassa}
+                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  {isEnviandoAtacadoMassa ? (
+                    <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Enviando...</>
+                  ) : '💰 Enviar Atacado'}
+                </button>
               </div>
             </div>
           </div>
@@ -3093,12 +3139,12 @@ const handleFetchBySku = async () => {
                           <span className="bg-teal-100 text-teal-800 border border-teal-200 text-[9px] px-1.5 py-0.5 rounded font-bold">Atacado Ativo</span>
                         )}
 
-                        {configAtacado?.ativo && configAtacado?.faixas?.length > 0 && (
+                        {(
                           <button
                             onClick={() => handleEnviarAtacadoRapido(ad)}
                             disabled={atacadoSendingIds.has(ad.id)}
                             className="mt-1 flex items-center gap-1 text-[10px] font-black text-teal-700 bg-teal-50 border border-teal-300 px-2 py-0.5 rounded hover:bg-teal-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={`Enviar ${configAtacado.faixas.length} faixa(s) de atacado • preço base: R$ ${Number(ad.preco).toFixed(2)}`}
+                            title={configAtacado?.faixas?.length > 0 ? `Enviar ${configAtacado.faixas.length} faixa(s) de atacado • preço base: R$ ${Number(ad.preco).toFixed(2)}` : 'Configure as faixas de atacado em Configurações API'}
                           >
                             {atacadoSendingIds.has(ad.id) ? (
                               <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">

@@ -4,17 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npx prisma generate --schema=./prisma/schema.prisma && vite build",
     "start": "node backend/src/server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "node backend/src/server.js",
     "worker": "node backend/src/workers/sync.worker.js",
-    "postinstall": "prisma generate"
+    "postinstall": "npx prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

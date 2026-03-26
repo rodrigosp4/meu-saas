@@ -1,7 +1,17 @@
-import React from 'react';
-// ícone de escudo para o admin
+import React, { useState, useEffect } from 'react';
 
-// Ícones SVG inline para não depender de Font Awesome CDN
+// ── Responsividade ─────────────────────────────────────────────────────────
+function useIsMobile(bp = 768) {
+  const [v, setV] = useState(() => window.innerWidth < bp);
+  useEffect(() => {
+    const fn = () => setV(window.innerWidth < bp);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, [bp]);
+  return v;
+}
+
+// ── Ícones SVG ─────────────────────────────────────────────────────────────
 const icons = {
   home: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -52,11 +62,11 @@ const icons = {
     </svg>
   ),
   fitment: (
-   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-     <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
-     <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49" />
-   </svg>
- ),
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
+      <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49" />
+    </svg>
+  ),
   promocoes: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
@@ -101,14 +111,12 @@ const icons = {
   mass: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-      <path d="M3 9h18" />
-      <path d="M9 21V9" />
+      <path d="M3 9h18" /><path d="M9 21V9" />
     </svg>
   ),
   apiClient: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="16 18 22 12 16 6" />
-      <polyline points="8 6 2 12 8 18" />
+      <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
     </svg>
   ),
   dimensoes: (
@@ -125,19 +133,28 @@ const icons = {
   ),
   clock: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
+  menu: (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  ),
+  close: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
     </svg>
   ),
 };
 
-// Mapa de labels bonitos para o header
+// ── Labels de página ───────────────────────────────────────────────────────
 const pageTitles = {
   adminPanel: 'Painel Super Admin',
   agendadorTarefas: 'Agendador de Tarefas',
   home: 'Início',
   produtosErp: 'Produtos do ERP',
-  cadastramentoMassa: 'Cadastramento em Massa com IA', // <-- NOVA LINHA
+  cadastramentoMassa: 'Cadastramento em Massa com IA',
   gerenciadorML: 'Gerenciador ML',
   criarAnuncio: 'Criar Anúncio',
   replicadorAnuncio: 'Replicador de Anúncio',
@@ -155,311 +172,362 @@ const pageTitles = {
   clienteAPI: 'Cliente API (ML & Tiny)',
 };
 
+// ── Componente principal ───────────────────────────────────────────────────
 export default function DashboardLayout({ children, setActivePage, activePage, onLogout, canAccess, impersonating, role }) {
-
+  const isMobile = useIsMobile();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const isSuperAdmin = role === 'SUPER_ADMIN' && !impersonating;
 
-  // Itens do menu principal
+  // Fecha drawer ao mudar de página no mobile
+  const handleNavigate = (id) => {
+    setActivePage(id);
+    if (isMobile) setDrawerOpen(false);
+  };
+
+  // Fecha drawer ao pressionar ESC
+  useEffect(() => {
+    const fn = (e) => { if (e.key === 'Escape') setDrawerOpen(false); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, []);
+
+  // Fecha drawer ao redimensionar para desktop
+  useEffect(() => {
+    if (!isMobile) setDrawerOpen(false);
+  }, [isMobile]);
+
+  // Bloqueia scroll do body quando drawer aberto
+  useEffect(() => {
+    document.body.style.overflow = (isMobile && drawerOpen) ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [isMobile, drawerOpen]);
+
   const allMenuItems = [
-    { id: 'adminPanel',        label: 'Painel Admin',          icon: icons.shield },
-    { id: 'agendadorTarefas',  label: 'Agendador de Tarefas',  icon: icons.clock },
-    { id: 'home',              label: 'Início',                icon: icons.home },
-    { id: 'produtosErp',     label: 'Produtos do ERP',     icon: icons.box },
-    { id: 'cadastramentoMassa', label: 'Cadastro em Massa (IA)', icon: icons.mass }, // <-- NOVA LINHA
-    { id: 'gerenciadorML',   label: 'Gerenciador ML',      icon: icons.list },
-    { id: 'replicadorAnuncio', label: 'Replicador de Anúncio', icon: icons.copy },
-    { id: 'compatibilidade', label: 'Compatibilidade',      icon: icons.fitment },
-    { id: 'centralPromocoes',    label: 'Central de Promoções',         icon: icons.promocoes },
-    { id: 'monitorConcorrentes', label: 'Monitor de Concorrentes',       icon: icons.monitor },
-    { id: 'perguntasPreVenda',   label: 'Perguntas Pré-Venda',          icon: icons.question },
-    { id: 'posVenda',            label: 'Pós-Venda',                    icon: icons.posVenda },
-    { id: 'catalogo',            label: 'Catálogo',                     icon: icons.catalogo },
-    { id: 'qualidadePublicacoes', label: 'Qualidade Publicações',        icon: icons.qualidade },
-    { id: 'dimensoesEmbalagem',  label: 'Dimensões de Embalagem',       icon: icons.dimensoes },
-    { id: 'otimizadorImagens',   label: 'Otimizador de Imagens',        icon: icons.image },
-    { id: 'clienteAPI',          label: 'Cliente API',                   icon: icons.apiClient },
-    { id: 'configuracoes',       label: 'Configurações API',             icon: icons.settings },
-    { id: 'fila',            label: 'Gerenciador de Fila',  icon: icons.queue },
+    { id: 'adminPanel',          label: 'Painel Admin',           icon: icons.shield },
+    { id: 'agendadorTarefas',    label: 'Agendador de Tarefas',   icon: icons.clock },
+    { id: 'home',                label: 'Início',                 icon: icons.home },
+    { id: 'produtosErp',         label: 'Produtos do ERP',        icon: icons.box },
+    { id: 'cadastramentoMassa',  label: 'Cadastro em Massa (IA)', icon: icons.mass },
+    { id: 'gerenciadorML',       label: 'Gerenciador ML',         icon: icons.list },
+    { id: 'replicadorAnuncio',   label: 'Replicador de Anúncio',  icon: icons.copy },
+    { id: 'compatibilidade',     label: 'Compatibilidade',        icon: icons.fitment },
+    { id: 'centralPromocoes',    label: 'Central de Promoções',   icon: icons.promocoes },
+    { id: 'monitorConcorrentes', label: 'Monitor de Concorrentes',icon: icons.monitor },
+    { id: 'perguntasPreVenda',   label: 'Perguntas Pré-Venda',    icon: icons.question },
+    { id: 'posVenda',            label: 'Pós-Venda',              icon: icons.posVenda },
+    { id: 'catalogo',            label: 'Catálogo',               icon: icons.catalogo },
+    { id: 'qualidadePublicacoes',label: 'Qualidade Publicações',  icon: icons.qualidade },
+    { id: 'dimensoesEmbalagem',  label: 'Dimensões de Embalagem', icon: icons.dimensoes },
+    { id: 'otimizadorImagens',   label: 'Otimizador de Imagens',  icon: icons.image },
+    { id: 'clienteAPI',          label: 'Cliente API',            icon: icons.apiClient },
+    { id: 'configuracoes',       label: 'Configurações API',      icon: icons.settings },
+    { id: 'fila',                label: 'Gerenciador de Fila',    icon: icons.queue },
   ];
 
-  const menuItems = canAccess
-    ? allMenuItems.filter((item) => canAccess(item.id))
-    : allMenuItems;
+  const menuItems = canAccess ? allMenuItems.filter(i => canAccess(i.id)) : allMenuItems;
 
-  // Estilo base do item do menu
-  const menuItemStyle = (isActive) => ({
-    display: 'flex',
-    alignItems: 'center',
-    padding: '12px 20px',
-    color: isActive ? '#ffffff' : '#bdc3c7',
-    textDecoration: 'none',
-    fontSize: '0.9em',
-    borderLeft: isActive ? '4px solid #f1c40f' : '4px solid transparent',
-    backgroundColor: isActive ? '#e67e22' : 'transparent',
-    fontWeight: isActive ? 500 : 400,
-    cursor: 'pointer',
-    transition: 'background-color 0.2s ease, color 0.2s ease, border-left-color 0.2s ease',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left',
-    fontFamily: 'inherit',
-  });
+  // ── Sidebar interna (usada tanto no desktop fixo quanto no drawer mobile)
+  const SidebarContent = () => (
+    <>
+      {/* Header logo */}
+      <div style={{
+        padding: '16px 15px',
+        borderBottom: '1px solid #3a5068',
+        display: 'flex', alignItems: 'center', gap: 10,
+        flexShrink: 0,
+      }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 6,
+          background: isSuperAdmin
+            ? 'linear-gradient(135deg, #8e44ad, #6c3483)'
+            : 'linear-gradient(135deg, #e67e22, #f1c40f)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          {isSuperAdmin ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          ) : (
+            <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 32, height: 32, objectFit: 'contain' }} />
+          )}
+        </div>
+        <span style={{ fontSize: '1.1em', fontWeight: 600, color: '#ecf0f1', flex: 1 }}>
+          {isSuperAdmin ? 'Admin Panel' : 'MELIUNLOCKER'}
+        </span>
+        {/* Botão fechar no mobile */}
+        {isMobile && (
+          <button
+            onClick={() => setDrawerOpen(false)}
+            style={{
+              background: 'none', border: 'none', color: '#7f8c8d',
+              cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center',
+              borderRadius: 6, transition: 'color 0.2s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#ecf0f1'}
+            onMouseLeave={e => e.currentTarget.style.color = '#7f8c8d'}
+          >
+            {icons.close}
+          </button>
+        )}
+      </div>
 
-  const iconStyle = (isActive) => ({
-    marginRight: '10px',
-    width: '18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: isActive ? '#ffffff' : '#7f8c8d',
-    transition: 'color 0.2s ease',
-    flexShrink: 0,
-  });
+      {/* Menu items */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+        {menuItems.map((item) => {
+          const isActive = activePage === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => handleNavigate(item.id)}
+              style={{
+                display: 'flex', alignItems: 'center',
+                padding: isMobile ? '14px 20px' : '11px 20px',
+                color: isActive ? '#ffffff' : '#bdc3c7',
+                fontSize: isMobile ? '0.95em' : '0.9em',
+                borderLeft: `4px solid ${isActive ? '#f1c40f' : 'transparent'}`,
+                backgroundColor: isActive ? '#e67e22' : 'transparent',
+                fontWeight: isActive ? 500 : 400,
+                cursor: 'pointer',
+                transition: 'background-color 0.15s, color 0.15s',
+                border: 'none', width: '100%', textAlign: 'left',
+                fontFamily: 'inherit', borderRight: 'none',
+                borderTop: 'none', borderBottom: 'none',
+              }}
+              onMouseEnter={e => {
+                if (!isActive) {
+                  e.currentTarget.style.backgroundColor = '#34495e';
+                  e.currentTarget.style.color = '#ffffff';
+                }
+              }}
+              onMouseLeave={e => {
+                if (!isActive) {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#bdc3c7';
+                }
+              }}
+            >
+              <span style={{
+                marginRight: 10, width: 18, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', color: isActive ? '#ffffff' : '#7f8c8d',
+                flexShrink: 0, transition: 'color 0.15s',
+              }}>
+                {item.icon}
+              </span>
+              {item.label}
+            </button>
+          );
+        })}
+
+        {!isSuperAdmin && activePage === 'criarAnuncio' && (
+          <button
+            onClick={() => handleNavigate('criarAnuncio')}
+            style={{
+              display: 'flex', alignItems: 'center', padding: '11px 20px',
+              color: '#ffffff', fontSize: '0.9em',
+              borderLeft: '4px solid #f1c40f',
+              backgroundColor: '#e67e22', fontWeight: 500,
+              cursor: 'pointer', border: 'none', width: '100%',
+              textAlign: 'left', fontFamily: 'inherit',
+            }}
+          >
+            <span style={{ marginRight: 10, width: 18, display: 'flex', color: '#ffffff', flexShrink: 0 }}>
+              {icons.plus}
+            </span>
+            Criar Anúncio
+          </button>
+        )}
+      </div>
+
+      {/* Footer: user + logout */}
+      <div style={{
+        padding: '14px 16px',
+        borderTop: '1px solid #3a5068',
+        flexShrink: 0,
+      }}>
+        <div style={{
+          marginBottom: 10, display: 'flex', alignItems: 'center',
+          color: '#bdc3c7', gap: 8, fontSize: '0.85em',
+        }}>
+          <span style={{ color: '#7f8c8d', display: 'flex', flexShrink: 0 }}>{icons.user}</span>
+          <div style={{ overflow: 'hidden', flex: 1 }}>
+            <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {impersonating ? impersonating.targetUser?.email : 'Usuário'}
+            </span>
+            {isSuperAdmin && (
+              <span style={{ fontSize: '0.78em', color: '#8e44ad', fontWeight: 600 }}>Super Admin</span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={onLogout}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: isMobile ? '10px' : '8px 10px',
+            backgroundColor: '#c0392b', color: 'white',
+            borderRadius: 4, fontSize: '0.9em', border: 'none',
+            cursor: 'pointer', width: '100%', gap: 6, fontFamily: 'inherit',
+            transition: 'background-color 0.2s',
+          }}
+          onMouseOver={e => e.currentTarget.style.backgroundColor = '#e74c3c'}
+          onMouseOut={e => e.currentTarget.style.backgroundColor = '#c0392b'}
+        >
+          {icons.logout}
+          Sair
+        </button>
+      </div>
+    </>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', backgroundColor: '#f4f6f8', fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100vh',
+      overflow: 'hidden', backgroundColor: '#f4f6f8',
+      fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+    }}>
 
-      {/* Banner modo impersonação */}
+      {/* Banner impersonação */}
       {impersonating && (
         <div style={{
           backgroundColor: role === 'SUPER_ADMIN' ? '#8e44ad' : '#e67e22',
-          color: 'white',
-          padding: '8px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-          fontSize: '0.88em',
-          fontWeight: 600,
-          flexShrink: 0,
-          zIndex: 2000,
+          color: 'white', padding: isMobile ? '7px 12px' : '8px 20px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 10, fontSize: isMobile ? '0.78em' : '0.88em',
+          fontWeight: 600, flexShrink: 0, zIndex: 2000, flexWrap: 'wrap',
+          textAlign: 'center',
         }}>
           {role === 'SUPER_ADMIN' ? icons.shield : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
           )}
-          {role === 'SUPER_ADMIN' ? 'Super Admin' : 'Modo Suporte'}: visualizando conta de <strong>{impersonating.targetUser?.email}</strong>
+          <span>
+            {role === 'SUPER_ADMIN' ? 'Super Admin' : 'Modo Suporte'}:{' '}
+            <strong>{impersonating.targetUser?.email}</strong>
+          </span>
           <button
             onClick={onLogout}
             style={{
-              marginLeft: '8px',
               padding: '3px 10px',
               backgroundColor: 'rgba(0,0,0,0.25)',
               border: '1px solid rgba(255,255,255,0.4)',
-              borderRadius: '4px',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '0.9em',
-              fontFamily: 'inherit',
+              borderRadius: 4, color: 'white', cursor: 'pointer',
+              fontSize: '0.9em', fontFamily: 'inherit',
             }}
           >
-            Sair da conta
+            Sair
           </button>
         </div>
       )}
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-      
-      {/* ========== SIDEBAR ========== */}
-      <nav style={{
-        width: '240px',
-        minWidth: '240px',
-        backgroundColor: '#2d3e50',
-        color: '#ecf0f1',
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        boxShadow: '2px 0 5px rgba(0,0,0,0.1)',
-        zIndex: 1000,
-      }}>
-        
-        {/* Header da Sidebar (Logo) */}
-        <div style={{
-          padding: '18px 15px',
-          borderBottom: '1px solid #3a5068',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-        }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '6px',
-            background: isSuperAdmin
-              ? 'linear-gradient(135deg, #8e44ad, #6c3483)'
-              : 'linear-gradient(135deg, #e67e22, #f1c40f)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}>
-            {isSuperAdmin ? (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
-            ) : (
-              <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 32, height: 32, objectFit: 'contain' }} />
-            )}
-          </div>
-          <span style={{ fontSize: '1.15em', fontWeight: 600, color: '#ecf0f1' }}>
-            {isSuperAdmin ? 'Admin Panel' : 'MELIUNLOCKER'}
-          </span>
-        </div>
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0, position: 'relative' }}>
 
-        {/* Lista de Menu */}
-        <div style={{ 
-          flex: 1, 
-          overflowY: 'auto', 
-          margin: '10px 0 0 0', 
-          padding: 0,
-        }}>
-          {menuItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActivePage(item.id)}
-              style={menuItemStyle(activePage === item.id)}
-              onMouseEnter={(e) => {
-                if (activePage !== item.id) {
-                  e.currentTarget.style.backgroundColor = '#34495e';
-                  e.currentTarget.style.color = '#ffffff';
-                  e.currentTarget.querySelector('.menu-icon').style.color = '#ecf0f1';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (activePage !== item.id) {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                  e.currentTarget.style.color = '#bdc3c7';
-                  e.currentTarget.querySelector('.menu-icon').style.color = '#7f8c8d';
-                }
-              }}
-            >
-              <span className="menu-icon" style={iconStyle(activePage === item.id)}>{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
-
-          {/* Item extra "Criar Anúncio" só quando ativo e não for super admin */}
-          {!isSuperAdmin && activePage === 'criarAnuncio' && (
-            <button
-              onClick={() => setActivePage('criarAnuncio')}
-              style={menuItemStyle(true)}
-            >
-              <span className="menu-icon" style={iconStyle(true)}>{icons.plus}</span>
-              Criar Anúncio
-            </button>
-          )}
-        </div>
-
-        {/* Divider */}
-        <hr style={{ border: 0, height: '1px', backgroundColor: '#3a5068', margin: '0 15px' }} />
-
-        {/* Footer da Sidebar (User + Logout) */}
-        <div style={{ padding: '15px 20px', borderTop: '1px solid #3a5068', fontSize: '0.85em' }}>
-          <div style={{ 
-            marginBottom: '10px', 
-            display: 'flex', 
-            alignItems: 'center', 
-            color: '#bdc3c7',
-            gap: '8px',
-          }}>
-            <span style={{ color: '#7f8c8d', display: 'flex' }}>{icons.user}</span>
-            <div style={{ overflow: 'hidden', flex: 1 }}>
-              <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {impersonating ? impersonating.targetUser?.email : 'Usuário'}
-              </span>
-              {isSuperAdmin && (
-                <span style={{ fontSize: '0.78em', color: '#8e44ad', fontWeight: 600 }}>Super Admin</span>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={onLogout}
+        {/* ── OVERLAY (mobile drawer) ── */}
+        {isMobile && drawerOpen && (
+          <div
+            onClick={() => setDrawerOpen(false)}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '8px 10px',
-              backgroundColor: '#c0392b',
-              color: 'white',
-              textDecoration: 'none',
-              borderRadius: '4px',
-              textAlign: 'center',
-              transition: 'background-color 0.2s ease',
-              fontSize: '0.9em',
-              border: 'none',
-              cursor: 'pointer',
-              width: '100%',
-              gap: '6px',
-              fontFamily: 'inherit',
+              position: 'fixed', inset: 0, zIndex: 1100,
+              backgroundColor: 'rgba(0,0,0,0.55)',
+              animation: 'fadeInUp 0.2s ease',
             }}
-            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#e74c3c'}
-            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#c0392b'}
-          >
-            {icons.logout}
-            Sair
-          </button>
-        </div>
-      </nav>
+          />
+        )}
 
-      {/* ========== CONTEÚDO PRINCIPAL ========== */}
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        minWidth: 0,
-      }}>
-
-        {/* Header Principal */}
-        <header style={{
-          backgroundColor: '#ffffff',
-          padding: '0 25px',
-          borderBottom: '1px solid #e0e0e0',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          height: '60px',
-          boxSizing: 'border-box',
-          flexShrink: 0,
+        {/* ── SIDEBAR ── */}
+        <nav style={{
+          width: 240, minWidth: 240,
+          backgroundColor: '#2d3e50',
+          color: '#ecf0f1',
+          display: 'flex', flexDirection: 'column',
+          height: '100%',
+          boxShadow: isMobile ? '4px 0 20px rgba(0,0,0,0.4)' : '2px 0 5px rgba(0,0,0,0.1)',
+          zIndex: 1200,
+          // Mobile: drawer fixo, desliza da esquerda
+          ...(isMobile ? {
+            position: 'fixed', top: 0, bottom: 0, left: 0,
+            transform: drawerOpen ? 'translateX(0)' : 'translateX(-100%)',
+            transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
+          } : {}),
         }}>
-          <h1 style={{
-            margin: 0,
-            fontSize: '1.5em',
-            color: '#34495e',
-            fontWeight: 600,
-          }}>
-            {pageTitles[activePage] || activePage}
-          </h1>
-          <div style={{
-            fontSize: '0.85em',
-            color: '#555',
-            display: 'inline-flex',
+          <SidebarContent />
+        </nav>
+
+        {/* ── CONTEÚDO ── */}
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', minWidth: 0,
+          // No mobile a sidebar é overlay, então o conteúdo ocupa tudo
+          marginLeft: isMobile ? 0 : 0,
+        }}>
+
+          {/* Header */}
+          <header style={{
+            backgroundColor: '#ffffff',
+            padding: isMobile ? '0 14px' : '0 25px',
+            borderBottom: '1px solid #e0e0e0',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+            display: 'flex', justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '6px',
+            height: isMobile ? 54 : 60,
+            boxSizing: 'border-box', flexShrink: 0,
           }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 20V10M12 20V4M6 20v-6" />
-            </svg>
-            MELIUNLOCKER v1.0
-          </div>
-        </header>
+            <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 0 }}>
+              {/* Botão hamburguer — só no mobile */}
+              {isMobile && (
+                <button
+                  onClick={() => setDrawerOpen(true)}
+                  style={{
+                    background: 'none', border: 'none',
+                    color: '#34495e', cursor: 'pointer',
+                    padding: '4px', display: 'flex', alignItems: 'center',
+                    borderRadius: 6, transition: 'background 0.15s',
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#f0f0f0'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                  aria-label="Abrir menu"
+                >
+                  {icons.menu}
+                </button>
+              )}
+              <h1 style={{
+                margin: 0,
+                fontSize: isMobile ? '1em' : '1.5em',
+                color: '#34495e', fontWeight: 600,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                maxWidth: isMobile ? 'calc(100vw - 140px)' : 'none',
+              }}>
+                {pageTitles[activePage] || activePage}
+              </h1>
+            </div>
 
-        {/* Área de Conteúdo (com scroll global) */}
-        <main style={{
-          flex: 1,
-          padding: '20px 12px',
-          overflowY: 'auto',
-          overflowX: 'auto',
-          backgroundColor: '#f4f6f8',
-          minHeight: 0,
-        }}>
-          {children}
-        </main>
-      </div>
+            {/* Versão — oculta em telas muito pequenas */}
+            {!isMobile && (
+              <div style={{
+                fontSize: '0.85em', color: '#555',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+              }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 20V10M12 20V4M6 20v-6" />
+                </svg>
+                MELIUNLOCKER v1.0
+              </div>
+            )}
+          </header>
+
+          {/* Conteúdo principal */}
+          <main style={{
+            flex: 1,
+            padding: isMobile ? '14px 10px' : '20px 12px',
+            overflowY: 'auto', overflowX: 'auto',
+            backgroundColor: '#f4f6f8', minHeight: 0,
+            // Garante que conteúdo não fique atrás de nada
+            position: 'relative', zIndex: 0,
+          }}>
+            {children}
+          </main>
+        </div>
       </div>
     </div>
   );
 }
-

@@ -132,13 +132,11 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       try {
         await delay(tinyLimits.delayMs);
 
-        const [det, est] = await Promise.all([
-          obterProduto(tinyClient, idProduto),
-          obterEstoque(tinyClient, idProduto),
-        ]);
+        const det = await obterProduto(tinyClient, idProduto);
+        const est = await obterEstoque(tinyClient, idProduto).catch(() => null);
 
         if (det && det.sku) {
-          const estoqueAtual = est ? Number(est.saldo) : (det.estoque?.quantidade || 0);
+          const estoqueAtual = est?.saldo != null ? Number(est.saldo) : (det.estoque?.quantidade || 0);
           const preco = det.precos?.preco || 0;
           const dadosCompletos = normalizarProdutoV3(det, estoqueAtual);
 

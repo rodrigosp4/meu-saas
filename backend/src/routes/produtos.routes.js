@@ -302,37 +302,23 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
 
   try {
     const client = createTinyClient(token);
-    const [det, est] = await Promise.all([
-      obterProduto(client, id),
-      obterEstoque(client, id),
-    ]);
+    const det = await obterProduto(client, id);
+    const est = await obterEstoque(client, id).catch(() => null);
 
-    const estoqueAtual = est?.saldo || det.estoque?.quantidade || 0;
+    const estoqueAtual = est?.saldo != null ? Number(est.saldo) : (det.estoque?.quantidade || 0);
     const variacoes = det.variacoes || [];
 
-    const filhos = [];
-    for (const v of variacoes) {
-      if (!v.id) continue;
-      try {
-        await delay(350);
-        const [detF, estF] = await Promise.all([
-          obterProduto(client, v.id),
-          obterEstoque(client, v.id),
-        ]);
-        filhos.push({
-          id: detF.id,
-          codigo: detF.sku,
-          nome: detF.descricao,
-          preco: detF.precos?.preco || 0,
-          preco_promocional: detF.precos?.precoPromocional || 0,
-          anexos: (detF.anexos || []).map(a => ({ url: a.url })),
-          estoque_atual: estF?.saldo || detF.estoque?.quantidade || 0,
-          grade: v.grade || [],
-        });
-      } catch (err) {
-        console.error(`Aviso: Falha ao carregar variação ${v.id}`, err.message);
-      }
-    }
+    // Em v3, as variações já vêm embutidas no produto pai com precos e estoque
+    const filhos = variacoes.map(v => ({
+      id: v.id,
+      codigo: v.sku,
+      nome: v.descricao,
+      preco: v.precos?.preco || 0,
+      preco_promocional: v.precos?.precoPromocional || 0,
+      anexos: [],
+      estoque_atual: v.estoque?.quantidade || 0,
+      grade: v.grade || [],
+    }));
 
     return res.json({
       id: det.id,
@@ -379,7 +365,7 @@ router.get('/api/produto-imagens', async (req, res) => {
     if (!Array.isArray(anexos)) anexos = Object.values(anexos);
 
     const imagens = anexos
-      .map(a => (typeof a === 'string' ? a : a?.anexo || a?.url || ''))
+      .map(a => (typeof a === 'string' ? a : a?.url || ''))
       .filter(Boolean);
 
     return res.json({ imagens });

@@ -17,6 +17,7 @@ import https from 'https';
 import http from 'http';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
+import { mlService } from '../services/ml.service.js';
 
 // ✅ Connection Pooling: Evita exaustão de DNS (ENOTFOUND) e portas (ECONNRESET)
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50, maxFreeSockets: 10 });
@@ -421,16 +422,10 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
   console.log(`  🔄 Token expirado para conta ${contaId}. Renovando...`);
 
   try {
-    // Usa o mesmo mlService.refreshToken ou faz a chamada direta:
-    const res = await mlClient.post('https://api.mercadolibre.com/oauth/token', {
-      grant_type: 'refresh_token',
-      client_id: process.env.ML_CLIENT_ID || config.mlClientId,
-      client_secret: process.env.ML_CLIENT_SECRET || config.mlClientSecret,
-      refresh_token: refreshToken
-    });
+    const res = await mlService.refreshToken(refreshToken);
 
-    const newToken = res.data.access_token;
-    const newRefresh = res.data.refresh_token;
+    const newToken = res.access_token;
+    const newRefresh = res.refresh_token;
 
     // Salva no banco para que o próximo job já use o token novo
     await prisma.contaML.update({
@@ -438,7 +433,7 @@ async function ensureFreshToken(contaId, accessToken, refreshToken) {
       data: {
         accessToken: newToken,
         refreshToken: newRefresh || refreshToken,
-        expiresAt: BigInt(Date.now() + (res.data.expires_in || 21600) * 1000)
+        expiresAt: BigInt(Date.now() + (res.expires_in || 21600) * 1000)
       }
     });
 

@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "server": "node backend/src/server.js",
     "worker": "node backend/src/workers/sync.worker.js",
-    "postinstall": "npx prisma generate"
+    "postinstall": "prisma generate --schema=./prisma/schema.prisma"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

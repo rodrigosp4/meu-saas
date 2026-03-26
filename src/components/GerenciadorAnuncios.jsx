@@ -319,22 +319,87 @@ function ModalEditarDescricao({ anunciosSelecionados, usuarioId, onClose, onSucc
 }
 
 // ===== MODAL ALTERAR SKU =====
-function ModalAlterarSku({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
-  const [sku, setSku] = useState('');
+function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSuccess }) {
   const [isLoading, setIsLoading] = useState(false);
 
+  // Monta a lista de linhas editáveis a partir dos IDs selecionados
+  const buildRows = () => {
+    const rows = [];
+    const addedVariationIds = new Set();
+
+    Array.from(selectedIds).forEach(id => {
+      const parentAd = allKnownAds[id];
+      if (parentAd) {
+        const variations = parentAd.dadosML?.variations || [];
+        if (variations.length > 0) {
+          // Pai com variações: lista cada variação individualmente
+          variations.forEach(v => {
+            if (addedVariationIds.has(v.id)) return;
+            addedVariationIds.add(v.id);
+            const grade = v.attribute_combinations || [];
+            const label = grade.map(g => `${g.name}: ${g.value_name}`).join(' / ') || `ID ${v.id}`;
+            const currentSku = v.seller_custom_field
+              || v.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name
+              || '';
+            rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: v.id, label, currentSku, newSku: '' });
+          });
+        } else {
+          // Anúncio simples (sem variações)
+          rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: null, label: parentAd.titulo || parentAd.id, currentSku: parentAd.sku || '', newSku: '' });
+        }
+      } else {
+        // É um ID de variação individual
+        if (addedVariationIds.has(id)) return;
+        const parent = Object.values(allKnownAds).find(ad => ad.dadosML?.variations?.some(v => v.id === id));
+        if (!parent) return;
+        const variation = parent.dadosML.variations.find(v => v.id === id);
+        addedVariationIds.add(id);
+        const grade = variation?.attribute_combinations || [];
+        const label = grade.map(g => `${g.name}: ${g.value_name}`).join(' / ') || `ID ${id}`;
+        const currentSku = variation?.seller_custom_field
+          || variation?.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name
+          || '';
+        rows.push({ parentId: parent.id, contaId: parent.contaId, variationId: id, label, currentSku, newSku: '' });
+      }
+    });
+    return rows;
+  };
+
+  const [rows, setRows] = useState(() => buildRows());
+
+  const updateSku = (idx, value) => {
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, newSku: value } : r));
+  };
+
   const handleSalvar = async () => {
-    if (!sku.trim()) return alert('Digite um SKU.');
+    const comSku = rows.filter(r => r.newSku.trim());
+    if (comSku.length === 0) return alert('Preencha ao menos um SKU.');
     setIsLoading(true);
     try {
-      const items = anunciosSelecionados.map(ad => ({ id: ad.id, contaId: ad.contaId }));
-      const res = await fetch('/api/ml/acoes-massa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, items, acao: 'alterar_sku', valor: sku.trim() })
+      // Agrupa por anúncio pai para enviar uma chamada por anúncio
+      const byParent = {};
+      comSku.forEach(r => {
+        if (!byParent[r.parentId]) byParent[r.parentId] = { contaId: r.contaId, variationId: r.variationId, skuMap: {}, simpleSku: null };
+        if (r.variationId) {
+          byParent[r.parentId].skuMap[r.variationId] = r.newSku.trim();
+        } else {
+          byParent[r.parentId].simpleSku = r.newSku.trim();
+        }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.erro);
+
+      for (const [parentId, data] of Object.entries(byParent)) {
+        const hasVariations = Object.keys(data.skuMap).length > 0;
+        const item = { id: parentId, contaId: data.contaId, hasVariations, variationsIds: Object.keys(data.skuMap) };
+        const valor = hasVariations ? data.skuMap : data.simpleSku;
+        const res = await fetch('/api/ml/acoes-massa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: usuarioId, items: [item], acao: 'alterar_sku', valor })
+        });
+        const responseData = await res.json();
+        if (!res.ok) throw new Error(responseData.erro);
+      }
+
       alert('✅ Ação enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
       onSuccess();
     } catch (e) {
@@ -344,35 +409,53 @@ function ModalAlterarSku({ anunciosSelecionados, usuarioId, onClose, onSuccess }
     }
   };
 
+  const totalPreenchidos = rows.filter(r => r.newSku.trim()).length;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl flex-shrink-0">
           <div>
             <h2 className="text-white font-black text-base">Alterar SKU</h2>
-            <p className="text-indigo-200 text-xs mt-0.5">{anunciosSelecionados.length} anúncio(s) selecionado(s)</p>
+            <p className="text-indigo-200 text-xs mt-0.5">{rows.length} variação(ões) / anúncio(s)</p>
           </div>
           <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
         </div>
-        <div className="p-6 space-y-4">
-          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-700">
-            O mesmo SKU será aplicado em todos os anúncios selecionados. O campo <strong>SELLER_SKU</strong> será atualizado no Mercado Livre.
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-gray-600 mb-1 uppercase tracking-wide">Novo SKU</label>
-            <input
-              type="text"
-              value={sku}
-              onChange={e => setSku(e.target.value)}
-              placeholder="Ex: PROD-001, ABC123..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
-            />
-          </div>
+        <div className="p-4 overflow-y-auto flex-1 space-y-2">
+          <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+            Preencha o <strong>NOVO SKU</strong> para cada variação ou anúncio. Linhas em branco serão ignoradas.
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs font-bold text-gray-500 uppercase border-b">
+                <th className="py-2 text-left">Variação / Anúncio</th>
+                <th className="py-2 text-left pl-2 w-28">SKU Atual</th>
+                <th className="py-2 text-left pl-2 w-36">Novo SKU</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="py-2 pr-2 text-gray-700 text-xs">{r.label}</td>
+                  <td className="py-2 pl-2 font-mono text-xs text-gray-400">{r.currentSku || '—'}</td>
+                  <td className="py-2 pl-2">
+                    <input
+                      type="text"
+                      value={r.newSku}
+                      onChange={e => updateSku(i, e.target.value)}
+                      placeholder="novo SKU"
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div className="px-6 pb-5 flex justify-end gap-3">
+        <div className="px-6 pb-5 pt-3 flex justify-end gap-3 flex-shrink-0 border-t">
           <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
-          <button onClick={handleSalvar} disabled={isLoading || !sku.trim()} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
-            {isLoading ? 'Enviando...' : `Aplicar em ${anunciosSelecionados.length} anúncio(s)`}
+          <button onClick={handleSalvar} disabled={isLoading || totalPreenchidos === 0} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
+            {isLoading ? 'Enviando...' : `Aplicar em ${totalPreenchidos} linha(s)`}
           </button>
         </div>
       </div>
@@ -3375,7 +3458,8 @@ const handleFetchBySku = async () => {
 
     {modalAlterarSku && (
       <ModalAlterarSku
-        anunciosSelecionados={Array.from(selectedIds).map(id => allKnownAds[id]).filter(Boolean)}
+        selectedIds={selectedIds}
+        allKnownAds={allKnownAds}
         usuarioId={usuarioId}
         onClose={() => setModalAlterarSku(false)}
         onSuccess={() => { setModalAlterarSku(false); setSelectedIds(new Set()); }}

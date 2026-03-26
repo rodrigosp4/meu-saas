@@ -179,49 +179,38 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
               logAcao += `Descrição atualizada.`;
 
           } else if (acao === 'alterar_sku') {
-            const novoSku = String(valor || '').trim();
-            if (!novoSku) throw new Error('SKU não pode ser vazio.');
-            
             let payload;
 
-            // Diferencia o payload para anúncios com e sem variações
             if (item.hasVariations && item.variationsIds?.length > 0) {
-              // CASO 2: ANÚNCIO COM VARIAÇÕES
-              // O SKU deve ser aplicado a cada variação individualmente.
-              // É boa prática limpar o SKU do anúncio "pai".
+              // valor pode ser string (mesmo SKU para todas) ou objeto { variationId: sku }
+              const skuMap = (typeof valor === 'object' && valor !== null && !Array.isArray(valor)) ? valor : null;
+              const skuPadrao = skuMap ? null : String(valor || '').trim();
+              if (!skuMap && !skuPadrao) throw new Error('SKU não pode ser vazio.');
+
               payload = {
-                attributes: [
-                  { id: "SELLER_SKU", value_name: null }
-                ],
+                attributes: [{ id: "SELLER_SKU", value_name: null }],
                 variations: item.variationsIds.map(variationId => ({
                   id: variationId,
-                  attributes: [
-                    { id: "SELLER_SKU", value_name: novoSku }
-                  ]
+                  attributes: [{ id: "SELLER_SKU", value_name: skuMap ? (skuMap[variationId] || null) : skuPadrao }]
                 }))
               };
-              logAcao += `SKU alterado para "${novoSku}" em ${item.variationsIds.length} variação(ões).`;
+              logAcao += `SKU alterado em ${item.variationsIds.length} variação(ões).`;
 
             } else {
-              // CASO 1: ANÚNCIO SIMPLES (SEM VARIAÇÕES)
-              // Envia apenas o atributo SELLER_SKU. A API do ML faz o merge.
-              payload = {
-                attributes: [
-                  { id: "SELLER_SKU", value_name: novoSku }
-                ]
-              };
+              const novoSku = String(valor || '').trim();
+              if (!novoSku) throw new Error('SKU não pode ser vazio.');
+              payload = { attributes: [{ id: "SELLER_SKU", value_name: novoSku }] };
               logAcao += `SKU alterado para "${novoSku}".`;
             }
 
-            // Envia o payload correto para a API do ML
             await safeAxios.put(
               `https://api.mercadolibre.com/items/${item.id}`,
               payload,
               { headers }
             );
 
-            // Atualiza o banco de dados local (apenas o SKU do anúncio pai para referência)
-            await prisma.anuncioML.update({ where: { id: item.id }, data: { sku: novoSku } }).catch(() => {});
+            const skuParaBd = typeof valor === 'string' ? valor.trim() : Object.values(valor || {})[0] || '';
+            await prisma.anuncioML.update({ where: { id: item.id }, data: { sku: skuParaBd } }).catch(() => {});
 
           } else if (acao === 'posicao') {
             const posArrayBruto = Array.isArray(valor) ? valor : [valor];

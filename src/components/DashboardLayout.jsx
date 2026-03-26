@@ -248,7 +248,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
           ) : (
-            <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 32, height: 32, objectFit: 'contain' }} />
+            <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 52, height: 52, objectFit: 'contain' }} />
           )}
         </div>
         <span style={{ fontSize: '1.1em', fontWeight: 600, color: '#ecf0f1', flex: 1 }}>

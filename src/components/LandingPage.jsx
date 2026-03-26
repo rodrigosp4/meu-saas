@@ -137,7 +137,7 @@ function NavBar({ onLoginClick }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <img src="/logo.png" alt="MELI UNLOCKER"
-          style={{ height: isMobile ? 30 : 38, filter: 'drop-shadow(0 2px 6px rgba(241,196,15,0.4))' }}
+          style={{ height: isMobile ? 52 : 64, filter: 'drop-shadow(0 2px 6px rgba(241,196,15,0.4))' }}
           onError={e => { e.target.style.display = 'none'; }}
         />
       </div>
@@ -668,7 +668,7 @@ function Footer() {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 10 }}>
         <img src="/logo.png" alt="MELI UNLOCKER"
-          style={{ height: 26, filter: 'brightness(0.7)' }}
+          style={{ height: 52, filter: 'brightness(0.7)' }}
           onError={e => e.target.style.display = 'none'}
         />
       </div>

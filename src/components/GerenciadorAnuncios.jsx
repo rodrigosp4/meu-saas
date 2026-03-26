@@ -1591,6 +1591,7 @@ const fetchAnuncios = async () => {
         status: statusFilter, tag: tagFilter, promo: promoFilter, precoMin: precoMin,
         precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
         descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
+        priceCheckStatus: priceCheckFilter, userId: usuarioId,
       });
 
       const res = await fetch(`/api/ml/anuncios?${params.toString()}`);
@@ -1614,7 +1615,7 @@ const fetchAnuncios = async () => {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku]);
+  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
@@ -1645,6 +1646,7 @@ const handleSelectAllFiltered = async () => {
         contasIds: queryConta, search: searchTerm, searchType: searchType, status: statusFilter,
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
         descontoMin, descontoMax, semSku: semSkuFilter,
+        priceCheckStatus: priceCheckFilter, userId: usuarioId,
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
@@ -2164,9 +2166,8 @@ const handleFetchBySku = async () => {
     return Math.round(((precoOriginal - preco) / precoOriginal) * 100);
   };
 
-  // Filtragem client-side pelo resultado do Verificar Preço + palavras excluídas
+  // Filtragem client-side por palavras excluídas (price check filter é server-side)
   const displayedAnuncios = anuncios
-    .filter(ad => priceCheckFilter === 'Todos' || priceCheckResults[ad.id]?.status === priceCheckFilter)
     .filter(ad => {
       if (palavrasExcluir.length === 0) return true;
       const titulo = (ad.titulo || '').toLowerCase();
@@ -2521,6 +2522,7 @@ const handleFetchBySku = async () => {
                     <option value="perfeito">✓ Preço Perfeito</option>
                     <option value="lucro">📈 Com Lucro</option>
                     <option value="prejuizo">📉 Com Prejuízo</option>
+                    <option value="erro">⚠️ Com Erro</option>
                   </select>
                   {priceCheckFilter !== 'Todos' && Object.keys(priceCheckResults).length === 0 && (
                     <p className="text-[10px] text-amber-600">Use "Verificar Preço" primeiro.</p>

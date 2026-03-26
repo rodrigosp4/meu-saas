@@ -477,9 +477,27 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
       create: { userId, resultados: resultadosMesclados }
     });
 
+    const countByStatus = Object.values(finalResults).reduce((acc, r) => {
+      acc[r.status] = (acc[r.status] || 0) + 1;
+      return acc;
+    }, {});
+    const errosDetalhados = Object.entries(finalResults)
+      .filter(([, r]) => r.status === 'erro')
+      .map(([id, r]) => `  ❌ ${id} — ${r.historico?.[0]?.msg || 'erro desconhecido'}`)
+      .join('\n');
+    const logFinal = [
+      `✅ Verificação concluída: ${Object.keys(finalResults).length} anúncios processados.`,
+      ``,
+      `Resumo do Lote:`,
+      `  ✓ Perfeito:   ${(countByStatus.perfeito || 0) + (countByStatus.perfeito_promo || 0)}`,
+      `  📈 Com Lucro:  ${countByStatus.lucro || 0}`,
+      `  📉 Prejuízo:   ${countByStatus.prejuizo || 0}`,
+      `  ⚠️ Com Erro:   ${countByStatus.erro || 0}`,
+      ...(errosDetalhados ? [``, `Detalhes por Anúncio:`, errosDetalhados] : []),
+    ].join('\n');
     await prisma.tarefaFila.updateMany({
       where: { id: tarefaId },
-      data: { status: 'CONCLUIDO', detalhes: `Verificação concluída para ${Object.keys(finalResults).length} anúncios.` }
+      data: { status: 'CONCLUIDO', detalhes: logFinal }
     });
 
     return { success: true, count: Object.keys(finalResults).length };

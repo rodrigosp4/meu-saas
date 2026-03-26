@@ -721,6 +721,7 @@ async syncAds(req, res) {
         descontoMin = '', descontoMax = '',
         semSku = 'false',
         sortBy = 'padrao',
+        priceCheckStatus = 'Todos', userId = '',
         page = 1, limit = 50
       } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
@@ -809,6 +810,15 @@ async syncAds(req, res) {
         } else {
           where.OR = searchCondition;
         }
+      }
+
+      if (priceCheckStatus !== 'Todos' && userId) {
+        const verificacao = await prisma.verificacaoPreco.findUnique({ where: { userId } });
+        const resultados = verificacao?.resultados || {};
+        const idsMatch = Object.entries(resultados)
+          .filter(([, v]) => v?.status === priceCheckStatus)
+          .map(([id]) => id);
+        where.id = { in: idsMatch };
       }
 
       let [anuncios, total] = await Promise.all([
@@ -1023,6 +1033,7 @@ async syncAds(req, res) {
         contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
         semSku = 'false',
+        priceCheckStatus = 'Todos', userId = '',
       } = req.query;
 
       const where = {};
@@ -1073,9 +1084,18 @@ async syncAds(req, res) {
         }
       }
 
-      const anuncios = await prisma.anuncioML.findMany({ 
-        where, 
-        select: { id: true, contaId: true, sku: true, titulo: true, preco: true, thumbnail: true, dadosML: true } 
+      if (priceCheckStatus !== 'Todos' && userId) {
+        const verificacao = await prisma.verificacaoPreco.findUnique({ where: { userId } });
+        const resultados = verificacao?.resultados || {};
+        const idsMatch = Object.entries(resultados)
+          .filter(([, v]) => v?.status === priceCheckStatus)
+          .map(([id]) => id);
+        where.id = { in: idsMatch };
+      }
+
+      const anuncios = await prisma.anuncioML.findMany({
+        where,
+        select: { id: true, contaId: true, sku: true, titulo: true, preco: true, thumbnail: true, dadosML: true }
       });
 
       // Extrai apenas os dados necessários para o modal do frontend não pesar a memória

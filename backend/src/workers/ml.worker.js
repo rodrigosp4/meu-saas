@@ -278,11 +278,9 @@ async function processChunkWithRetry(chunkIds, accessToken, contaId, maxRetries 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       // ─── 2a. Multiget de detalhes ───
-      // ★ CORREÇÃO 2: NÃO mistura include_attributes=all com attributes=...
-      // O Python usa UM ou OUTRO. Usar ambos gera payloads enormes e timeouts.
       const attrs = 'id,title,category_id,status,sub_status,price,original_price,available_quantity,sold_quantity,permalink,thumbnail,tags,seller_custom_field,attributes,variations,listing_type_id,sale_terms,catalog_listing,health,pictures,shipping';
       const detRes = await mlClient.get(
-        `https://api.mercadolibre.com/items?ids=${idsStr}&attributes=${attrs}`,
+        `https://api.mercadolibre.com/items?ids=${idsStr}&include_attributes=all&attributes=${attrs}`,
         { headers }
       );
       const items = detRes.data
@@ -715,6 +713,8 @@ function extractVariationSkus(itemData) {
   if (!itemData.variations || !Array.isArray(itemData.variations)) return [];
   const skus = [];
   for (const v of itemData.variations) {
+    const fromField = v.seller_custom_field;
+    if (fromField && fromField !== '-1') { skus.push(fromField); continue; }
     if (v.attributes && Array.isArray(v.attributes)) {
       const attr = v.attributes.find(a => a.id === 'SELLER_SKU');
       if (attr && attr.value_name && attr.value_name !== '-1') {

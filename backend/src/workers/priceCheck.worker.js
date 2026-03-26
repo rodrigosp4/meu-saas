@@ -1,11 +1,9 @@
 import { Worker } from 'bullmq';
-import axios from 'axios';
-import https from 'https';
-import http from 'http';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
 import { getTinyRateLimit } from '../utils/tinyRateLimit.js';
+import { createTinyClient, getTinyAccessToken, listarProdutos, obterProduto } from '../utils/tinyClient.js';
 
 const connection = {
   host: config.redisHost,
@@ -16,171 +14,49 @@ const connection = {
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const tinyHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 50 });
-const tinyHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 });
-const axiosTiny = axios.create({ httpAgent: tinyHttpAgent, httpsAgent: tinyHttpsAgent, timeout: 20000 });
-
-// ✅ CORREÇÃO: Função segura para ler preços do Tiny (Evita NaN por causa de vírgulas)
-function parseTinyPrice(val) {
-  if (val === null || val === undefined || val === '') return 0;
-  if (typeof val === 'number') return val;
-  return Number(String(val).replace(',', '.'));
-}
-
 async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 6) {
   const skuStr = String(sku).trim().toLowerCase();
   const delayMs = tinyLimits?.delayMs ?? 1500;
+  const client = createTinyClient(tinyToken);
 
   for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
     try {
-      let foundCandidateId = null;
-      let isParentCandidate = false;
-      let pagina = 1;
-      let totalPaginas = 1;
-      let falsoErroDaTiny = false;
-      let candidateIdsToInspect = [];
+      await delay(delayMs);
+      const data = await listarProdutos(client, { codigo: String(sku).trim() });
+      const itens = data.itens || [];
 
-      do {
-        await delay(delayMs);
-        const searchRes = await axiosTiny.post(
-          'https://api.tiny.com.br/api2/produtos.pesquisa.php',
-          new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: String(sku).trim(), pagina: String(pagina) })
-        );
+      const exactMatch = itens.find(p => String(p.sku || '').trim().toLowerCase() === skuStr);
 
-        const retorno = searchRes.data?.retorno;
+      if (!exactMatch) return null;
 
-        if (retorno?.codigo_erro == 8 || retorno?.codigo_erro == 6 || String(retorno?.erros?.[0]?.erro || '').toLowerCase().includes('limite')) {
-          throw new Error('RATE_LIMIT_JSON');
-        }
-
-        if (retorno?.codigo_erro == 2) return { error: 'Token da Tiny inválido' };
-
-        if (retorno?.status === 'Erro' && retorno?.codigo_erro == 20) {
-            falsoErroDaTiny = true;
-            break;
-        }
-
-        if (retorno?.status !== 'OK') break;
-
-        totalPaginas = Number(retorno.numero_paginas || 1);
-        const produtos = retorno.produtos || [];
-
-        const exactMatch = produtos.map(p => p.produto).find(p => String(p.codigo || '').trim().toLowerCase() === skuStr);
-
-        if (exactMatch) {
-          if (exactMatch.tipoVariacao !== 'P' && exactMatch.classe_produto !== 'V') {
-            return { preco: parseTinyPrice(exactMatch.preco), preco_promocional: parseTinyPrice(exactMatch.preco_promocional), preco_custo: parseTinyPrice(exactMatch.preco_custo) };
-          }
-          foundCandidateId = exactMatch.id;
-          isParentCandidate = true;
-          break;
-        } else {
-          candidateIdsToInspect.push(...produtos.map(p => p.produto.id));
-        }
-
-        pagina++;
-        if (pagina > 10) break; // Limite de segurança de 10 páginas
-      } while (!foundCandidateId && pagina <= totalPaginas);
-
-      let variationMatchData = null;
-      if (!foundCandidateId && candidateIdsToInspect.length > 0) {
-        const paisParaInspecionar =[...new Set(candidateIdsToInspect)].slice(0, 10);
-        for (const paiId of paisParaInspecionar) {
-           await delay(delayMs);
-           const detRes = await axiosTiny.post(
-              'https://api.tiny.com.br/api2/produto.obter.php',
-              new URLSearchParams({ token: tinyToken, formato: 'JSON', id: paiId })
-           );
-
-           const pRetorno = detRes.data?.retorno;
-           if (pRetorno?.codigo_erro == 8) throw new Error('RATE_LIMIT_JSON');
-
-           const prod = pRetorno?.produto;
-           if (prod && prod.variacoes) {
-              let vars = Array.isArray(prod.variacoes) ? prod.variacoes : Object.values(prod.variacoes);
-              let varMatch = vars.map(v => v.variacao || v).find(v => String(v.codigo || '').trim().toLowerCase() === skuStr);
-
-              if (!varMatch) {
-                  for (const v of vars) {
-                      const itemVar = v.variacao || v;
-                      const idFilho = itemVar.idProdutoFilho || itemVar.id;
-                      if (!idFilho) continue;
-                      
-                      try {
-                          await delay(delayMs);
-                          const detFilho = await axiosTiny.post(
-                              'https://api.tiny.com.br/api2/produto.obter.php',
-                              new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idFilho })
-                          );
-                          const prodFilho = detFilho.data?.retorno?.produto;
-                          if (prodFilho && String(prodFilho.codigo || '').trim().toLowerCase() === skuStr) {
-                              varMatch = prodFilho;
-                              break;
-                          }
-                      } catch (e) {}
-                  }
-              }
-
-              if (varMatch) {
-                 // ✅ Usando o parseTinyPrice seguro
-                 variationMatchData = {
-                    preco: parseTinyPrice(varMatch.preco || prod.preco),
-                    preco_promocional: parseTinyPrice(varMatch.preco_promocional || prod.preco_promocional),
-                    preco_custo: parseTinyPrice(prod.preco_custo)
-                 };
-                 break;
-              }
-           }
-        }
-      }
-
-      if (variationMatchData) return variationMatchData;
-
-      if (!foundCandidateId) {
-          if (falsoErroDaTiny && tentativa < tentativas) {
-              await delay(4000 * tentativa);
-              continue;
-          }
-          return null; 
+      if (exactMatch.tipoVariacao !== 'P') {
+        return {
+          preco: exactMatch.precos?.preco || 0,
+          preco_promocional: exactMatch.precos?.precoPromocional || 0,
+          preco_custo: exactMatch.precos?.precoCusto || 0,
+        };
       }
 
       await delay(delayMs);
-      const detRes = await axiosTiny.post(
-        'https://api.tiny.com.br/api2/produto.obter.php',
-        new URLSearchParams({ token: tinyToken, formato: 'JSON', id: foundCandidateId })
-      );
-
-      const retornoDet = detRes.data?.retorno;
-      if (retornoDet?.codigo_erro == 8) throw new Error('RATE_LIMIT_JSON');
-      const prod = retornoDet?.produto;
-      if (!prod) throw new Error('FALHA_OBTER_DETALHE');
-      
-      // ✅ Usando o parseTinyPrice seguro
-      const precoBasico = { 
-        preco: parseTinyPrice(prod.preco), 
-        preco_promocional: parseTinyPrice(prod.preco_promocional), 
-        preco_custo: parseTinyPrice(prod.preco_custo) 
+      const det = await obterProduto(client, exactMatch.id);
+      const varMatch = (det.variacoes || []).find(v => String(v.sku || '').trim().toLowerCase() === skuStr);
+      return {
+        preco: varMatch?.precos?.preco ?? det.precos?.preco ?? 0,
+        preco_promocional: varMatch?.precos?.precoPromocional ?? det.precos?.precoPromocional ?? 0,
+        preco_custo: det.precos?.precoCusto ?? 0,
       };
-      
-      if (isParentCandidate && prod.variacoes) {
-          let vars = Array.isArray(prod.variacoes) ? prod.variacoes : Object.values(prod.variacoes);
-          const varMatch = vars.map(v => v.variacao || v).find(v => String(v.codigo || '').trim().toLowerCase() === skuStr);
-          if (varMatch) {
-              precoBasico.preco = parseTinyPrice(varMatch.preco || prod.preco);
-              precoBasico.preco_promocional = parseTinyPrice(varMatch.preco_promocional || prod.preco_promocional);
-          }
-      }
-      return precoBasico;
 
     } catch (err) {
-      const isRateLimit = err.message === 'RATE_LIMIT_JSON' || err.response?.status === 429;
+      const isRateLimit = err.response?.status === 429 || err.response?.status === 503;
+      const isUnauth = err.response?.status === 401 || err.response?.status === 403;
       const isNetwork = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
+      if (isUnauth) return { error: 'Token da Tiny inválido' };
       if (tentativa < tentativas) {
         await delay(isRateLimit ? (20000 + tentativa * 10000) : (isNetwork ? 4000 * tentativa : 3000));
         continue;
       }
-      if (isRateLimit) return { error: `Limite de requisições excedido na API da Tiny.` };
-      if (isNetwork) return { error: `Falha de rede com a API da Tiny.` };
+      if (isRateLimit) return { error: 'Limite de requisições excedido na API da Tiny.' };
+      if (isNetwork) return { error: 'Falha de rede com a API da Tiny.' };
       return { error: `Erro Tiny: ${err.message}` };
     }
   }
@@ -315,11 +191,11 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
   try {
     const [regras, userConfig] = await Promise.all([
       prisma.regraPreco.findMany({ where: { userId } }),
-      prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true, tinyToken: true, tinyPlano: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true, tinyPlano: true } }),
     ]);
-    
+
     const cepOrigem = userConfig?.cepOrigem || '01001000';
-    const tinyToken = userConfig?.tinyToken || null;
+    const tinyToken = await getTinyAccessToken(userId);
     const tinyLimits = getTinyRateLimit(userConfig?.tinyPlano);
     
     const regra = regras.find(r => r.id === regraId);

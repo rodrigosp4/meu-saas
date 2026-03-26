@@ -176,7 +176,12 @@ const pageTitles = {
 export default function DashboardLayout({ children, setActivePage, activePage, onLogout, canAccess, impersonating, role }) {
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sidebarHovered, setSidebarHovered] = useState(false);
   const isSuperAdmin = role === 'SUPER_ADMIN' && !impersonating;
+
+  // No desktop: sidebar colapsa quando não está em hover
+  const collapsed = !isMobile && !sidebarHovered;
+  const sidebarWidth = isMobile ? 240 : (collapsed ? 60 : 240);
 
   // Fecha drawer ao mudar de página no mobile
   const handleNavigate = (id) => {
@@ -226,18 +231,22 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
 
   const menuItems = canAccess ? allMenuItems.filter(i => canAccess(i.id)) : allMenuItems;
 
-  // ── Sidebar interna (usada tanto no desktop fixo quanto no drawer mobile)
+  // ── Sidebar interna
   const SidebarContent = () => (
     <>
       {/* Header logo */}
       <div style={{
-        padding: '16px 15px',
+        padding: collapsed ? '16px 0' : '16px 15px',
         borderBottom: '1px solid #3a5068',
-        display: 'flex', alignItems: 'center', gap: 10,
+        display: 'flex', alignItems: 'center',
+        gap: collapsed ? 0 : 10,
         flexShrink: 0,
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        overflow: 'hidden',
+        transition: 'padding 0.25s ease',
       }}>
         <div style={{
-          width: 32, height: 32, borderRadius: 6,
+          width: 36, height: 36, borderRadius: 6,
           background: isSuperAdmin
             ? 'linear-gradient(135deg, #8e44ad, #6c3483)'
             : 'linear-gradient(135deg, #e67e22, #f1c40f)',
@@ -251,9 +260,18 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             <img src="/logo.png" alt="MELIUNLOCKER" style={{ width: 52, height: 52, objectFit: 'contain' }} />
           )}
         </div>
-        <span style={{ fontSize: '1.1em', fontWeight: 600, color: '#ecf0f1', flex: 1 }}>
+
+        {/* Nome e botão fechar — ocultos quando colapsado */}
+        <span style={{
+          fontSize: '1.1em', fontWeight: 600, color: '#ecf0f1', flex: 1,
+          whiteSpace: 'nowrap', overflow: 'hidden',
+          opacity: collapsed ? 0 : 1,
+          transition: 'opacity 0.15s ease',
+          width: collapsed ? 0 : 'auto',
+        }}>
           {isSuperAdmin ? 'Admin Panel' : 'MELIUNLOCKER'}
         </span>
+
         {/* Botão fechar no mobile */}
         {isMobile && (
           <button
@@ -272,23 +290,25 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
       </div>
 
       {/* Menu items */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '8px 0' }}>
         {menuItems.map((item) => {
           const isActive = activePage === item.id;
           return (
             <button
               key={item.id}
               onClick={() => handleNavigate(item.id)}
+              title={collapsed ? item.label : undefined}
               style={{
                 display: 'flex', alignItems: 'center',
-                padding: isMobile ? '14px 20px' : '11px 20px',
+                padding: collapsed ? '11px 0' : (isMobile ? '14px 20px' : '11px 20px'),
+                justifyContent: collapsed ? 'center' : 'flex-start',
                 color: isActive ? '#ffffff' : '#bdc3c7',
                 fontSize: isMobile ? '0.95em' : '0.9em',
                 borderLeft: `4px solid ${isActive ? '#f1c40f' : 'transparent'}`,
                 backgroundColor: isActive ? '#e67e22' : 'transparent',
                 fontWeight: isActive ? 500 : 400,
                 cursor: 'pointer',
-                transition: 'background-color 0.15s, color 0.15s',
+                transition: 'background-color 0.15s, color 0.15s, padding 0.25s',
                 border: 'none', width: '100%', textAlign: 'left',
                 fontFamily: 'inherit', borderRight: 'none',
                 borderTop: 'none', borderBottom: 'none',
@@ -307,13 +327,21 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
               }}
             >
               <span style={{
-                marginRight: 10, width: 18, display: 'flex', alignItems: 'center',
+                marginRight: collapsed ? 0 : 10,
+                width: 18, display: 'flex', alignItems: 'center',
                 justifyContent: 'center', color: isActive ? '#ffffff' : '#7f8c8d',
-                flexShrink: 0, transition: 'color 0.15s',
+                flexShrink: 0, transition: 'color 0.15s, margin 0.25s',
               }}>
                 {item.icon}
               </span>
-              {item.label}
+              <span style={{
+                whiteSpace: 'nowrap', overflow: 'hidden',
+                opacity: collapsed ? 0 : 1,
+                maxWidth: collapsed ? 0 : 200,
+                transition: 'opacity 0.15s ease, max-width 0.25s ease',
+              }}>
+                {item.label}
+              </span>
             </button>
           );
         })}
@@ -321,31 +349,50 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
         {!isSuperAdmin && activePage === 'criarAnuncio' && (
           <button
             onClick={() => handleNavigate('criarAnuncio')}
+            title={collapsed ? 'Criar Anúncio' : undefined}
             style={{
-              display: 'flex', alignItems: 'center', padding: '11px 20px',
+              display: 'flex', alignItems: 'center',
+              padding: collapsed ? '11px 0' : '11px 20px',
+              justifyContent: collapsed ? 'center' : 'flex-start',
               color: '#ffffff', fontSize: '0.9em',
               borderLeft: '4px solid #f1c40f',
               backgroundColor: '#e67e22', fontWeight: 500,
               cursor: 'pointer', border: 'none', width: '100%',
               textAlign: 'left', fontFamily: 'inherit',
+              transition: 'padding 0.25s',
             }}
           >
-            <span style={{ marginRight: 10, width: 18, display: 'flex', color: '#ffffff', flexShrink: 0 }}>
+            <span style={{ marginRight: collapsed ? 0 : 10, width: 18, display: 'flex', color: '#ffffff', flexShrink: 0 }}>
               {icons.plus}
             </span>
-            Criar Anúncio
+            <span style={{
+              whiteSpace: 'nowrap', overflow: 'hidden',
+              opacity: collapsed ? 0 : 1,
+              maxWidth: collapsed ? 0 : 200,
+              transition: 'opacity 0.15s ease, max-width 0.25s ease',
+            }}>
+              Criar Anúncio
+            </span>
           </button>
         )}
       </div>
 
       {/* Footer: user + logout */}
       <div style={{
-        padding: '14px 16px',
+        padding: collapsed ? '14px 0' : '14px 16px',
         borderTop: '1px solid #3a5068',
         flexShrink: 0,
+        transition: 'padding 0.25s ease',
+        overflow: 'hidden',
       }}>
+        {/* Info usuário — só quando expandido */}
         <div style={{
-          marginBottom: 10, display: 'flex', alignItems: 'center',
+          marginBottom: collapsed ? 0 : 10,
+          height: collapsed ? 0 : 'auto',
+          overflow: 'hidden',
+          opacity: collapsed ? 0 : 1,
+          transition: 'opacity 0.15s ease, height 0.25s ease, margin 0.25s ease',
+          display: 'flex', alignItems: 'center',
           color: '#bdc3c7', gap: 8, fontSize: '0.85em',
         }}>
           <span style={{ color: '#7f8c8d', display: 'flex', flexShrink: 0 }}>{icons.user}</span>
@@ -360,19 +407,28 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
         </div>
         <button
           onClick={onLogout}
+          title={collapsed ? 'Sair' : undefined}
           style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: isMobile ? '10px' : '8px 10px',
+            display: 'flex', alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'center',
+            padding: collapsed ? '8px 0' : (isMobile ? '10px' : '8px 10px'),
             backgroundColor: '#c0392b', color: 'white',
             borderRadius: 4, fontSize: '0.9em', border: 'none',
-            cursor: 'pointer', width: '100%', gap: 6, fontFamily: 'inherit',
-            transition: 'background-color 0.2s',
+            cursor: 'pointer', width: '100%', gap: collapsed ? 0 : 6,
+            fontFamily: 'inherit', transition: 'background-color 0.2s, padding 0.25s',
           }}
           onMouseOver={e => e.currentTarget.style.backgroundColor = '#e74c3c'}
           onMouseOut={e => e.currentTarget.style.backgroundColor = '#c0392b'}
         >
           {icons.logout}
-          Sair
+          <span style={{
+            whiteSpace: 'nowrap', overflow: 'hidden',
+            opacity: collapsed ? 0 : 1,
+            maxWidth: collapsed ? 0 : 100,
+            transition: 'opacity 0.15s ease, max-width 0.25s ease',
+          }}>
+            Sair
+          </span>
         </button>
       </div>
     </>
@@ -434,21 +490,29 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
         )}
 
         {/* ── SIDEBAR ── */}
-        <nav style={{
-          width: 240, minWidth: 240,
-          backgroundColor: '#2d3e50',
-          color: '#ecf0f1',
-          display: 'flex', flexDirection: 'column',
-          height: '100%',
-          boxShadow: isMobile ? '4px 0 20px rgba(0,0,0,0.4)' : '2px 0 5px rgba(0,0,0,0.1)',
-          zIndex: 1200,
-          // Mobile: drawer fixo, desliza da esquerda
-          ...(isMobile ? {
-            position: 'fixed', top: 0, bottom: 0, left: 0,
-            transform: drawerOpen ? 'translateX(0)' : 'translateX(-100%)',
-            transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
-          } : {}),
-        }}>
+        <nav
+          onMouseEnter={() => { if (!isMobile) setSidebarHovered(true); }}
+          onMouseLeave={() => { if (!isMobile) setSidebarHovered(false); }}
+          style={{
+            width: sidebarWidth,
+            minWidth: sidebarWidth,
+            backgroundColor: '#2d3e50',
+            color: '#ecf0f1',
+            display: 'flex', flexDirection: 'column',
+            height: '100%',
+            boxShadow: isMobile ? '4px 0 20px rgba(0,0,0,0.4)' : '2px 0 8px rgba(0,0,0,0.15)',
+            zIndex: 1200,
+            overflow: 'hidden',
+            transition: 'width 0.25s ease, min-width 0.25s ease',
+            // Mobile: drawer fixo, desliza da esquerda
+            ...(isMobile ? {
+              position: 'fixed', top: 0, bottom: 0, left: 0,
+              width: 240, minWidth: 240,
+              transform: drawerOpen ? 'translateX(0)' : 'translateX(-100%)',
+              transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
+            } : {}),
+          }}
+        >
           <SidebarContent />
         </nav>
 
@@ -456,8 +520,6 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
         <div style={{
           flex: 1, display: 'flex', flexDirection: 'column',
           overflow: 'hidden', minWidth: 0,
-          // No mobile a sidebar é overlay, então o conteúdo ocupa tudo
-          marginLeft: isMobile ? 0 : 0,
         }}>
 
           {/* Header */}
@@ -521,7 +583,6 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             padding: isMobile ? '14px 10px' : '20px 12px',
             overflowY: 'auto', overflowX: 'auto',
             backgroundColor: '#f4f6f8', minHeight: 0,
-            // Garante que conteúdo não fique atrás de nada
             position: 'relative', zIndex: 0,
           }}>
             {children}

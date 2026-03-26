@@ -14,6 +14,7 @@ import clienteApiRoutes from './routes/clienteApi.routes.js';
 import concorrentesRoutes from './routes/concorrentes.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import mensagensRoutes from './routes/mensagens.routes.js';
+import tinyAuthRoutes from './routes/tiny.auth.routes.js';
 import { authMiddleware } from './middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,7 @@ app.use(clienteApiRoutes);
 app.use(concorrentesRoutes);
 app.use(adminRoutes);
 app.use(mensagensRoutes);
+app.use(tinyAuthRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

@@ -153,6 +153,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
   const [status, setStatus] = useState(tarefa.status);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showReprocessForm, setShowReprocessForm] = useState(false);
+  const [retomando, setRetomando] = useState(false);
   const logEndRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -203,6 +204,26 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
 
   const reprocessarErros = () => setShowReprocessForm(true);
 
+  const retomar = async () => {
+    if (!confirm('Forçar retomada da tarefa? O job será reenfileirado do início.')) return;
+    setRetomando(true);
+    try {
+      const res = await fetch(`/api/fila/${tarefa.id}/retomar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.erro || 'Erro ao retomar.'); return; }
+      setStatus('PENDENTE');
+      setDetalhes(d => d + '\n>> Retomado manualmente...\n');
+    } catch {
+      alert('Falha ao comunicar com o servidor.');
+    } finally {
+      setRetomando(false);
+    }
+  };
+
   return (
     <>
     {showReprocessForm && (
@@ -234,6 +255,16 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {(status === 'PROCESSANDO' || status === 'PENDENTE') && tarefa.payload && (
+              <button
+                onClick={retomar}
+                disabled={retomando}
+                title="Forçar retomada — use quando o job travar após reinício do servidor"
+                className="text-xs px-3 py-1 bg-green-700 text-white rounded hover:bg-green-600 transition font-semibold disabled:opacity-50"
+              >
+                {retomando ? '...' : '▶ Retomar'}
+              </button>
+            )}
             {erros > 0 && status !== 'PROCESSANDO' && (
               <button
                 onClick={reprocessarErros}

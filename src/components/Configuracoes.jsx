@@ -5,9 +5,12 @@ import { useContasML } from '../contexts/ContasMLContext';
 export default function Configuracoes({ usuarioId }) {
   const { role } = useAuth();
   const { refresh: refreshContas } = useContasML();
-  const [tinyToken, setTinyToken] = useState('');
+  const [tinyConectado, setTinyConectado] = useState(false);
   const [tinyPlano, setTinyPlano] = useState('descontinuado');
-  const [isTokenSalvo, setIsTokenSalvo] = useState(false);
+  const [salvandoPlano, setSalvandoPlano] = useState(false);
+  const [tinyClientId, setTinyClientId] = useState('');
+  const [tinyClientSecret, setTinyClientSecret] = useState('');
+  const [salvandoCredenciais, setSalvandoCredenciais] = useState(false);
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
   const isProcessingOAuth = useRef(new URLSearchParams(window.location.search).has('code'));
@@ -64,11 +67,10 @@ export default function Configuracoes({ usuarioId }) {
         return res.json();
       })
       .then(data => {
-        if (data.tinyToken) {
-          setTinyToken(data.tinyToken);
-          setTinyPlano(data.tinyPlano || 'descontinuado');
-          setIsTokenSalvo(true);
-        }
+        setTinyConectado(!!data.tinyConectado);
+        setTinyPlano(data.tinyPlano || 'descontinuado');
+        if (data.tinyClientId) setTinyClientId(data.tinyClientId);
+        if (data.tinyClientSecret) setTinyClientSecret(data.tinyClientSecret);
         setContasML(data.contasML || []);
         setRegrasPreco(data.regrasPreco || []);
         if (data.cepOrigem) setCepOrigem(data.cepOrigem);
@@ -98,15 +100,41 @@ export default function Configuracoes({ usuarioId }) {
     carregarConfig(usuarioId);
   }, [usuarioId]);
 
-  const salvarTokenTiny = async () => {
-    if (!tinyToken) return alert("Insira um token.");
-    await fetch(`/api/usuario/${usuarioId}/tiny`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tinyToken, tinyPlano })
+  const conectarTiny = () => {
+    window.location.href = `/api/tiny/connect?userId=${usuarioId}`;
+  };
+
+  const desconectarTiny = async () => {
+    if (!window.confirm('Deseja desconectar a conta Tiny?')) return;
+    await fetch('/api/tiny/disconnect', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: usuarioId })
     });
-    refreshContas();
-    setIsTokenSalvo(true);
-    alert('Configurações do Tiny salvas no banco de dados!');
+    setTinyConectado(false);
+  };
+
+  const salvarCredenciaisTiny = async () => {
+    if (!tinyClientId.trim() || !tinyClientSecret.trim()) {
+      alert('Preencha o Client ID e o Client Secret.');
+      return;
+    }
+    setSalvandoCredenciais(true);
+    const res = await fetch(`/api/usuario/${usuarioId}/tiny-credentials`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tinyClientId: tinyClientId.trim(), tinyClientSecret: tinyClientSecret.trim() })
+    });
+    setSalvandoCredenciais(false);
+    if (res.ok) alert('Credenciais salvas! Agora clique em "Conectar Tiny ERP".');
+    else alert('Erro ao salvar credenciais.');
+  };
+
+  const salvarPlanoTiny = async () => {
+    setSalvandoPlano(true);
+    await fetch(`/api/usuario/${usuarioId}/tiny-plano`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tinyPlano })
+    });
+    setSalvandoPlano(false);
   };
 
   // 3. EXCLUIR CONTA NO BANCO
@@ -304,6 +332,21 @@ export default function Configuracoes({ usuarioId }) {
     })();
   }, [usuarioId]);
 
+  // 6. CALLBACK DO TINY (retorno do OAuth)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const tinyStatus = urlParams.get('tiny');
+    if (!tinyStatus) return;
+    window.history.replaceState({}, document.title, window.location.pathname);
+    if (tinyStatus === 'connected') {
+      setTinyConectado(true);
+      alert('Conta Tiny conectada com sucesso!');
+    } else if (tinyStatus === 'error') {
+      const msg = urlParams.get('msg') || 'erro desconhecido';
+      alert(`Falha ao conectar Tiny: ${msg}`);
+    }
+  }, []);
+
   // ===== SALVAR IMGUR =====
   const salvarImgur = async () => {
     if (!imgurClientId.trim()) return alert('Insira o Client ID do Imgur.');
@@ -494,25 +537,74 @@ export default function Configuracoes({ usuarioId }) {
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
         <h4 className="text-lg font-bold" style={{ color: c.orange }}>Conexão Tiny ERP</h4>
         <div className="mt-4 flex flex-col gap-4">
-          <div className="flex gap-4">
-            <input 
-              type="text" 
-              value={tinyToken}
-              onChange={(e) => {
-                setTinyToken(e.target.value);
-                setIsTokenSalvo(false);
-              }}
-              className="flex-1 px-3 py-2 border rounded-md"
-              placeholder="Token API Tiny..."
-            />
+          {/* Credenciais do app Tiny (por usuário) */}
+          <div className="flex flex-col gap-2">
+            <p className="text-xs" style={{ color: c.muted }}>
+              Registre seu app no Tiny em <strong>Configurações → Aplicativos → Novo App</strong> e cole as credenciais abaixo.
+            </p>
+            <div className="flex gap-3 flex-wrap">
+              <input
+                type="text"
+                placeholder="Client ID"
+                value={tinyClientId}
+                onChange={e => setTinyClientId(e.target.value)}
+                className="flex-1 min-w-48 px-3 py-2 border rounded-md text-sm"
+                style={{ borderColor: c.border }}
+              />
+              <input
+                type="password"
+                placeholder="Client Secret"
+                value={tinyClientSecret}
+                onChange={e => setTinyClientSecret(e.target.value)}
+                className="flex-1 min-w-48 px-3 py-2 border rounded-md text-sm"
+                style={{ borderColor: c.border }}
+              />
+              <button
+                onClick={salvarCredenciaisTiny}
+                disabled={salvandoCredenciais}
+                className="px-4 py-2 text-white rounded text-sm transition disabled:opacity-50"
+                style={{ backgroundColor: c.orange }}
+                onMouseOver={e => { if (!salvandoCredenciais) e.target.style.backgroundColor = c.orangeHover; }}
+                onMouseOut={e => e.target.style.backgroundColor = c.orange}
+              >
+                {salvandoCredenciais ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          </div>
+          {/* Status de conexão */}
+          <div className="flex items-center gap-3">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${tinyConectado ? 'bg-green-500' : 'bg-gray-400'}`} />
+            <span className="text-sm" style={{ color: c.text }}>
+              {tinyConectado ? 'Conta Tiny conectada' : 'Nenhuma conta conectada'}
+            </span>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={conectarTiny}
+              className="px-4 py-2 text-white rounded transition"
+              style={{ backgroundColor: c.orange }}
+              onMouseOver={e => e.target.style.backgroundColor = c.orangeHover}
+              onMouseOut={e => e.target.style.backgroundColor = c.orange}
+            >
+              {tinyConectado ? 'Reconectar Tiny' : 'Conectar Tiny ERP'}
+            </button>
+            {tinyConectado && (
+              <button
+                onClick={desconectarTiny}
+                className="px-4 py-2 rounded border transition text-sm"
+                style={{ color: c.muted, borderColor: c.border }}
+              >
+                Desconectar
+              </button>
+            )}
+          </div>
+          {/* Plano (rate limit) — separado da autenticação */}
+          <div className="flex items-center gap-3 pt-2 border-t" style={{ borderColor: c.border }}>
             <select
-              title="Ajuste do Limite da API conforme o plano configurado do Tiny ERP"
+              title="Ajuste o limite de requisições conforme seu plano Tiny ERP"
               value={tinyPlano}
-              onChange={(e) => {
-                setTinyPlano(e.target.value);
-                setIsTokenSalvo(false);
-              }}
-              className="w-48 px-3 py-2 border rounded-md bg-white"
+              onChange={(e) => setTinyPlano(e.target.value)}
+              className="w-56 px-3 py-2 border rounded-md bg-white text-sm"
             >
               <option value="comecar">Plano Começar (Sem API)</option>
               <option value="crescer">Plano Crescer (30 reqs/min)</option>
@@ -520,17 +612,15 @@ export default function Configuracoes({ usuarioId }) {
               <option value="potencializar">Plano Potencializar (120 reqs/min)</option>
               <option value="descontinuado">Planos Descontinuados (20 reqs/min)</option>
             </select>
-          </div>
-          <div className="flex justify-end">
-            <button 
-              onClick={salvarTokenTiny} 
-              disabled={isTokenSalvo} 
-              className="px-4 py-2 text-white rounded transition disabled:opacity-50"
+            <button
+              onClick={salvarPlanoTiny}
+              disabled={salvandoPlano}
+              className="px-3 py-2 text-white rounded text-sm transition disabled:opacity-50"
               style={{ backgroundColor: c.orange }}
-              onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = c.orangeHover; }}
+              onMouseOver={e => { if (!salvandoPlano) e.target.style.backgroundColor = c.orangeHover; }}
               onMouseOut={e => e.target.style.backgroundColor = c.orange}
             >
-              {isTokenSalvo ? 'Salvo' : 'Salvar'}
+              {salvandoPlano ? 'Salvando...' : 'Salvar Plano'}
             </button>
           </div>
         </div>

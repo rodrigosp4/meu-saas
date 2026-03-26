@@ -151,8 +151,10 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       }
 
       setDetalhesProduto(data);
-      // Inicializa imagens — prefere imagens customizadas (tratadas) salvas no DB
-      const urlsIniciais = (data.anexos || []).map(img => img.anexo || img.url).filter(Boolean);
+      // Inicializa imagens — prefere imagens customizadas > ordem salva no DB (dadosTiny) > API fresca
+      const storedAnexos = produto.dadosTiny?.anexos;
+      const urlsIniciais = (storedAnexos?.length > 0 ? storedAnexos : (data.anexos || []))
+        .map(img => img.url || img.anexo).filter(Boolean);
       try {
         if (produto?.sku && usuarioId) {
           const customRes = await fetch(`/api/produto-imagens-custom?userId=${usuarioId}&sku=${encodeURIComponent(produto.sku)}`);
@@ -172,7 +174,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       } catch (_) {
         setImagensOrdenadas(urlsIniciais);
       }
-      const nome = (data.nome || '').substring(0, 60);
+      const nome = data.nome || '';
       setTituloAnuncio(nome);
       setPesoEmbalagem(data.peso_bruto || 0.1);
       setAlturaEmbalagem(data.alturaEmbalagem || 10);

@@ -75,9 +75,11 @@ export default function FormularioBasico(props) {
               type="text"
               value={tituloAnuncio}
               onChange={e => setTituloAnuncio(e.target.value)}
-              maxLength={60}
-              className={`w-full px-3 py-2 border rounded-md shadow-sm text-lg font-medium focus:outline-none focus:ring-2 ${tituloAnuncio.length >= 60 ? 'border-red-500' : 'border-gray-300'}`}
+              className={`w-full px-3 py-2 border rounded-md shadow-sm text-lg font-medium focus:outline-none focus:ring-2 ${tituloAnuncio.length > 60 ? 'border-red-500 ring-red-300' : 'border-gray-300'}`}
             />
+            <div className={`text-right text-xs mt-1 font-medium ${tituloAnuncio.length > 60 ? 'text-red-600' : 'text-gray-400'}`}>
+              {tituloAnuncio.length}/60 {tituloAnuncio.length > 60 && `— reduza ${tituloAnuncio.length - 60} caractere(s)`}
+            </div>
           </div>
 
           <div className="mb-4">

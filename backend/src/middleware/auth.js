@@ -7,6 +7,8 @@ const PUBLIC_ROUTES = [
   { method: 'POST', path: '/api/reset-password' },
   { method: 'GET',  path: '/health' },
   { method: 'GET',  path: '/callback' },
+  { method: 'GET',  path: '/api/tiny/callback' },
+  { method: 'GET',  path: '/api/tiny/connect' },
 ];
 
 export function authMiddleware(req, res, next) {

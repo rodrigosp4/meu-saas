@@ -105,7 +105,7 @@ router.post('/api/login', async (req, res) => {
         email: user.email,
         role: user.role,
         parentUserId: user.parentUserId,
-        tinyToken: user.tinyToken,
+        tinyConectado: !!user.tinyAccessToken,
         featureFlags: user.featureFlags || null,
         resourceFlags: user.resourceFlags || null,
         permissoesCustom: user.permissoesCustom || null,
@@ -204,8 +204,10 @@ router.get('/api/usuario/:id/config', async (req, res) => {
     }));
 
     res.json({
-      tinyToken: user.tinyToken,
+      tinyConectado: !!user.tinyAccessToken,
       tinyPlano: user.tinyPlano || 'descontinuado',
+      tinyClientId: user.tinyClientId || null,
+      tinyClientSecret: user.tinyClientSecret || null,
       cepOrigem: user.cepOrigem || '01001000',
       contasML: contasFormatadas,
       regrasPreco: user.regras,
@@ -220,16 +222,31 @@ router.get('/api/usuario/:id/config', async (req, res) => {
 });
 
 
-// 6. SALVAR TOKEN DO TINY E PLANO
-router.post('/api/usuario/:id/tiny', async (req, res) => {
+// 6. SALVAR CREDENCIAIS DO TINY (client_id e client_secret por usuário)
+router.post('/api/usuario/:id/tiny-credentials', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { tinyClientId, tinyClientSecret } = req.body;
+    if (!tinyClientId || !tinyClientSecret) {
+      return res.status(400).json({ erro: 'tinyClientId e tinyClientSecret são obrigatórios.' });
+    }
+    await prisma.user.update({
+      where: { id: userId },
+      data: { tinyClientId, tinyClientSecret },
+    });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 6b. SALVAR PLANO DO TINY (rate limit)
+router.post('/api/usuario/:id/tiny-plano', async (req, res) => {
   try {
     const userId = req.userId;
     await prisma.user.update({
       where: { id: userId },
-      data: { 
-        tinyToken: req.body.tinyToken,
-        tinyPlano: req.body.tinyPlano || 'descontinuado'
-      }
+      data: { tinyPlano: req.body.tinyPlano || 'descontinuado' }
     });
     res.json({ success: true });
   } catch (error) {

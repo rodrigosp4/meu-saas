@@ -130,7 +130,61 @@ router.post('/api/fila/forcar-limpar/:userId', async (req, res) => {
   }
 });
 
-// 5. Reprocessar apenas os itens com erro de uma tarefa concluída
+// 5. Retomar tarefa travada (re-enfileira o job com o mesmo payload)
+router.post('/api/fila/:tarefaId/retomar', async (req, res) => {
+  try {
+    const { tarefaId } = req.params;
+    const { userId } = req.body;
+
+    const tarefa = await prisma.tarefaFila.findFirst({ where: { id: tarefaId, userId } });
+    if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada.' });
+    if (!tarefa.payload) return res.status(400).json({ erro: 'Tarefa sem payload salvo. Não é possível retomar automaticamente.' });
+
+    let queue, jobName;
+    if (tarefa.tipo === 'Corrigir Preço em Massa') {
+      queue = priceQueue; jobName = 'update-price';
+    } else if (tarefa.tipo === 'Verificar Preço em Massa') {
+      queue = priceCheckQueue; jobName = 'price-check-v2';
+    } else if (tarefa.tipo.startsWith('Ação em Massa')) {
+      queue = acoesMassaQueue; jobName = 'acoes-massa-job';
+    } else {
+      return res.status(400).json({ erro: `Tipo "${tarefa.tipo}" não suportado para retomar.` });
+    }
+
+    // Cancela job anterior travado se ainda existir na fila
+    if (tarefa.jobId) {
+      for (const q of Object.values(QUEUES_BY_TIPO)) {
+        try {
+          const oldJob = await q.getJob(tarefa.jobId);
+          if (oldJob) { await oldJob.remove(); break; }
+        } catch (_) {}
+      }
+    }
+
+    const appendLog = tarefa.detalhes
+      ? tarefa.detalhes + '\n>> Retomado manualmente...\n'
+      : '>> Retomado manualmente...\n';
+
+    await prisma.tarefaFila.update({
+      where: { id: tarefaId },
+      data: { status: 'PENDENTE', detalhes: appendLog, jobId: null }
+    });
+
+    const job = await queue.add(jobName, {
+      tarefaId,
+      userId,
+      ...tarefa.payload
+    });
+
+    await prisma.tarefaFila.update({ where: { id: tarefaId }, data: { jobId: job.id } });
+
+    res.json({ ok: true, jobId: job.id });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 6. Reprocessar apenas os itens com erro de uma tarefa concluída
 // payloadOverride: parâmetros manuais quando a tarefa não tem payload salvo (tarefas antigas)
 router.post('/api/fila/:tarefaId/reprocessar-erros', async (req, res) => {
   try {

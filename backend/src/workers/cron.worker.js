@@ -148,7 +148,7 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
 
   // Busca todos os usuários com token Tiny configurado
   const usuarios = await prisma.user.findMany({
-    select: { id: true, tinyToken: true },
+    select: { id: true, tinyAccessToken: true },
   });
 
   let contasSincronizadas = 0;
@@ -176,12 +176,11 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
     }
 
     // 2) Importa produtos novos da Tiny (SKUs ainda não cadastrados no banco)
-    if (user.tinyToken) {
+    if (user.tinyAccessToken) {
       await syncQueue.add(
         'sync-tiny',
         {
           userId: user.id,
-          tinyToken: user.tinyToken,
           mode: 'novos',
         },
         {

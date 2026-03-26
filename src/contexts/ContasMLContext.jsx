@@ -7,6 +7,7 @@ export function ContasMLProvider({ children }) {
   const { usuarioAtual, auth, impersonating } = useAuth();
   const [contas, setContas] = useState([]);
   const [tinyToken, setTinyToken] = useState(null);
+  const [tinyConectado, setTinyConectado] = useState(false);
   const [tinyPlano, setTinyPlano] = useState('descontinuado');
   const [loading, setLoading] = useState(false);
 
@@ -24,6 +25,7 @@ export function ContasMLProvider({ children }) {
       const data = await res.json();
       setContas(data.contasML || []);
       setTinyToken(data.tinyToken || null);
+      setTinyConectado(!!data.tinyConectado);
       setTinyPlano(data.tinyPlano || 'descontinuado');
     } catch {
       // silencioso
@@ -37,7 +39,7 @@ export function ContasMLProvider({ children }) {
   }, [fetchConfig]);
 
   return (
-    <ContasMLContext.Provider value={{ contas, tinyToken, tinyPlano, loading, refresh: fetchConfig }}>
+    <ContasMLContext.Provider value={{ contas, tinyToken, tinyConectado, tinyPlano, loading, refresh: fetchConfig }}>
       {children}
     </ContasMLContext.Provider>
   );

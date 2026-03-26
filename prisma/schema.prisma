@@ -20,7 +20,11 @@ model User {
   id                   String                  @id @default(uuid())
   email                String                  @unique
   senha                String
-  tinyToken            String?
+  tinyClientId         String?
+  tinyClientSecret     String?
+  tinyAccessToken      String?
+  tinyRefreshToken     String?
+  tinyTokenExpiresAt   BigInt?
   tinyPlano            String?                 @default("descontinuado")
   cepOrigem            String?                 @default("01001000")
   createdAt            DateTime                @default(now())

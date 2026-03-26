@@ -8,10 +8,10 @@ import './cron.worker.js';
 import './promo.worker.js';
 
 import { Worker } from 'bullmq';
-import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { getTinyRateLimit } from './../utils/tinyRateLimit.js';
+import { createTinyClient, getTinyAccessToken, listarProdutos, obterProduto, obterEstoque, normalizarProdutoV3 } from '../utils/tinyClient.js';
 
 // Configuração de conexão com o Redis (Upstash) idêntica à da fila
 const connection = {
@@ -26,10 +26,15 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 console.log('⚙️  Worker de Sincronização do Tiny Iniciado e aguardando Jobs...');
 
 export const syncWorker = new Worker('sync-tiny', async (job) => {
-  const { userId, tinyToken, mode, sku, ids } = job.data;
-  
-  if (!userId || !tinyToken) {
-    throw new Error("Faltam credenciais (userId ou tinyToken) para executar a sincronização.");
+  const { userId, mode, sku, ids } = job.data;
+
+  if (!userId) {
+    throw new Error("Falta userId para executar a sincronização.");
+  }
+
+  const tinyToken = await getTinyAccessToken(userId);
+  if (!tinyToken) {
+    throw new Error("Conta Tiny não conectada ou token expirado. Reconecte em Configurações.");
   }
 
   await job.updateProgress(5);
@@ -41,6 +46,8 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
     throw new Error('O plano "Começar" do Tiny ERP não permite integração via API. Atualize seu plano.');
   }
 
+  const tinyClient = createTinyClient(tinyToken);
+  const LIMIT = 100;
   let idsToFetch = [];
 
   // =========================================================================
@@ -49,73 +56,53 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
   try {
     if (mode === 'ids' && Array.isArray(ids)) {
       idsToFetch = ids;
+
     } else if (mode === 'sku' && sku) {
-      const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
-        new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: sku })
-      );
-      const items = res.data?.retorno?.produtos || [];
-      idsToFetch = items.map(p => p.produto.id);
+      const data = await listarProdutos(tinyClient, { codigo: sku });
+      idsToFetch = (data.itens || []).map(p => p.id);
 
     } else if (mode === 'recentes') {
-      const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php', 
-        new URLSearchParams({ token: tinyToken, formato: 'JSON' })
-      );
-      const items = res.data?.retorno?.produtos || [];
-      idsToFetch = items.map(p => p.produto.id);
+      const data = await listarProdutos(tinyClient, { limit: LIMIT, offset: 0 });
+      idsToFetch = (data.itens || []).map(p => p.id);
 
     } else if (mode === 'all') {
-      const firstRes = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
-        new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: 1 })
-      );
-      const firstItems = firstRes.data?.retorno?.produtos || [];
-      const totalPages = parseInt(firstRes.data?.retorno?.numero_paginas || '1', 10);
-      idsToFetch.push(...firstItems.map(p => p.produto.id));
+      const firstData = await listarProdutos(tinyClient, { limit: LIMIT, offset: 0 });
+      const total = firstData.paginacao?.total || 0;
+      idsToFetch.push(...(firstData.itens || []).map(p => p.id));
 
-      for (let page = 2; page <= totalPages && page <= 500; page++) {
+      for (let offset = LIMIT; offset < total; offset += LIMIT) {
         await delay(tinyLimits.delayMs);
         try {
-          const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
-            new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: page })
-          );
-          const items = res.data?.retorno?.produtos || [];
-          idsToFetch.push(...items.map(p => p.produto.id));
+          const data = await listarProdutos(tinyClient, { limit: LIMIT, offset });
+          idsToFetch.push(...(data.itens || []).map(p => p.id));
         } catch (pageErr) {
-          console.warn(`⚠️ Falha ao buscar página ${page}/${totalPages}: ${pageErr.message}`);
+          console.warn(`⚠️ Falha ao buscar offset ${offset}/${total}: ${pageErr.message}`);
         }
       }
 
     } else if (mode === 'novos') {
-      // Busca apenas produtos cujo SKU ainda NÃO existe no banco local
       const produtosExistentes = await prisma.produto.findMany({
         where: { userId },
         select: { sku: true }
       });
       const skusExistentes = new Set(produtosExistentes.map(p => p.sku));
 
-      const firstRes = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
-        new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: 1 })
-      );
-      const totalPages = parseInt(firstRes.data?.retorno?.numero_paginas || '1', 10);
-      const firstItems = firstRes.data?.retorno?.produtos || [];
+      const firstData = await listarProdutos(tinyClient, { limit: LIMIT, offset: 0 });
+      const total = firstData.paginacao?.total || 0;
 
-      for (const p of firstItems) {
-        const codigo = String(p.produto?.codigo || '').trim();
-        if (codigo && !skusExistentes.has(codigo)) idsToFetch.push(p.produto.id);
+      for (const p of (firstData.itens || [])) {
+        if (p.sku && !skusExistentes.has(p.sku)) idsToFetch.push(p.id);
       }
 
-      for (let page = 2; page <= totalPages && page <= 500; page++) {
+      for (let offset = LIMIT; offset < total; offset += LIMIT) {
         await delay(tinyLimits.delayMs);
         try {
-          const res = await axios.post('https://api.tiny.com.br/api2/produtos.pesquisa.php',
-            new URLSearchParams({ token: tinyToken, formato: 'JSON', pesquisa: '', pagina: page })
-          );
-          const items = res.data?.retorno?.produtos || [];
-          for (const p of items) {
-            const codigo = String(p.produto?.codigo || '').trim();
-            if (codigo && !skusExistentes.has(codigo)) idsToFetch.push(p.produto.id);
+          const data = await listarProdutos(tinyClient, { limit: LIMIT, offset });
+          for (const p of (data.itens || [])) {
+            if (p.sku && !skusExistentes.has(p.sku)) idsToFetch.push(p.id);
           }
         } catch (pageErr) {
-          console.warn(`⚠️ Falha ao buscar página ${page}/${totalPages}: ${pageErr.message}`);
+          console.warn(`⚠️ Falha ao buscar offset ${offset}/${total}: ${pageErr.message}`);
         }
       }
     }
@@ -145,42 +132,33 @@ export const syncWorker = new Worker('sync-tiny', async (job) => {
       try {
         await delay(tinyLimits.delayMs);
 
-        // ✅ Timeout adicionado para forçar o failover caso a requisição enrosque
-        const [detRes, estRes] = await Promise.all([
-          axios.post('https://api.tiny.com.br/api2/produto.obter.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto }), { timeout: 20000 }),
-          axios.post('https://api.tiny.com.br/api2/produto.obter.estoque.php', new URLSearchParams({ token: tinyToken, formato: 'JSON', id: idProduto }), { timeout: 20000 })
+        const [det, est] = await Promise.all([
+          obterProduto(tinyClient, idProduto),
+          obterEstoque(tinyClient, idProduto),
         ]);
 
-        const det = detRes.data?.retorno?.produto;
-        const est = estRes.data?.retorno?.produto;
-
-        if (det && det.codigo) {
-          const estoqueAtual = est ? Number(est.saldo) : 0;
-          const preco = Number(det.preco) || 0;
-
-          if (det.variacoes && typeof det.variacoes === 'object' && !Array.isArray(det.variacoes)) {
-            det.variacoes = Object.values(det.variacoes);
-          }
-
-          const dadosCompletos = { ...det, estoque_atual: estoqueAtual };
+        if (det && det.sku) {
+          const estoqueAtual = est ? Number(est.saldo) : (det.estoque?.quantidade || 0);
+          const preco = det.precos?.preco || 0;
+          const dadosCompletos = normalizarProdutoV3(det, estoqueAtual);
 
           await prisma.produto.upsert({
-            where: { userId_sku: { userId: userId, sku: det.codigo } },
+            where: { userId_sku: { userId: userId, sku: det.sku } },
             update: {
-              nome: det.nome,
-              preco: preco,
+              nome: det.descricao,
+              preco,
               estoque: estoqueAtual,
-              dadosTiny: dadosCompletos
+              dadosTiny: dadosCompletos,
             },
             create: {
               userId: userId,
-              sku: det.codigo,
-              nome: det.nome,
-              preco: preco,
+              sku: det.sku,
+              nome: det.descricao,
+              preco,
               estoque: estoqueAtual,
               statusML: 'Não Publicado',
-              dadosTiny: dadosCompletos
-            }
+              dadosTiny: dadosCompletos,
+            },
           });
         }
         

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useContasML } from '../contexts/ContasMLContext';
 
 export default function Anuncios({ onAnunciar, usuarioId }) {
-  const { tinyToken } = useContasML();
+  const { tinyToken, tinyConectado } = useContasML();
   const [produtos, setProdutos] = useState([]);
   const [totalProdutos, setTotalProdutos] = useState(0);
   const[syncProgress, setSyncProgress] = useState(null);
@@ -91,7 +91,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
   
   // ✅ MODIFICADO: para aceitar 'ids' e limpar seleção
   const iniciarSincronizacao = async (mode = 'all', sku = '', ids =[]) => {
-    if (!tinyToken) {
+    if (!tinyToken && !tinyConectado) {
       alert("Vá em Configurações e salve seu Token do Tiny ERP primeiro!");
       return;
     }

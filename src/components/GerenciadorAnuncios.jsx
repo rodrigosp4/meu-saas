@@ -14,6 +14,7 @@ export const TAG_DISPLAY_MAP = {
   out_of_stock:                         { label: 'Sem Estoque (Tag)',    color: 'bg-gray-200 text-gray-800 border-gray-300' },
   incomplete_technical_specs:           { label: 'Ficha Técnica Inc.',   color: 'bg-amber-100 text-amber-800 border-amber-200' },
   waiting_for_patch:                    { label: 'Aguardando Patch',     color: 'bg-blue-100 text-blue-800 border-blue-200' },
+  standard_price_by_quantity:           { label: 'Atacado Ativo',        color: 'bg-teal-100 text-teal-800 border-teal-200' },
 };
 
 export function getTagBadge(tagValue) {
@@ -1516,6 +1517,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
+  const [atacadoSendingIds, setAtacadoSendingIds] = useState(new Set());
 
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
@@ -1672,6 +1674,43 @@ const handleSelectAllFiltered = async () => {
     }
   };
 
+
+const handleEnviarAtacadoRapido = async (ad) => {
+    if (!configAtacado?.ativo || !configAtacado?.faixas?.length) {
+      alert('Configure as faixas de atacado em Configurações API antes de usar esta função.');
+      return;
+    }
+    setAtacadoSendingIds(prev => new Set([...prev, ad.id]));
+    try {
+      const precoAlvo = ad.preco;
+      const res = await fetch('/api/ml/atacado-preco', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: ad.id,
+          contaId: ad.contaId,
+          userId: usuarioId,
+          precoAlvo,
+          faixas: configAtacado.faixas
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
+      // Atualiza a tag localmente para refletir o atacado ativo
+      setAnuncios(prev => prev.map(a => {
+        if (a.id !== ad.id) return a;
+        const mlTags = a.dadosML?.tags || [];
+        if (!mlTags.includes('standard_price_by_quantity')) {
+          return { ...a, dadosML: { ...a.dadosML, tags: [...mlTags, 'standard_price_by_quantity'] } };
+        }
+        return a;
+      }));
+    } catch (err) {
+      alert(`Erro ao enviar preços de atacado: ${err.message}`);
+    } finally {
+      setAtacadoSendingIds(prev => { const next = new Set(prev); next.delete(ad.id); return next; });
+    }
+  };
 
 const handleSyncSelected = async () => {
     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
@@ -3047,6 +3086,31 @@ const handleFetchBySku = async () => {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                             </svg>
                             Preencher Ficha
+                          </button>
+                        )}
+
+                        {tags.includes('standard_price_by_quantity') && (
+                          <span className="bg-teal-100 text-teal-800 border border-teal-200 text-[9px] px-1.5 py-0.5 rounded font-bold">Atacado Ativo</span>
+                        )}
+
+                        {configAtacado?.ativo && configAtacado?.faixas?.length > 0 && (
+                          <button
+                            onClick={() => handleEnviarAtacadoRapido(ad)}
+                            disabled={atacadoSendingIds.has(ad.id)}
+                            className="mt-1 flex items-center gap-1 text-[10px] font-black text-teal-700 bg-teal-50 border border-teal-300 px-2 py-0.5 rounded hover:bg-teal-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={`Enviar ${configAtacado.faixas.length} faixa(s) de atacado • preço base: R$ ${Number(ad.preco).toFixed(2)}`}
+                          >
+                            {atacadoSendingIds.has(ad.id) ? (
+                              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                              </svg>
+                            ) : (
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                            {atacadoSendingIds.has(ad.id) ? 'Enviando...' : 'Atacado'}
                           </button>
                         )}
                       </div>

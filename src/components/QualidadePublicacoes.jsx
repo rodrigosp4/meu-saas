@@ -787,6 +787,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
   const [filtroSemCatalogo, setFiltroSemCatalogo] = useState(true);
   const [filtroStatus, setFiltroStatus] = useState('Pendentes');
   const [filtroQualidadeMax, setFiltroQualidadeMax] = useState('');
+  const [filtroApenasComEstoque, setFiltroApenasComEstoque] = useState(false);
   const [sortCol, setSortCol] = useState({ col: 'vendas', rev: true });
 
   const salvarFeitos = (novoFeitos) => {
@@ -987,6 +988,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
       if (filtroSku && !d.sku.toLowerCase().includes(filtroSku.toLowerCase())) return false;
       if (filtroApenasCAviso && d.tags.length === 0) return false;
       if (filtroSemCatalogo && d.temCatalogo) return false;
+      if (filtroApenasComEstoque && !d.ads.some(ad => ad.estoque > 0)) return false;
       const isFeito = feitos[d._key] || false;
       if (filtroStatus === 'Pendentes' && isFeito) return false;
       if (filtroStatus === 'Feitos' && !isFeito) return false;
@@ -1046,6 +1048,10 @@ export default function QualidadePublicacoes({ usuarioId }) {
 
         {/* Filtros */}
         <div className="flex items-center gap-3 flex-wrap ml-auto">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+            <input type="checkbox" checked={filtroApenasComEstoque} onChange={e => setFiltroApenasComEstoque(e.target.checked)} />
+            C/ Estoque
+          </label>
           <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
             <input type="checkbox" checked={filtroSemCatalogo} onChange={e => setFiltroSemCatalogo(e.target.checked)} />
             S/ Catálogo

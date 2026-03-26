@@ -33,6 +33,7 @@ export default function DimensoesEmbalagem({ usuarioId }) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos'); // todos | pendente | concluido
+  const [filtroApenasComEstoque, setFiltroApenasComEstoque] = useState(false);
   const [ocultarCatalogo, setOcultarCatalogo] = useState(true);
   const [loading, setLoading] = useState(false);
   const [selecionados, setSelecionados] = useState(new Set());
@@ -80,6 +81,10 @@ export default function DimensoesEmbalagem({ usuarioId }) {
         lista = lista.filter(a => !a.dadosML?.catalog_product_id);
       }
 
+      if (filtroApenasComEstoque) {
+        lista = lista.filter(a => a.estoque > 0);
+      }
+
       setAnuncios(lista);
       setTotal(filtroStatus === 'todos' ? (data.total || lista.length) : lista.length);
       setPage(pg);
@@ -88,11 +93,11 @@ export default function DimensoesEmbalagem({ usuarioId }) {
     } finally {
       setLoading(false);
     }
-  }, [contasSelecionadas, search, filtroStatus, ocultarCatalogo]);
+  }, [contasSelecionadas, search, filtroStatus, ocultarCatalogo, filtroApenasComEstoque]);
 
   useEffect(() => {
     if (contasSelecionadas.length > 0) buscarAnuncios(1);
-  }, [contasSelecionadas, filtroStatus, ocultarCatalogo]);
+  }, [contasSelecionadas, filtroStatus, ocultarCatalogo, filtroApenasComEstoque]);
 
   const toggleConta = (id) => {
     setContasSelecionadas(prev =>
@@ -263,6 +268,16 @@ export default function DimensoesEmbalagem({ usuarioId }) {
             onChange={e => setOcultarCatalogo(e.target.checked)}
           />
           Ocultar catálogo
+        </label>
+
+        {/* Filtro estoque */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85em', color: '#555', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input
+            type="checkbox"
+            checked={filtroApenasComEstoque}
+            onChange={e => setFiltroApenasComEstoque(e.target.checked)}
+          />
+          Apenas c/ estoque
         </label>
 
         {/* Botão buscar */}

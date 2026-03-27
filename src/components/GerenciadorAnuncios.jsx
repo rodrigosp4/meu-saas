@@ -322,33 +322,26 @@ function ModalEditarDescricao({ anunciosSelecionados, usuarioId, onClose, onSucc
 function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSuccess }) {
   const [isLoading, setIsLoading] = useState(false);
 
-  // Monta a lista de linhas editáveis a partir dos IDs selecionados
   const buildRows = () => {
     const rows = [];
     const addedVariationIds = new Set();
-
     Array.from(selectedIds).forEach(id => {
       const parentAd = allKnownAds[id];
       if (parentAd) {
         const variations = parentAd.dadosML?.variations || [];
         if (variations.length > 0) {
-          // Pai com variações: lista cada variação individualmente
           variations.forEach(v => {
             if (addedVariationIds.has(v.id)) return;
             addedVariationIds.add(v.id);
             const grade = v.attribute_combinations || [];
             const label = grade.map(g => `${g.name}: ${g.value_name}`).join(' / ') || `ID ${v.id}`;
-            const currentSku = v.seller_custom_field
-              || v.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name
-              || '';
-            rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: v.id, label, currentSku, newSku: '' });
+            const currentSku = v.seller_custom_field || v.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name || '';
+            rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: v.id, label, currentSku, newSku: '', thumbnail: parentAd.thumbnail, isSimple: false });
           });
         } else {
-          // Anúncio simples (sem variações)
-          rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: null, label: parentAd.titulo || parentAd.id, currentSku: parentAd.sku || '', newSku: '' });
+          rows.push({ parentId: parentAd.id, contaId: parentAd.contaId, variationId: null, label: parentAd.titulo || parentAd.id, currentSku: parentAd.sku || '', newSku: '', thumbnail: parentAd.thumbnail, isSimple: true });
         }
       } else {
-        // É um ID de variação individual
         if (addedVariationIds.has(id)) return;
         const parent = Object.values(allKnownAds).find(ad => ad.dadosML?.variations?.some(v => v.id === id));
         if (!parent) return;
@@ -356,10 +349,8 @@ function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSucce
         addedVariationIds.add(id);
         const grade = variation?.attribute_combinations || [];
         const label = grade.map(g => `${g.name}: ${g.value_name}`).join(' / ') || `ID ${id}`;
-        const currentSku = variation?.seller_custom_field
-          || variation?.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name
-          || '';
-        rows.push({ parentId: parent.id, contaId: parent.contaId, variationId: id, label, currentSku, newSku: '' });
+        const currentSku = variation?.seller_custom_field || variation?.attributes?.find(a => a.id === 'SELLER_SKU')?.value_name || '';
+        rows.push({ parentId: parent.id, contaId: parent.contaId, variationId: id, label, currentSku, newSku: '', thumbnail: parent.thumbnail, isSimple: false });
       }
     });
     return rows;
@@ -367,26 +358,31 @@ function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSucce
 
   const [rows, setRows] = useState(() => buildRows());
 
+  // allSimple: todos os selecionados são anúncios simples (sem variações)
+  const allSimple = rows.every(r => r.isSimple);
+
+  // modo: null = pergunta, 'unico' = mesmo SKU para todos, 'individual' = um para cada
+  const [modo, setModo] = useState(() => (allSimple && rows.length > 1) ? null : 'individual');
+  const [skuUnico, setSkuUnico] = useState('');
+
   const updateSku = (idx, value) => {
     setRows(prev => prev.map((r, i) => i === idx ? { ...r, newSku: value } : r));
   };
 
   const handleSalvar = async () => {
-    const comSku = rows.filter(r => r.newSku.trim());
-    if (comSku.length === 0) return alert('Preencha ao menos um SKU.');
+    const rowsToSave = modo === 'unico'
+      ? (skuUnico.trim() ? rows.map(r => ({ ...r, newSku: skuUnico.trim() })) : [])
+      : rows.filter(r => r.newSku.trim());
+
+    if (rowsToSave.length === 0) return alert(modo === 'unico' ? 'Preencha o SKU.' : 'Preencha ao menos um SKU.');
     setIsLoading(true);
     try {
-      // Agrupa por anúncio pai para enviar uma chamada por anúncio
       const byParent = {};
-      comSku.forEach(r => {
-        if (!byParent[r.parentId]) byParent[r.parentId] = { contaId: r.contaId, variationId: r.variationId, skuMap: {}, simpleSku: null };
-        if (r.variationId) {
-          byParent[r.parentId].skuMap[r.variationId] = r.newSku.trim();
-        } else {
-          byParent[r.parentId].simpleSku = r.newSku.trim();
-        }
+      rowsToSave.forEach(r => {
+        if (!byParent[r.parentId]) byParent[r.parentId] = { contaId: r.contaId, skuMap: {}, simpleSku: null };
+        if (r.variationId) byParent[r.parentId].skuMap[r.variationId] = r.newSku.trim();
+        else byParent[r.parentId].simpleSku = r.newSku.trim();
       });
-
       for (const [parentId, data] of Object.entries(byParent)) {
         const hasVariations = Object.keys(data.skuMap).length > 0;
         const item = { id: parentId, contaId: data.contaId, hasVariations, variationsIds: Object.keys(data.skuMap) };
@@ -399,7 +395,6 @@ function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSucce
         const responseData = await res.json();
         if (!res.ok) throw new Error(responseData.erro);
       }
-
       alert('✅ Ação enviada para a fila!\nAcompanhe na aba "Gerenciador de Fila".');
       onSuccess();
     } catch (e) {
@@ -409,22 +404,118 @@ function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSucce
     }
   };
 
-  const totalPreenchidos = rows.filter(r => r.newSku.trim()).length;
+  const header = (title, subtitle) => (
+    <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl flex-shrink-0">
+      <div>
+        <h2 className="text-white font-black text-base">{title}</h2>
+        {subtitle && <p className="text-indigo-200 text-xs mt-0.5">{subtitle}</p>}
+      </div>
+      <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+    </div>
+  );
 
-  return (
+  const overlay = (children, maxW = 'max-w-lg') => (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 flex items-center justify-between rounded-t-xl flex-shrink-0">
-          <div>
-            <h2 className="text-white font-black text-base">Alterar SKU</h2>
-            <p className="text-indigo-200 text-xs mt-0.5">{rows.length} variação(ões) / anúncio(s)</p>
-          </div>
-          <button onClick={onClose} className="text-white/80 hover:text-white text-lg leading-none">✕</button>
+      <div className={`bg-white rounded-xl shadow-2xl w-full ${maxW} mx-4 flex flex-col max-h-[90vh]`} onClick={e => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+
+  // ── Tela 1: Perguntar modo (só para múltiplos simples) ──
+  if (modo === null) return overlay(
+    <>
+      {header('Alterar SKU', `${rows.length} anúncios selecionados`)}
+      <div className="p-6 space-y-3">
+        <p className="text-sm text-gray-600">Como deseja definir o SKU?</p>
+        <button
+          onClick={() => setModo('unico')}
+          className="w-full text-left px-4 py-3 border-2 border-indigo-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50 transition"
+        >
+          <div className="font-bold text-indigo-700 text-sm">Mesmo SKU para todos</div>
+          <div className="text-xs text-gray-500 mt-0.5">Um único valor aplicado aos {rows.length} anúncios</div>
+        </button>
+        <button
+          onClick={() => setModo('individual')}
+          className="w-full text-left px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-gray-400 hover:bg-gray-50 transition"
+        >
+          <div className="font-bold text-gray-700 text-sm">SKU diferente para cada anúncio</div>
+          <div className="text-xs text-gray-500 mt-0.5">Define um SKU individual por anúncio</div>
+        </button>
+      </div>
+    </>, 'max-w-sm'
+  );
+
+  // ── Tela 2a: Mesmo SKU para todos ──
+  if (modo === 'unico') return overlay(
+    <>
+      {header('Mesmo SKU para todos', `${rows.length} anúncio(s)`)}
+      <div className="p-5 space-y-4 overflow-y-auto flex-1">
+        <div>
+          <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide">Novo SKU</label>
+          <input
+            type="text"
+            value={skuUnico}
+            onChange={e => setSkuUnico(e.target.value)}
+            placeholder="Ex: SKU-001"
+            autoFocus
+            className="w-full px-3 py-2 border-2 border-indigo-300 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
         </div>
-        <div className="p-4 overflow-y-auto flex-1 space-y-2">
-          <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
-            Preencha o <strong>NOVO SKU</strong> para cada variação ou anúncio. Linhas em branco serão ignoradas.
-          </p>
+        <div className="space-y-1.5">
+          {rows.map((r, i) => (
+            <div key={i} className="flex items-center gap-3 px-3 py-2 bg-gray-50 rounded-lg">
+              {r.thumbnail
+                ? <img src={r.thumbnail} alt="" className="w-9 h-9 rounded object-cover flex-shrink-0" />
+                : <div className="w-9 h-9 bg-gray-200 rounded flex-shrink-0" />}
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-700 truncate font-medium">{r.label}</div>
+                {r.currentSku && <div className="text-[10px] font-mono text-gray-400">Atual: {r.currentSku}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="px-5 pb-5 pt-3 flex justify-between gap-3 flex-shrink-0 border-t">
+        <button onClick={() => setModo(null)} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">← Voltar</button>
+        <button onClick={handleSalvar} disabled={isLoading || !skuUnico.trim()} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
+          {isLoading ? 'Enviando...' : `Aplicar em ${rows.length} anúncio(s)`}
+        </button>
+      </div>
+    </>
+  );
+
+  // ── Tela 2b: Individual (simples com thumb, ou variações em tabela) ──
+  const totalPreenchidos = rows.filter(r => r.newSku.trim()).length;
+  return overlay(
+    <>
+      {header('Alterar SKU', `${rows.length} ${allSimple ? 'anúncio(s)' : 'variação(ões) / anúncio(s)'}`)}
+      <div className="p-4 overflow-y-auto flex-1 space-y-2">
+        <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+          Preencha o <strong>NOVO SKU</strong> para cada {allSimple ? 'anúncio' : 'variação'}. Linhas em branco serão ignoradas.
+        </p>
+        {allSimple ? (
+          <div className="space-y-2">
+            {rows.map((r, i) => (
+              <div key={i} className="flex items-center gap-3 px-3 py-2 border rounded-lg">
+                {r.thumbnail
+                  ? <img src={r.thumbnail} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                  : <div className="w-10 h-10 bg-gray-200 rounded flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-700 truncate font-medium">{r.label}</div>
+                  {r.currentSku && <div className="text-[10px] font-mono text-gray-400">Atual: {r.currentSku}</div>}
+                </div>
+                <input
+                  type="text"
+                  value={r.newSku}
+                  onChange={e => updateSku(i, e.target.value)}
+                  placeholder="novo SKU"
+                  className="w-32 px-2 py-1.5 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400 flex-shrink-0"
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs font-bold text-gray-500 uppercase border-b">
@@ -451,15 +542,18 @@ function ModalAlterarSku({ selectedIds, allKnownAds, usuarioId, onClose, onSucce
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="px-6 pb-5 pt-3 flex justify-end gap-3 flex-shrink-0 border-t">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
-          <button onClick={handleSalvar} disabled={isLoading || totalPreenchidos === 0} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
-            {isLoading ? 'Enviando...' : `Aplicar em ${totalPreenchidos} linha(s)`}
-          </button>
-        </div>
+        )}
       </div>
-    </div>
+      <div className="px-6 pb-5 pt-3 flex justify-between gap-3 flex-shrink-0 border-t">
+        {allSimple && rows.length > 1
+          ? <button onClick={() => setModo(null)} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">← Voltar</button>
+          : <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">Cancelar</button>
+        }
+        <button onClick={handleSalvar} disabled={isLoading || totalPreenchidos === 0} className="px-5 py-2 text-sm font-black text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
+          {isLoading ? 'Enviando...' : `Aplicar em ${totalPreenchidos} linha(s)`}
+        </button>
+      </div>
+    </>
   );
 }
 

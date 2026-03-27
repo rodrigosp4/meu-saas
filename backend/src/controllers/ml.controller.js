@@ -781,11 +781,11 @@ async syncAds(req, res) {
         where.preco = { ...(where.preco || {}), lte: Number(precoMax) };
       }
 
-      // ✅ CORREÇÃO: Filtro "Sem SKU" mais robusto
       if (semSku === 'true') {
         where.AND = [
           ...(where.AND || []),
-          { OR: [{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] }
+          { OR: [{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] },
+          { skusVariacoes: { isEmpty: true } }
         ];
       }
 
@@ -1063,7 +1063,11 @@ async syncAds(req, res) {
       }
 
       if (semSku === 'true') {
-        where.AND = [...(where.AND || []), { OR:[{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] }];
+        where.AND = [
+          ...(where.AND || []),
+          { OR: [{ sku: null }, { sku: '' }, { sku: '-1' }, { sku: 'S/ SKU' }] },
+          { skusVariacoes: { isEmpty: true } }
+        ];
       }
 
       if (search) {

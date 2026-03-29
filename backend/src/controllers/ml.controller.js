@@ -1797,14 +1797,14 @@ async corrigirPreco(req, res) {
       const {
         userId, items, modo, regraId, precoManual,
         precoBaseManual, inflar, reduzir, removerPromocoes,
-        enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase
+        enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase
       } = req.body;
 
       if (!userId || !items || !Array.isArray(items)) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
-      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase };
+      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase };
 
       const tarefa = await prisma.tarefaFila.create({
         data: {

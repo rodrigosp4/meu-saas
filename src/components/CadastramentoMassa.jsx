@@ -107,7 +107,7 @@ export default function CadastramentoMassa({ usuarioId }) {
   // == PASSO 2: Setup (Contas, Regra, Tipos, Estratégia) ==
   const [contasSelecionadas, setContasSelecionadas] = useState([]); // ✅ Array de IDs das contas selecionadas
   const[tiposAnuncio, setTiposAnuncio] = useState({ classico: false, premium: true }); // ✅ Clássico / Premium
-  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false }); // ✅ Estratégia de preço
+  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false, toleranciaPromo: 0 }); // ✅ Estratégia de preço
   const [configAtacado, setConfigAtacado] = useState(null);
   const [posicaoGlobal, setPosicaoGlobal] = useState(''); // ADICIONE ESTA LINHA
   
@@ -623,6 +623,7 @@ export default function CadastramentoMassa({ usuarioId }) {
                 enviarAtacado: strategy.enviarAtacado || false,
                 inflar: strategy.inflar || 0,
                 ativarPromocoes: strategy.ativarPromocoes || false,
+                toleranciaPromo: strategy.ativarPromocoes ? (Number(strategy.toleranciaPromo) || 0) : 0,
               })
             });
 
@@ -848,6 +849,30 @@ export default function CadastramentoMassa({ usuarioId }) {
                         </p>
                       </div>
                     </label>
+                    {strategy.ativarPromocoes && strategy.inflar > 0 && (
+                      <label className="flex items-start gap-2 cursor-pointer ml-5 mt-1">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 w-3.5 h-3.5 accent-purple-400 cursor-pointer flex-shrink-0"
+                          checked={(strategy.toleranciaPromo || 0) > 0}
+                          onChange={e => setStrategy(p => ({ ...p, toleranciaPromo: e.target.checked ? 2 : 0 }))}
+                        />
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] font-semibold text-purple-600">Aceitar promoções que ultrapassem a margem em até</span>
+                          {(strategy.toleranciaPromo || 0) > 0 && (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number" min="0.1" max="20" step="0.5"
+                                value={strategy.toleranciaPromo}
+                                onChange={e => setStrategy(p => ({ ...p, toleranciaPromo: Number(e.target.value) || 0 }))}
+                                className="w-14 px-2 py-0.5 text-[10px] border border-purple-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-400"
+                              />
+                              <span className="text-[10px] text-gray-400">% (aceita até {strategy.inflar + Number(strategy.toleranciaPromo)}%)</span>
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    )}
                   </div>
                 )}
               </div>

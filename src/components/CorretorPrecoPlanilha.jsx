@@ -156,6 +156,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
   const [removerPromocoes, setRemoverPromocoes] = useState(false);
   const [enviarAtacado, setEnviarAtacado] = useState(false);
   const [ativarPromocoes, setAtivarPromocoes] = useState(false);
+  const [toleranciaPromo, setTolercanciaPromo] = useState(0);
 
   // Resultados
   const [anunciosMap, setAnunciosMap] = useState({}); // sku → ad[]
@@ -380,6 +381,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
           removerPromocoes,
           enviarAtacado,
           ativarPromocoes,
+          toleranciaPromo: ativarPromocoes ? (Number(toleranciaPromo) || 0) : 0,
           precosCSV,
           precosCSVTipoBase: tipoBase,
         }),
@@ -525,42 +527,50 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
                   <select value={tipoBase} onChange={e => setTipoBase(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400">
                     <option value="venda">Preço de Venda</option>
                     <option value="custo">Preço de Custo</option>
-                    <option value="promocional">Preço Promocional</option>
+                    <option value="promocional">Preço Promocional (se existir, senão usa Venda)</option>
                   </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {tipoBase === 'venda' && 'Usa a coluna de preço de venda da planilha como base do cálculo.'}
+                    {tipoBase === 'custo' && 'Usa a coluna de preço de custo da planilha como base do cálculo.'}
+                    {tipoBase === 'promocional' && 'Usa o preço promocional quando preenchido; caso vazio, usa o preço de venda.'}
+                  </p>
                 </div>
 
                 {/* Regra */}
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Regra de Markup</label>
                   <select value={regraId} onChange={e => setRegraId(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400">
-                    <option value="">Sem regra (preço direto)</option>
+                    <option value="">Sem regra — publica o preço base diretamente</option>
                     {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
                   </select>
                   {regrasPreco.length === 0 && (
                     <p className="text-xs text-amber-600 mt-1">Nenhuma regra cadastrada. Configure em Configurações API.</p>
                   )}
+                  {!regraId && <p className="text-xs text-gray-400 mt-1">O preço da planilha será publicado no ML sem nenhum cálculo adicional de margem ou tarifa.</p>}
                 </div>
 
                 {/* Inflar / Reduzir */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Inflar (%)</label>
+                    <label className="block text-xs font-bold text-purple-600 uppercase tracking-wide mb-1">Inflar Preço (%)</label>
                     <input type="number" min="0" max="99" step="0.5" value={inflar} onChange={e => setInflar(e.target.value)}
                       placeholder="0" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+                    <p className="text-[10px] text-gray-400 mt-1">Publica o preço X% acima do calculado para ter margem para promoções do ML.</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Reduzir (%)</label>
+                    <label className="block text-xs font-bold text-red-500 uppercase tracking-wide mb-1">Fugir do Frete Grátis (%)</label>
                     <input type="number" min="0" max="99" step="0.5" value={reduzir} onChange={e => setReduzir(e.target.value)}
                       placeholder="0" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+                    <p className="text-[10px] text-gray-400 mt-1">Se o preço final ficar ≥ R$79, reduz até X% para tentar cravar em R$78,99.</p>
                   </div>
                 </div>
 
                 {/* Opções */}
                 <div className="space-y-1.5 pt-1 border-t border-gray-100">
                   {[
-                    { key: 'removerPromocoes', label: 'Remover Promoções', val: removerPromocoes, set: setRemoverPromocoes },
-                    { key: 'atacado', label: `Atacado ${configAtacado?.ativo ? '(configurado)' : '(inativo)'}`, val: enviarAtacado, set: setEnviarAtacado },
-                    { key: 'promos', label: 'Ativar Campanhas ML', val: ativarPromocoes, set: setAtivarPromocoes },
+                    { key: 'removerPromocoes', label: 'Remover promoções ativas antes de atualizar o preço', val: removerPromocoes, set: setRemoverPromocoes },
+                    { key: 'atacado', label: `Enviar preços de atacado (B2B) ${configAtacado?.ativo ? '— ' + configAtacado.faixas?.length + ' faixa(s) configurada(s)' : '(inativo)'}`, val: enviarAtacado, set: setEnviarAtacado },
+                    { key: 'promos', label: 'Ativar campanhas de promoção do ML automaticamente', val: ativarPromocoes, set: setAtivarPromocoes },
                   ].map(opt => (
                     <label key={opt.key} className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={opt.val} onChange={e => opt.set(e.target.checked)}
@@ -568,6 +578,23 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
                       <span className="text-xs text-gray-600">{opt.label}</span>
                     </label>
                   ))}
+                  {ativarPromocoes && inflar > 0 && (
+                    <div className="ml-5 space-y-1">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={toleranciaPromo > 0} onChange={e => setTolercanciaPromo(e.target.checked ? 2 : 0)}
+                          className="rounded border-purple-300 text-purple-500" />
+                        <span className="text-xs text-purple-600 font-medium">Aceitar promoções que ultrapassem a margem em até</span>
+                      </label>
+                      {toleranciaPromo > 0 && (
+                        <div className="flex items-center gap-2 ml-5">
+                          <input type="number" min="0.1" max="20" step="0.5" value={toleranciaPromo}
+                            onChange={e => setTolercanciaPromo(Number(e.target.value) || 0)}
+                            className="w-14 px-2 py-0.5 text-xs border border-purple-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-400" />
+                          <span className="text-xs text-gray-400">% (aceita até {Number(inflar) + Number(toleranciaPromo)}%)</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Buscar */}

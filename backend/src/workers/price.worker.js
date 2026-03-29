@@ -81,7 +81,7 @@ const TIPOS_SEM_PROMOTION_ID = new Set(['DOD', 'LIGHTNING']);
 const TIPOS_COM_OFFER_ID = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
 const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
 
-async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal) {
+async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal, toleranciaPromo = 0) {
   try {
     const res = await axios.get(`https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 });
     const lista = Array.isArray(res.data) ? res.data : (res.data ? [res.data] : []);
@@ -104,10 +104,11 @@ async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal) {
     for (const promo of candidatos) {
       const sellerPct = typeof promo.seller_percentage === 'number' ? promo.seller_percentage : null;
 
+      const limiteMax = inflarNum + (Number(toleranciaPromo) || 0);
       let deveAtivar = false;
-      if (inflarNum === 0) { deveAtivar = true; } 
-      else if (sellerPct !== null) { deveAtivar = sellerPct <= inflarNum; } 
-      else if (TIPOS_COM_PRECO.has(promo.type)) { deveAtivar = true; } 
+      if (inflarNum === 0) { deveAtivar = true; }
+      else if (sellerPct !== null) { deveAtivar = sellerPct <= limiteMax; }
+      else if (TIPOS_COM_PRECO.has(promo.type)) { deveAtivar = true; }
       else { deveAtivar = false; erros.push(`[${promo.type}] Impossível validar margem.`); }
       
       if (!deveAtivar) {
@@ -233,7 +234,7 @@ function calcularPrecoCorrigir(precoBase, inflar, reduzir) {
 
 // 🚀 START MAIN WORKER
 export const priceWorker = new Worker('update-price', async (job) => {
-  const { tarefaId, userId, items, modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase } = job.data;
+  const { tarefaId, userId, items, modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase } = job.data;
 
   const tarefaExiste = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
   if (!tarefaExiste) return { success: false, message: 'Tarefa excluída' };
@@ -481,7 +482,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
       }
 
       if (ativarPromocoes) {
-        const logPromo = await ativarPromocoesAuto(item.id, conta.accessToken, inflar || 0, precoNum);
+        const logPromo = await ativarPromocoesAuto(item.id, conta.accessToken, inflar || 0, precoNum, toleranciaPromo || 0);
         logDesteItem += ` | Promo: ${logPromo}`;
       }
 

@@ -113,6 +113,30 @@ export default function TabelaContas(props) {
                 </p>
               </div>
             </label>
+            {strategy.ativarPromocoes && (
+              <div className="ml-8 mt-2 space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 cursor-pointer accent-purple-400"
+                    checked={(strategy.toleranciaPromo || 0) > 0}
+                    onChange={e => setStrategy(p => ({ ...p, toleranciaPromo: e.target.checked ? 2 : 0 }))}
+                  />
+                  <span className="text-xs font-semibold text-purple-600">Aceitar promoções que ultrapassem a margem em até</span>
+                </label>
+                {(strategy.toleranciaPromo || 0) > 0 && (
+                  <div className="flex items-center gap-2 ml-6">
+                    <input
+                      type="number" min="0.1" max="20" step="0.5"
+                      value={strategy.toleranciaPromo}
+                      onChange={e => setStrategy(p => ({ ...p, toleranciaPromo: Number(e.target.value) || 0 }))}
+                      className="w-16 px-2 py-1 text-xs border border-purple-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-400"
+                    />
+                    <span className="text-xs text-gray-400">% (aceita até {strategy.inflar + Number(strategy.toleranciaPromo)}%)</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

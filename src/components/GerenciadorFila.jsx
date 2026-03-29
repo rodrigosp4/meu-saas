@@ -16,7 +16,7 @@ function extrairAtributosObrigatorios(texto) {
 }
 
 // Coloriza uma linha de log baseado no conteúdo
-function LogLine({ line, index }) {
+function LogLine({ line, index, searchTerm }) {
   if (!line) return null;
 
   const isAttrRequired =
@@ -35,6 +35,19 @@ function LogLine({ line, index }) {
   else if (line.includes('Erro:')) cls = 'text-red-400';
   else if (line.startsWith('[ID:') && line.includes('| Lmp Promo:')) cls = 'text-emerald-400';
   else if (line.startsWith('[ID:')) cls = 'text-yellow-300';
+
+  if (searchTerm) {
+    const parts = line.split(new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+    return (
+      <div key={index} className={`leading-5 ${cls}`}>
+        {parts.map((part, i) =>
+          part.toLowerCase() === searchTerm.toLowerCase()
+            ? <mark key={i} className="bg-yellow-400 text-gray-900 rounded px-0.5">{part}</mark>
+            : part
+        )}
+      </div>
+    );
+  }
 
   return <div key={index} className={`leading-5 ${cls}`}>{line}</div>;
 }
@@ -66,6 +79,7 @@ function ReprocessForm({ usuarioId, tarefaId, erros, onClose, onReprocessed }) {
   const [removerPromocoes, setRemoverPromocoes] = useState(false);
   const [enviarAtacado, setEnviarAtacado] = useState(false);
   const [ativarPromocoes, setAtivarPromocoes] = useState(false);
+  const [toleranciaPromo, setTolercanciaPromo] = useState(0);
   const [carregando, setCarregando] = useState(false);
   const [loadingRegras, setLoadingRegras] = useState(true);
 
@@ -84,7 +98,7 @@ function ReprocessForm({ usuarioId, tarefaId, erros, onClose, onReprocessed }) {
   const confirmar = async () => {
     setCarregando(true);
     try {
-      const payloadOverride = { modo, regraId: modo === 'regra' ? regraId : undefined, inflar: Number(inflar), reduzir: Number(reduzir), removerPromocoes, enviarAtacado, ativarPromocoes };
+      const payloadOverride = { modo, regraId: modo === 'regra' ? regraId : undefined, inflar: Number(inflar), reduzir: Number(reduzir), removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo: ativarPromocoes ? (Number(toleranciaPromo) || 0) : 0 };
       const res = await fetch(`/api/fila/${tarefaId}/reprocessar-erros`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -152,6 +166,22 @@ function ReprocessForm({ usuarioId, tarefaId, erros, onClose, onReprocessed }) {
               <input type="checkbox" checked={ativarPromocoes} onChange={e => setAtivarPromocoes(e.target.checked)} className="accent-orange-500" />
               Ativar promoções depois
             </label>
+            {ativarPromocoes && inflar > 0 && (
+              <div className="ml-5 space-y-1">
+                <label className="flex items-center gap-2 text-xs text-purple-400 cursor-pointer">
+                  <input type="checkbox" checked={toleranciaPromo > 0} onChange={e => setTolercanciaPromo(e.target.checked ? 2 : 0)} className="accent-purple-400" />
+                  Aceitar promoções que ultrapassem a margem em até
+                </label>
+                {toleranciaPromo > 0 && (
+                  <div className="flex items-center gap-2 ml-5">
+                    <input type="number" min="0.1" max="20" step="0.5" value={toleranciaPromo}
+                      onChange={e => setTolercanciaPromo(Number(e.target.value) || 0)}
+                      className="w-14 bg-gray-800 border border-purple-600 text-white text-xs rounded px-2 py-1" />
+                    <span className="text-xs text-gray-500">% (aceita até {Number(inflar) + Number(toleranciaPromo)}%)</span>
+                  </div>
+                )}
+              </div>
+            )}
             <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
               <input type="checkbox" checked={enviarAtacado} onChange={e => setEnviarAtacado(e.target.checked)} className="accent-orange-500" />
               Enviar preços atacado (B2B)
@@ -170,12 +200,13 @@ function ReprocessForm({ usuarioId, tarefaId, erros, onClose, onReprocessed }) {
   );
 }
 
-function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
+function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '' }) {
   const [detalhes, setDetalhes] = useState(tarefa.detalhes || '');
   const [status, setStatus] = useState(tarefa.status);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showReprocessForm, setShowReprocessForm] = useState(false);
   const [retomando, setRetomando] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
   const logEndRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -219,6 +250,9 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
 
   const erros = lines.filter(l => l.includes('Erro:')).length;
   const sucessos = lines.filter(l => l.startsWith('[ID:') && !l.includes('Erro:')).length;
+  const filteredLines = searchTerm
+    ? lines.map((line, i) => ({ line, i })).filter(({ line }) => line.toLowerCase().includes(searchTerm.toLowerCase()))
+    : lines.map((line, i) => ({ line, i }));
   const atributosObrigatorios = extrairAtributosObrigatorios(detalhes);
 
   const copyLog = () => {
@@ -350,6 +384,25 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
           </div>
         )}
 
+        {/* Barra de busca nos logs */}
+        <div className="px-4 py-2 bg-gray-850 border-b border-gray-700 flex-shrink-0 flex items-center gap-2" style={{backgroundColor:'#111827'}}>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Pesquisar nos logs..."
+            className="flex-1 bg-gray-800 border border-gray-600 text-gray-200 text-xs rounded px-3 py-1.5 focus:outline-none focus:border-blue-500 placeholder-gray-500"
+          />
+          {searchTerm && (
+            <span className="text-[11px] text-gray-400 whitespace-nowrap">
+              {filteredLines.length} resultado{filteredLines.length !== 1 ? 's' : ''}
+            </span>
+          )}
+          {searchTerm && (
+            <button onClick={() => setSearchTerm('')} className="text-gray-500 hover:text-gray-300 text-sm leading-none">&times;</button>
+          )}
+        </div>
+
         {/* Conteúdo dos logs */}
         <div
           ref={containerRef}
@@ -358,8 +411,10 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
         >
           {lines.length === 0 ? (
             <p className="text-gray-500">Aguardando logs...</p>
+          ) : filteredLines.length === 0 ? (
+            <p className="text-gray-500 italic">Nenhum resultado para &quot;{searchTerm}&quot;.</p>
           ) : (
-            lines.map((line, i) => <LogLine key={i} line={line} index={i} />)
+            filteredLines.map(({ line, i }) => <LogLine key={i} line={line} index={i} searchTerm={searchTerm} />)
           )}
           <div ref={logEndRef} />
         </div>
@@ -390,6 +445,7 @@ export default function GerenciadorFila({ usuarioId }) {
   const [total, setTotal] = useState(0);
   const [filtroStatus, setFiltroStatus] = useState('Todos');
   const [filtroTipo] = useState('Todos');
+  const [searchLog, setSearchLog] = useState('');
 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
@@ -470,6 +526,10 @@ export default function GerenciadorFila({ usuarioId }) {
     }
   };
 
+  const tarefasFiltradas = searchLog
+    ? tarefas.filter(t => t.detalhes?.toLowerCase().includes(searchLog.toLowerCase()))
+    : tarefas;
+
   const totalPages = Math.ceil(total / itemsPerPage);
 
   return (
@@ -481,6 +541,7 @@ export default function GerenciadorFila({ usuarioId }) {
           usuarioId={usuarioId}
           onClose={() => setLogModal(null)}
           onReprocessed={() => { setLogModal(null); fetchFila(); }}
+          initialSearch={searchLog}
         />
       )}
 
@@ -489,7 +550,14 @@ export default function GerenciadorFila({ usuarioId }) {
           <h3 className="text-xl font-bold text-gray-800">Gerenciador de Fila Unificado</h3>
           <p className="text-sm text-gray-500">Pendentes (Agora): {tarefas.filter(t => t.status === 'PENDENTE').length}</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center flex-wrap">
+          <input
+            type="text"
+            value={searchLog}
+            onChange={e => setSearchLog(e.target.value)}
+            placeholder="Pesquisar nos logs..."
+            className="border rounded px-3 py-1.5 text-sm outline-none focus:border-blue-400 w-56"
+          />
           <div className="flex items-center gap-2">
             <label className="text-sm font-semibold text-gray-600">Status:</label>
             <select
@@ -527,10 +595,10 @@ export default function GerenciadorFila({ usuarioId }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {tarefas.length === 0 ? (
-                <tr><td colSpan="6" className="text-center py-8 text-gray-500">A fila está vazia.</td></tr>
+              {tarefasFiltradas.length === 0 ? (
+                <tr><td colSpan="6" className="text-center py-8 text-gray-500">{searchLog ? `Nenhum log contém "${searchLog}".` : 'A fila está vazia.'}</td></tr>
               ) : (
-                tarefas.map(t => {
+                tarefasFiltradas.map(t => {
                   const { isLive, progress } = parseLogContent(t.detalhes);
                   return (
                     <tr key={t.id} className="hover:bg-gray-50 transition-colors">

@@ -239,6 +239,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
 
   // Promoções e Atacado
   const [ativarPromocoes, setAtivarPromocoes] = useState(false);
+  const [toleranciaPromo, setTolercanciaPromo] = useState(0);
   const [enviarAtacado, setEnviarAtacado] = useState(false);
   const [configAtacado, setConfigAtacado] = useState(null);
   const [inflarPct, setInflarPct] = useState(0);
@@ -1062,6 +1063,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
               payload,
               description: descricao,
               ativarPromocoes,
+              toleranciaPromo: ativarPromocoes ? (Number(toleranciaPromo) || 0) : 0,
               enviarAtacado,
               inflar: Number(inflarPct) || 0,
               compatibilidades: compatRapida ? compatRapida.slice(0, 200) : perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : [],
@@ -1910,6 +1912,23 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                 min="0" max="50" step="1"
               />
               <span style={{ fontSize: '0.8em', color: '#888' }}>% (publica inflado, promoção desconta)</span>
+            </div>
+          )}
+          {ativarPromocoes && inflarPct > 0 && (
+            <div style={{ marginTop: '8px', marginLeft: '4px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={toleranciaPromo > 0} onChange={e => setTolercanciaPromo(e.target.checked ? 2 : 0)}
+                  style={{ width: '14px', height: '14px', accentColor: '#9333ea', cursor: 'pointer' }} />
+                <span style={{ fontSize: '0.78em', fontWeight: 600, color: '#7c3aed' }}>Aceitar promoções que ultrapassem a margem em até</span>
+              </label>
+              {toleranciaPromo > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', marginLeft: '20px' }}>
+                  <input type="number" min="0.1" max="20" step="0.5" value={toleranciaPromo}
+                    onChange={e => setTolercanciaPromo(Number(e.target.value) || 0)}
+                    style={{ width: '56px', padding: '3px 6px', border: '1px solid #d8b4fe', borderRadius: '4px', fontSize: '0.78em', outline: 'none' }} />
+                  <span style={{ fontSize: '0.75em', color: '#888' }}>% (aceita até {Number(inflarPct) + Number(toleranciaPromo)}%)</span>
+                </div>
+              )}
             </div>
           )}
 

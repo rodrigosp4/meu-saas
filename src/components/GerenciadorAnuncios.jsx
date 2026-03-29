@@ -1020,6 +1020,7 @@ function ModalCorrigirPreco({ anunciosSelecionados, regrasPreco, usuarioId, conf
   const [removerPromocoes, setRemoverPromocoes] = useState(false);
   const [enviarAtacado, setEnviarAtacado] = useState(false);
   const [ativarPromocoes, setAtivarPromocoes] = useState(false);
+  const [toleranciaPromo, setTolercanciaPromo] = useState(0);
 
 const [precosTinyMap, setPrecosTinyMap] = useState({});
   const [loadingPrecos, setLoadingPrecos] = useState(true);
@@ -1173,6 +1174,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
         removerPromocoes,
         enviarAtacado,
         ativarPromocoes,
+        toleranciaPromo: ativarPromocoes ? (Number(toleranciaPromo) || 0) : 0,
       };
 
       const res = await fetch('/api/ml/corrigir-preco', {
@@ -1409,6 +1411,33 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
               </p>
             </div>
           </label>
+          {ativarPromocoes && inflar > 0 && (
+            <label className="flex items-start gap-3 cursor-pointer select-none ml-7">
+              <input
+                type="checkbox"
+                checked={toleranciaPromo > 0}
+                onChange={e => setTolercanciaPromo(e.target.checked ? 2 : 0)}
+                className="mt-0.5 w-4 h-4 accent-purple-400 cursor-pointer flex-shrink-0"
+              />
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-semibold text-purple-600">
+                  Aceitar promoções que ultrapassem a margem em até
+                </span>
+                {toleranciaPromo > 0 && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0.1" max="20" step="0.5"
+                      value={toleranciaPromo}
+                      onChange={e => setTolercanciaPromo(Number(e.target.value) || 0)}
+                      className="w-16 px-2 py-1 text-xs border border-purple-300 rounded focus:outline-none focus:ring-1 focus:ring-purple-400"
+                    />
+                    <span className="text-xs text-gray-400">% (aceita até {inflar + Number(toleranciaPromo)}% sem alterar o preço)</span>
+                  </div>
+                )}
+              </div>
+            </label>
+          )}
         </div>
 
         {/* Footer */}

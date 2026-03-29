@@ -70,7 +70,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [valoresAtributos, setValoresAtributos] = useState({});
 
   // Estrategia e Contas
-  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false });
+  const [strategy, setStrategy] = useState({ inflar: 0, reduzir: 0, enviarAtacado: false, ativarPromocoes: false, toleranciaPromo: 0 });
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
   const [configPublicacao, setConfigPublicacao] = useState({});
@@ -647,6 +647,7 @@ const publicarAnuncios = async () => {
               enviarAtacado: strategy.enviarAtacado || false,
               inflar: strategy.inflar || 0,
               ativarPromocoes: strategy.ativarPromocoes || false,
+              toleranciaPromo: strategy.ativarPromocoes ? (Number(strategy.toleranciaPromo) || 0) : 0,
               compatibilidades: compatRapida ? compatRapida.slice(0, 200) : (perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : []),
               posicoes: Array.from(posicoesSelecionadas),
             })

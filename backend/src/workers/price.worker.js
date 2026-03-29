@@ -197,7 +197,7 @@ function resolverPrecoBase(precosTiny, tipoBase) {
   return pPromo > 0 ? pPromo : pVenda;
 }
 
-function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0) {
+function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0, tarifaMLOverride = null, fixedFeeOverride = null) {
   if (!precoBase || !regra || isNaN(precoBase) || precoBase <= 0) return null;
   let custoBaseOriginal = precoBase;
   let totalTaxasVendaPerc = 0;
@@ -206,12 +206,13 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
     else if (v.tipo === 'perc_custo') custoBaseOriginal += custoBaseOriginal * (v.valor / 100);
     else if (v.tipo === 'perc_venda') totalTaxasVendaPerc += v.valor;
   });
-  const tarifaML = tipoML === 'premium' ? 16 : 11;
+  const tarifaML = tarifaMLOverride ?? (tipoML === 'premium' ? 16 : 11);
+  const fixedFee = fixedFeeOverride ?? 6;
   const netFactor = 1 - ((tarifaML + totalTaxasVendaPerc) / 100);
   if (netFactor <= 0) return Math.round(custoBaseOriginal * 100) / 100;
 
   const inflarSafe = Math.min(Math.max(0, inflar || 0), 99);
-  let precoAlvo = (custoBaseOriginal + 6) / netFactor;
+  let precoAlvo = (custoBaseOriginal + fixedFee) / netFactor;
   let precoFinal = inflarSafe > 0 ? precoAlvo / (1 - inflarSafe / 100) : precoAlvo;
 
   if (precoFinal >= 79) {
@@ -232,7 +233,7 @@ function calcularPrecoCorrigir(precoBase, inflar, reduzir) {
 
 // 🚀 START MAIN WORKER
 export const priceWorker = new Worker('update-price', async (job) => {
-  const { tarefaId, userId, items, modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes } = job.data;
+  const { tarefaId, userId, items, modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase } = job.data;
 
   const tarefaExiste = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
   if (!tarefaExiste) return { success: false, message: 'Tarefa excluída' };
@@ -243,6 +244,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
 
   const contasCache = {};
   const precosTinyMap = {};
+  const tarifasCache = {};
   const [regras, configAtacadoDb, userConfig] = await Promise.all([
     prisma.regraPreco.findMany({ where: { userId } }),
     prisma.configAtacado.findUnique({ where: { userId } }),
@@ -253,11 +255,18 @@ export const priceWorker = new Worker('update-price', async (job) => {
   const tinyLimits = getTinyRateLimit(userConfig?.tinyPlano);
   const regra = regras.find(r => r.id === regraId);
   const faixasAtacado = (enviarAtacado && configAtacadoDb?.ativo && Array.isArray(configAtacadoDb.faixas)) ? configAtacadoDb.faixas : [];
+  const modoCSV = modo === 'csv';
 
   detalhesLogs.push(`>> Setup: Atacado=${enviarAtacado ? 'Sim' : 'Não'} | Promo=${ativarPromocoes ? 'Sim' : 'Não'} | Tiny=${tinyToken ? 'Conectado' : 'Não'}`);
 
+  // Modo CSV: pré-popula precosTinyMap com dados da planilha (sem chamar Tiny ERP)
+  if (modoCSV && precosCSV && typeof precosCSV === 'object') {
+    Object.assign(precosTinyMap, precosCSV);
+    detalhesLogs.push(`>> Modo CSV: ${Object.keys(precosCSV).length} SKU(s) importados da planilha.`);
+  }
+
   // ✅ PRÉ-CARREGAMENTO ROBUSTO DO TINY ERP COM LÓGICA DE CHUNKS E ATUALIZAÇÃO DA TELA
-  if (tinyToken && modo !== 'manual') {
+  if (tinyToken && modo !== 'manual' && !modoCSV) {
     const skusConhecidos = [...new Set(items.map(a => a.sku).filter(Boolean))];
     if (skusConhecidos.length > 0) {
       
@@ -364,14 +373,14 @@ export const priceWorker = new Worker('update-price', async (job) => {
       }
       if (skuDoAnuncio) skuDoAnuncio = String(skuDoAnuncio).trim();
 
-      if (skuDoAnuncio && tinyToken && precosTinyMap[skuDoAnuncio] === undefined) {
+      if (skuDoAnuncio && tinyToken && precosTinyMap[skuDoAnuncio] === undefined && !modoCSV) {
         const precosTiny = await fetchPrecoTiny(skuDoAnuncio, tinyToken, tinyLimits);
         precosTinyMap[skuDoAnuncio] = (precosTiny && !precosTiny.error) ? precosTiny : (precosTiny?.error ? precosTiny : 'NOT_FOUND');
       }
 
       // Se o SKU tem erro retryable do pré-carregamento → relança para o sistema de retry exponencial
       const erroTinyPreload = precosTinyMap[skuDoAnuncio]?.error;
-      if (skuDoAnuncio && tinyToken && erroTinyPreload) {
+      if (skuDoAnuncio && tinyToken && erroTinyPreload && !modoCSV) {
         const isTokenInvalido = erroTinyPreload.includes('Token') || erroTinyPreload.includes('inválido');
         if (!isTokenInvalido) {
           // Rate limit, rede, timeout → retryable; token inválido → falha permanente
@@ -384,9 +393,19 @@ export const priceWorker = new Worker('update-price', async (job) => {
       let precoNum = 0;
       if (modo === 'manual') {
         precoNum = calcularPrecoCorrigir(Number(precoManual), inflar || 0, reduzir || 0);
+      } else if (modoCSV && !regra) {
+        // CSV sem regra: usa preço direto da planilha com inflar/reduzir
+        const dadosCSV = skuDoAnuncio ? precosTinyMap[skuDoAnuncio] : null;
+        if (dadosCSV && dadosCSV !== 'NOT_FOUND' && !dadosCSV.error) {
+          const tipoBase = precosCSVTipoBase || 'venda';
+          const precoBase = tipoBase === 'custo' ? (Number(dadosCSV.preco_custo) || Number(dadosCSV.preco) || 0)
+                          : tipoBase === 'promocional' ? (Number(dadosCSV.preco_promocional) || Number(dadosCSV.preco) || 0)
+                          : Number(dadosCSV.preco) || 0;
+          precoNum = calcularPrecoCorrigir(precoBase, inflar || 0, reduzir || 0);
+        }
       } else if (regra) {
         let precoBaseItem = 0;
-        if (tinyToken && skuDoAnuncio) {
+        if ((tinyToken || modoCSV) && skuDoAnuncio) {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
           if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) precoBaseItem = resolverPrecoBase(dadosTiny, regra.precoBase || 'promocional');
         } else {
@@ -394,24 +413,39 @@ export const priceWorker = new Worker('update-price', async (job) => {
         }
 
         if (precoBaseItem > 0) {
+          const logisticType = adData.shipping?.logistic_type || (conta.logistica === 'ME1' ? 'default' : 'drop_off');
+          const tarifaCacheKey = `${adData.listing_type_id}|${adData.category_id}|${logisticType}`;
+          if (!tarifasCache[tarifaCacheKey]) {
+            tarifasCache[tarifaCacheKey] = await mlService.getListingFees({
+              accessToken: conta.accessToken,
+              price: adData.price || precoBaseItem,
+              listingTypeId: adData.listing_type_id || 'gold_pro',
+              categoryId: adData.category_id,
+              logisticType,
+            }).catch(() => ({ percentageFee: tipoML === 'premium' ? 16 : 11, fixedFee: 6 }));
+          }
+          const { percentageFee: tarifaMLReal, fixedFee: fixedFeeReal } = tarifasCache[tarifaCacheKey];
+
           let custoFrete = 0;
           if (conta.logistica !== 'ME1') {
             custoFrete = await mlService.simulateShipping({
               accessToken: conta.accessToken, sellerId: conta.id, itemPrice: precoBaseItem * 2,
-              categoryId: adData.category_id, listingTypeId: adData.listing_type_id || 'gold_pro', itemId: item.id
+              categoryId: adData.category_id, listingTypeId: adData.listing_type_id || 'gold_pro',
+              itemId: item.id, zipCode: userConfig?.cepOrigem
             }).catch(() => 0);
           }
-          precoNum = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar || 0, reduzir || 0, custoFrete);
+          precoNum = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar || 0, reduzir || 0, custoFrete, tarifaMLReal, fixedFeeReal);
         }
       }
 
       if (!precoNum || isNaN(precoNum) || precoNum <= 0) {
         if (!skuDoAnuncio) throw new Error(`Sem SKU.`);
-        if (tinyToken) {
+        if (tinyToken || modoCSV) {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
-          if (dadosTiny && dadosTiny.error) throw new Error(`Tiny ERP: ${dadosTiny.error}`);
-          const estadoMapa = dadosTiny === 'NOT_FOUND' ? 'NOT_FOUND' : (dadosTiny === undefined ? 'não buscado' : `preco=${dadosTiny?.preco}`);
-          throw new Error(`Tiny não retornou preço. [SKU: "${skuDoAnuncio}", mapa: ${estadoMapa}]`);
+          if (dadosTiny && dadosTiny.error) throw new Error(`${modoCSV ? 'CSV' : 'Tiny ERP'}: ${dadosTiny.error}`);
+          const fonte = modoCSV ? 'planilha CSV' : 'Tiny ERP';
+          const estadoMapa = dadosTiny === 'NOT_FOUND' ? 'NOT_FOUND' : (dadosTiny === undefined ? 'não encontrado' : `preco=${dadosTiny?.preco}`);
+          throw new Error(`${fonte} não retornou preço. [SKU: "${skuDoAnuncio}", mapa: ${estadoMapa}]`);
         } else {
           throw new Error(`Faltando preço base.`);
         }

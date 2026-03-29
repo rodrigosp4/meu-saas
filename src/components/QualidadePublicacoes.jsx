@@ -709,20 +709,20 @@ ${jsonTemplate}
   );
 }
 
-const CACHE_KEY = 'qualidade_skumap_v3';
-const PERF_CACHE_KEY = 'qualidade_perf_v1';
+const getCacheKey = (uid) => uid ? `qualidade_skumap_v3_${uid}` : 'qualidade_skumap_v3';
+const getPerfCacheKey = (uid) => uid ? `qualidade_perf_v1_${uid}` : 'qualidade_perf_v1';
 
-// Cache em memória (sobrevive à troca de telas na mesma sessão, sem limitação de quota)
-let _memCache = { skuMap: null, ts: null };
+// Cache em memória por userId (sobrevive à troca de telas na mesma sessão, sem limitação de quota)
+let _memCache = {}; // { [userId]: { skuMap, ts } }
 
-function lerPerfCache() {
+function lerPerfCache(uid) {
   try {
-    const raw = localStorage.getItem(PERF_CACHE_KEY);
+    const raw = localStorage.getItem(getPerfCacheKey(uid));
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
-function salvarPerfCache(m) {
-  try { localStorage.setItem(PERF_CACHE_KEY, JSON.stringify(m)); } catch {}
+function salvarPerfCache(m, uid) {
+  try { localStorage.setItem(getPerfCacheKey(uid), JSON.stringify(m)); } catch {}
 }
 
 // Normaliza as primeiras palavras do título para usar como chave de agrupamento
@@ -741,15 +741,16 @@ function tituloClave(titulo) {
     .join('_');
 }
 
-function lerCache() {
+function lerCache(uid) {
   // Prioridade: memória (sem limite de quota) → localStorage (persistência entre sessões)
-  if (_memCache.skuMap && _memCache.ts) return { data: _memCache.skuMap, ts: _memCache.ts };
+  const mem = _memCache[uid];
+  if (mem?.skuMap && mem?.ts) return { data: mem.skuMap, ts: mem.ts };
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(getCacheKey(uid));
     if (!raw) return null;
     const { data, ts } = JSON.parse(raw);
     // Preenche memória com dado do localStorage para próximas leituras
-    _memCache = { skuMap: data, ts };
+    _memCache[uid] = { skuMap: data, ts };
     return { data, ts };
   } catch { return null; }
 }
@@ -758,16 +759,16 @@ function lerCache() {
 export default function QualidadePublicacoes({ usuarioId }) {
   const { contas: contasMLCtx } = useContasML();
   const [skuMap, setSkuMap] = useState(() => {
-    const cache = lerCache();
+    const cache = lerCache(usuarioId);
     return cache ? cache.data : {};
   });
   const [cacheTs, setCacheTs] = useState(() => {
-    const cache = lerCache();
+    const cache = lerCache(usuarioId);
     return cache ? cache.ts : null;
   });
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState(() => {
-    const cache = lerCache();
+    const cache = lerCache(usuarioId);
     return cache ? `Dados em cache de ${new Date(cache.ts).toLocaleString('pt-BR')}.` : '';
   });
   const [selectedSku, setSelectedSku] = useState(null);
@@ -778,7 +779,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
   });
 
   // Performance cache (score oficial ML)
-  const [perfMap, setPerfMap] = useState(() => lerPerfCache()); // { [itemId]: { score, level, fetchedAt } }
+  const [perfMap, setPerfMap] = useState(() => lerPerfCache(usuarioId)); // { [itemId]: { score, level, fetchedAt } }
   const [perfLoading, setPerfLoading] = useState({}); // { [skuKey]: bool }
 
   // Filtros
@@ -824,7 +825,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
       }
 
       setPerfMap(novoPerf);
-      salvarPerfCache(novoPerf);
+      salvarPerfCache(novoPerf, usuarioId);
 
       // Atualiza o health no skuMap para refletir visualmente sem precisar recarregar tudo
       setSkuMap(prev => {
@@ -832,7 +833,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
           ...prev,
           [skuData._key]: { ...prev[skuData._key], health: menorHealth }
         };
-        _memCache = { ..._memCache, skuMap: atualizado };
+        _memCache[usuarioId] = { ...(_memCache[usuarioId] || {}), skuMap: atualizado };
         return atualizado;
       });
     } finally {
@@ -850,8 +851,8 @@ export default function QualidadePublicacoes({ usuarioId }) {
     setLoading(true);
     setStatusMsg('Carregando anúncios...');
     setSkuMap({});
-    _memCache = { skuMap: null, ts: null }; // limpa memória para forçar recarga
-    localStorage.removeItem(CACHE_KEY);
+    _memCache[usuarioId] = { skuMap: null, ts: null }; // limpa memória para forçar recarga
+    localStorage.removeItem(getCacheKey(usuarioId));
 
     try {
       // Carrega todas as páginas
@@ -920,7 +921,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
       setCacheTs(agora);
 
       // Salva na memória (sempre funciona, sem limitação de quota)
-      _memCache = { skuMap: mapaFinal, ts: agora };
+      _memCache[usuarioId] = { skuMap: mapaFinal, ts: agora };
 
       // Salva no cache apenas os campos necessários para exibição (sem pictures/attributes/variations)
       const mapaSlim = {};
@@ -949,7 +950,7 @@ export default function QualidadePublicacoes({ usuarioId }) {
         };
       }
       try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: mapaSlim, ts: agora }));
+        localStorage.setItem(getCacheKey(usuarioId), JSON.stringify({ data: mapaSlim, ts: agora }));
       } catch {
         // Quota excedida — memória já garante a sessão atual
       }

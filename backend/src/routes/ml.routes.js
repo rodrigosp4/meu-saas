@@ -35,6 +35,7 @@ router.get('/api/ml/anuncio/:itemId', mlController.getAdById);
 router.get('/api/ml/item-performance/:itemId', mlController.getItemPerformance);
 router.post('/api/ml/sync-selected-ads', mlController.syncSelectedAds);
 router.post('/api/ml/anuncios-por-sku', mlController.getAdsBySku);
+router.post('/api/ml/anuncios-por-skus', mlController.getAdsBySkuList);
 router.post('/api/ml/corrigir-preco', mlController.corrigirPreco);
 router.post('/api/ml/verificar-preco', mlController.verificarPreco);
 router.post('/api/ml/reset-margem', mlController.resetMargem);

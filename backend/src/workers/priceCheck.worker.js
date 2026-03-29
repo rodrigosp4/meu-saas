@@ -65,7 +65,7 @@ async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 6) {
 
 console.log('⚙️ Worker de Verificação de Preço Iniciado (v3 - Conexões Estáveis)...');
 
-function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0) {
+function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFreteGratis = 0, tarifaMLOverride = null, fixedFeeOverride = null) {
   if (!precoBase || !regra || isNaN(precoBase) || precoBase <= 0) return null;
 
   let historico = [{ descricao: 'Preço Base (Tiny)', valor: precoBase, tipo: 'valor' }];
@@ -85,14 +85,15 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
     }
   });
 
-  const tarifaML = tipoML === 'premium' ? 16 : 11;
+  const tarifaML = tarifaMLOverride ?? (tipoML === 'premium' ? 16 : 11);
+  const fixedFee = fixedFeeOverride ?? 6;
   const netFactor = 1 - ((tarifaML + totalTaxasVendaPerc) / 100);
 
   if (netFactor <= 0) return { precoFinal: Math.round(custoBaseOriginal * 100) / 100, precoAlvo: Math.round(custoBaseOriginal * 100) / 100, historico };
 
   const inflarSafe = Math.min(Math.max(0, inflar), 99);
-  
-  let precoAlvo = (custoBaseOriginal + 6) / netFactor;
+
+  let precoAlvo = (custoBaseOriginal + fixedFee) / netFactor;
   let precoFinal = inflarSafe > 0 ? precoAlvo / (1 - inflarSafe / 100) : precoAlvo;
 
   let freteAplicado = false;
@@ -119,7 +120,7 @@ function calcularPrecoRegra(precoBase, regra, tipoML, inflar, reduzir, custoFret
     historico.push({ descricao: 'Frete Grátis (API ML)', valor: custoFreteGratis, tipo: 'custo_ml' });
   }
   if (!freteAplicado) {
-    historico.push({ descricao: 'Custo Fixo (ML)', valor: 6.00, tipo: 'custo_ml' });
+    historico.push({ descricao: 'Custo Fixo (ML)', valor: fixedFee, tipo: 'custo_ml' });
   }
   if (inflarSafe > 0 && !foiReduzido) {
     historico.push({ descricao: `Inflado em ${inflarSafe}% (Margem)`, valor: precoFinal - precoAlvo, isPerc: true, originalPerc: inflarSafe, tipo: 'custo' });
@@ -200,6 +201,7 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
     
     const regra = regras.find(r => r.id === regraId);
     const precosTinyMap = {};
+    const tarifasCache = {};
 
     // 1. Otimização: buscar todos os anúncios do banco de uma vez para garantir payload leve do frontend
     // e capturar variações corretamente.
@@ -361,10 +363,23 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         }
         
         if (precoBaseItem > 0) {
+          const adDadosML = ad.dadosML || {};
+          const logisticType = adDadosML.shipping?.logistic_type || (conta.logistica === 'ME1' ? 'default' : 'drop_off');
+          const tarifaCacheKey = `${adDadosML.listing_type_id}|${adDadosML.category_id}|${logisticType}`;
+          if (!tarifasCache[tarifaCacheKey]) {
+            tarifasCache[tarifaCacheKey] = await mlService.getListingFees({
+              accessToken: conta.accessToken,
+              price: ad.preco || precoBaseItem,
+              listingTypeId: adDadosML.listing_type_id || 'gold_pro',
+              categoryId: adDadosML.category_id,
+              logisticType,
+            }).catch(() => ({ percentageFee: tipoML === 'premium' ? 16 : 11, fixedFee: 6 }));
+          }
+          const { percentageFee: tarifaMLReal, fixedFee: fixedFeeReal } = tarifasCache[tarifaCacheKey];
+
           let custoFrete = 0;
           if (conta.logistica !== 'ME1') {
-            await delay(250); 
-            const adDadosML = ad.dadosML || {};
+            await delay(250);
             custoFrete = await mlService.simulateShipping({
               accessToken: conta.accessToken,
               sellerId: conta.id,
@@ -373,10 +388,9 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
               listingTypeId: adDadosML.listing_type_id || 'gold_pro',
               zipCode: cepOrigem,
               itemId: ad.id,
-              dimensions: '20x15x10,500'
             }).catch(() => 0);
           }
-          resultadoCalculo = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar, reduzir, custoFrete);
+          resultadoCalculo = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar, reduzir, custoFrete, tarifaMLReal, fixedFeeReal);
         }
       }
 

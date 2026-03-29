@@ -3,6 +3,7 @@ import { config } from '../config/env.js';
 import prisma from '../config/prisma.js';
 import { mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
 import axios from 'axios';
+import { getTinyAccessToken, createTinyClient, listarProdutos, obterProduto } from '../utils/tinyClient.js';
 
 
 // ✅ NOVA CONSTANTE: Lista de tags relevantes com prioridade (mesma do worker)
@@ -1270,144 +1271,31 @@ async getAdsBySku(req, res) {
         const { sku, userId } = req.body;
         if (!sku || !userId) return res.status(400).json({ erro: "SKU e userId são obrigatórios." });
 
-        // Helper de delay para respeitar o rate limit da Tiny
-        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
         // Determina quais SKUs buscar no ML (pode ser o original ou os filhos de variação da Tiny)
         let skusParaBuscar = [sku];
 
         // =====================================================================
-        // FASE 1: Consulta a Tiny para verificar se o produto tem variações
+        // FASE 1: Consulta a Tiny (v3) para verificar se o produto tem variações
         // =====================================================================
-        const user = await prisma.user.findUnique({ where: { id: userId }, select: { tinyToken: true } });
-        if (user?.tinyToken) {
+        const tinyToken = await getTinyAccessToken(userId);
+        if (tinyToken) {
             try {
-                // Pesquisa o produto pelo SKU na Tiny
-                const tinySearchRes = await axios.post(
-                    'https://api.tiny.com.br/api2/produtos.pesquisa.php',
-                    new URLSearchParams({ token: user.tinyToken, formato: 'JSON', pesquisa: String(sku).trim() })
-                );
-                const tinyRetorno = tinySearchRes.data?.retorno;
+                const tinyClient = createTinyClient(tinyToken);
 
-                if (tinyRetorno?.status === 'OK' && tinyRetorno.produtos?.length > 0) {
-                    // Encontra o produto cujo código bate exatamente com o SKU buscado
-                    const produtoEncontrado = tinyRetorno.produtos
-                        .map(p => p.produto)
-                        .find(p => String(p.codigo).trim() === String(sku).trim());
+                // Pesquisa o produto pelo código (SKU) na Tiny v3
+                const listagem = await listarProdutos(tinyClient, { codigo: String(sku).trim() });
+                const produtoEncontrado = listagem?.itens?.find(p => String(p.sku).trim() === String(sku).trim());
 
-                    // ✅ CORREÇÃO: Verifica tipoVariacao OU busca detalhes para confirmar
-                    const ehPai = produtoEncontrado?.tipoVariacao === 'P';
-                    const temVariacoesNaPesquisa = produtoEncontrado?.tipoVariacao === 'P' 
-                        || produtoEncontrado?.classe_produto === 'V';
+                if (produtoEncontrado?.tipoVariacao === 'P') {
+                    // Produto pai: busca detalhes completos para obter as variações
+                    const produtoDetalhado = await obterProduto(tinyClient, produtoEncontrado.id);
+                    const codigosFilhos = (produtoDetalhado?.variacoes || [])
+                        .map(v => v.sku)
+                        .filter(Boolean);
 
-                    if (produtoEncontrado && (ehPai || temVariacoesNaPesquisa)) {
-                        // Produto pai: busca os detalhes completos para obter as variações
-                        await delay(350); // Respeita rate limit da Tiny
-                        const tinyDetalheRes = await axios.post(
-                            'https://api.tiny.com.br/api2/produto.obter.php',
-                            new URLSearchParams({ token: user.tinyToken, formato: 'JSON', id: produtoEncontrado.id })
-                        );
-                        const produtoDetalhado = tinyDetalheRes.data?.retorno?.produto;
-
-                        if (produtoDetalhado) {
-                            // ✅ CORREÇÃO 1: Trata variacoes como Object OU Array
-                            let variacoesTiny = produtoDetalhado.variacoes || [];
-                            if (variacoesTiny && !Array.isArray(variacoesTiny)) {
-                                variacoesTiny = Object.values(variacoesTiny);
-                            }
-
-                            if (variacoesTiny.length > 0) {
-                                // Tenta primeiro pegar os códigos direto das variações do pai
-                                let codigosFilhos = variacoesTiny
-                                    .map(v => v.variacao?.codigo || v.codigo)
-                                    .filter(Boolean);
-
-                                // ✅ CORREÇÃO 2: Se os códigos vieram vazios, busca cada filho individualmente
-                                if (codigosFilhos.length === 0) {
-                                    console.log(`[getAdsBySku] Códigos dos filhos não encontrados no pai. Buscando detalhes individuais...`);
-                                    
-                                    for (const v of variacoesTiny) {
-                                        const idFilho = v.variacao?.idProdutoFilho 
-                                            || v.idProdutoFilho 
-                                            || v.variacao?.id 
-                                            || v.id;
-                                        
-                                        if (!idFilho) continue;
-
-                                        try {
-                                            await delay(350); // Rate limit da Tiny
-                                            const detFilho = await axios.post(
-                                                'https://api.tiny.com.br/api2/produto.obter.php',
-                                                new URLSearchParams({ token: user.tinyToken, formato: 'JSON', id: idFilho })
-                                            );
-                                            const codigoFilho = detFilho.data?.retorno?.produto?.codigo;
-                                            if (codigoFilho) {
-                                                codigosFilhos.push(codigoFilho);
-                                            }
-                                        } catch (errFilho) {
-                                            console.error(`[getAdsBySku] Erro ao buscar filho ${idFilho}:`, errFilho.message);
-                                        }
-                                    }
-                                }
-
-                                if (codigosFilhos.length > 0) {
-                                    // No ML, o pai não tem SKU — apenas os filhos têm. Busca pelos códigos dos filhos.
-                                    console.log(`[getAdsBySku] Produto pai "${sku}" -> Filhos encontrados: [${codigosFilhos.join(', ')}]`);
-                                    skusParaBuscar = codigosFilhos;
-                                }
-                            }
-                        }
-                    } 
-                    // ✅ CORREÇÃO 3: Se não achou na pesquisa, tenta buscar detalhes direto 
-                    // (caso a pesquisa não retorne tipoVariacao mas o produto tenha variações)
-                    else if (produtoEncontrado && !produtoEncontrado.tipoVariacao) {
-                        await delay(350);
-                        const tinyDetalheRes = await axios.post(
-                            'https://api.tiny.com.br/api2/produto.obter.php',
-                            new URLSearchParams({ token: user.tinyToken, formato: 'JSON', id: produtoEncontrado.id })
-                        );
-                        const produtoDetalhado = tinyDetalheRes.data?.retorno?.produto;
-                        
-                        if (produtoDetalhado) {
-                            let variacoesTiny = produtoDetalhado.variacoes || [];
-                            if (variacoesTiny && !Array.isArray(variacoesTiny)) {
-                                variacoesTiny = Object.values(variacoesTiny);
-                            }
-
-                            if (variacoesTiny.length > 0) {
-                                let codigosFilhos = variacoesTiny
-                                    .map(v => v.variacao?.codigo || v.codigo)
-                                    .filter(Boolean);
-
-                                // Se códigos vazios, busca individualmente
-                                if (codigosFilhos.length === 0) {
-                                    for (const v of variacoesTiny) {
-                                        const idFilho = v.variacao?.idProdutoFilho 
-                                            || v.idProdutoFilho 
-                                            || v.variacao?.id 
-                                            || v.id;
-                                        if (!idFilho) continue;
-
-                                        try {
-                                            await delay(350);
-                                            const detFilho = await axios.post(
-                                                'https://api.tiny.com.br/api2/produto.obter.php',
-                                                new URLSearchParams({ token: user.tinyToken, formato: 'JSON', id: idFilho })
-                                            );
-                                            const codigoFilho = detFilho.data?.retorno?.produto?.codigo;
-                                            if (codigoFilho) codigosFilhos.push(codigoFilho);
-                                        } catch (errFilho) {
-                                            console.error(`[getAdsBySku] Erro ao buscar filho ${idFilho}:`, errFilho.message);
-                                        }
-                                    }
-                                }
-
-                                if (codigosFilhos.length > 0) {
-                                    console.log(`[getAdsBySku] Produto "${sku}" tem variações ocultas -> Filhos: [${codigosFilhos.join(', ')}]`);
-                                    skusParaBuscar = codigosFilhos;
-                                }
-                            }
-                        }
+                    if (codigosFilhos.length > 0) {
+                        console.log(`[getAdsBySku] Produto pai "${sku}" -> Filhos encontrados: [${codigosFilhos.join(', ')}]`);
+                        skusParaBuscar = codigosFilhos;
                     }
                 }
             } catch (tinyErr) {
@@ -1839,19 +1727,84 @@ async excluirPergunta(req, res) {
     }
   },
 
+async getAdsBySkuList(req, res) {
+    try {
+      const { userId, skus } = req.body;
+      if (!userId || !Array.isArray(skus) || skus.length === 0)
+        return res.status(400).json({ erro: 'userId e skus são obrigatórios.' });
+
+      const contas = await prisma.contaML.findMany({ where: { userId }, select: { id: true, accessToken: true, logistica: true, refreshToken: true } });
+      const contaIds = contas.map(c => c.id);
+      if (contaIds.length === 0) return res.json({ anuncios: [] });
+
+      // Garante que o token está atualizado para evitar erro 401 na simulação de frete
+      for (const conta of contas) {
+        try {
+          const tRes = await mlService.refreshToken(conta.refreshToken);
+          if (tRes?.access_token) {
+            conta.accessToken = tRes.access_token;
+            conta.refreshToken = tRes.refresh_token;
+            
+            // Atualiza de forma assíncrona no DB sem travar
+            prisma.contaML.update({
+              where: { id: conta.id },
+              data: { accessToken: tRes.access_token, refreshToken: tRes.refresh_token }
+            }).catch(() => {});
+          }
+        } catch { } // se falhar, tenta usar o atual
+      }
+
+      const skusLower = skus.map(s => String(s).trim());
+      const anuncios = await prisma.anuncioML.findMany({
+        where: {
+          contaId: { in: contaIds },
+          OR: [
+            { sku: { in: skusLower } },
+            { skusVariacoes: { hasSome: skusLower } }
+          ]
+        },
+        include: { conta: { select: { nickname: true } } }
+      });
+
+      // Busca custo de frete real por item em lotes paralelos
+      const contaMap = Object.fromEntries(contas.map(c => [c.id, c]));
+      const delay = ms => new Promise(r => setTimeout(r, ms));
+      const BATCH = 5;
+      for (let i = 0; i < anuncios.length; i += BATCH) {
+        await Promise.all(anuncios.slice(i, i + BATCH).map(async (ad) => {
+          const conta = contaMap[ad.contaId];
+          if (!conta || conta.logistica === 'ME1') { ad.custoFrete = 0; return; }
+          try {
+            ad.custoFrete = await mlService.simulateShipping({ 
+              accessToken: conta.accessToken, 
+              sellerId: conta.id, 
+              itemPrice: Math.max((ad.preco || 0) * 2, 80), 
+              itemId: ad.id 
+            });
+          } catch { ad.custoFrete = 0; }
+        }));
+        if (i + BATCH < anuncios.length) await delay(300);
+      }
+
+      res.json({ anuncios });
+    } catch (error) {
+      res.status(500).json({ erro: 'Erro ao buscar anúncios por SKUs', detalhes: error.message });
+    }
+  },
+
 async corrigirPreco(req, res) {
     try {
-      const { 
-        userId, items, modo, regraId, precoManual, 
+      const {
+        userId, items, modo, regraId, precoManual,
         precoBaseManual, inflar, reduzir, removerPromocoes,
-        enviarAtacado, ativarPromocoes // ✅ CORREÇÃO: Resgatando os parâmetros
+        enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase
       } = req.body;
-      
+
       if (!userId || !items || !Array.isArray(items)) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
-      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes };
+      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, precosCSV, precosCSVTipoBase };
 
       const tarefa = await prisma.tarefaFila.create({
         data: {

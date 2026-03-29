@@ -73,32 +73,84 @@ export const mlService = {
   },
 
   async simulateShipping({ accessToken, sellerId, itemPrice, categoryId, listingTypeId, dimensions, zipCode, itemId }) {
-      const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
-      
-      const params = {
-        item_price: itemPrice,
-        category_id: categoryId,
-        listing_type_id: listingTypeId,
-        zip_code: zipCode || '01001000',
-        condition: 'new',
-        mode: 'me2',
-        logistic_type: 'drop_off'
-      };
+      if (!sellerId) return 0;
 
-      // ✅ CORREÇÃO: Prioriza o envio do item_id se existir, 
-      // para que o ML use o peso/dimensões reais do anúncio já cadastrado
-      if (itemId) {
-        params.item_id = itemId;
-      } else {
-        params.dimensions = dimensions;
+      const cep = zipCode || '01001000';
+      const precoParaSimular = Math.max(Number(itemPrice) || 100, 79);
+
+      try {
+        const url = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free`;
+        const params = {
+          item_price: precoParaSimular,
+          zip_code: cep,
+        };
+
+        if (itemId) {
+           params.item_id = itemId;
+           params.condition = 'new';
+        } else {
+           params.category_id = categoryId;
+           params.listing_type_id = listingTypeId || 'gold_pro';
+           params.condition = 'new';
+           params.mode = 'me2';
+           params.logistic_type = 'drop_off';
+           if (dimensions) params.dimensions = dimensions;
+        }
+
+        const res = await axios.get(url, { headers: { Authorization: `Bearer ${accessToken}` }, params, timeout: 8000 });
+        if (res.data?.coverage?.all_country?.list_cost) {
+            return res.data.coverage.all_country.list_cost;
+        }
+      } catch (err) {
+        if (itemId) {
+          try {
+            const resFallback = await axios.get(
+              `https://api.mercadolibre.com/items/${itemId}/shipping_options`,
+              { headers: { Authorization: `Bearer ${accessToken}` }, params: { zip_code: cep }, timeout: 8000 }
+            );
+            const options = resFallback.data?.options || [];
+            if (options.length === 0) return 0;
+            const custos = options.map(o => Number(o.list_cost) || 0).filter(c => c > 0);
+            return custos.length > 0 ? Math.min(...custos) : 0;
+          } catch (e) {
+            return 0;
+          }
+        }
+        return 0;
       }
-
-      const res = await axios.get(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        params
-      });
-      return res.data.coverage?.all_country?.list_cost || 0;
+      return 0;
     },
+
+  async getListingFees({ accessToken, price, listingTypeId, categoryId, logisticType }) {
+    try {
+      const me2Types = ['drop_off','cross_docking','xd_drop_off','self_service','fulfillment','turbo'];
+      const shippingMode = me2Types.includes(logisticType) ? 'me2' : logisticType === 'default' ? 'me1' : 'me2';
+      const params = {
+        price: Math.max(Number(price) || 100, 1),
+        listing_type_id: listingTypeId,
+        currency_id: 'BRL',
+        shipping_mode: shippingMode,
+      };
+      if (categoryId) params.category_id = categoryId;
+      if (logisticType) params.logistic_type = logisticType;
+
+      const res = await axios.get('https://api.mercadolibre.com/sites/MLB/listing_prices', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params,
+        timeout: 5000,
+      });
+      const data = Array.isArray(res.data)
+        ? res.data.find(i => i.listing_type_id === listingTypeId)
+        : res.data;
+      if (!data?.sale_fee_details) throw new Error('no data');
+      return {
+        percentageFee: data.sale_fee_details.meli_percentage_fee || (listingTypeId === 'gold_pro' ? 16 : 11),
+        fixedFee: data.sale_fee_details.fixed_fee || 0,
+      };
+    } catch {
+      return { percentageFee: listingTypeId === 'gold_pro' ? 16 : 11, fixedFee: 6 };
+    }
+  },
 
   async publishSmart({ accessToken, payload, description }) {
     try {

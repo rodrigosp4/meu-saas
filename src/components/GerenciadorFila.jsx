@@ -1,11 +1,33 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+// Detecta atributos obrigatórios faltando no texto do log
+function extrairAtributosObrigatorios(texto) {
+  if (!texto) return [];
+  const encontrados = new Set();
+  // Padrão: "The attributes [ATTR1, ATTR2] are required"
+  const matchBrackets = [...texto.matchAll(/The attributes \[([^\]]+)\] are required/gi)];
+  for (const m of matchBrackets) {
+    m[1].split(',').forEach(a => encontrados.add(a.trim()));
+  }
+  // Padrão: "O campo "Nome" é obrigatório" → extrai o nome
+  const matchPt = [...texto.matchAll(/O campo [""]([^"""]+)[""] é obrigatório/gi)];
+  for (const m of matchPt) encontrados.add(m[1].trim());
+  return [...encontrados];
+}
+
 // Coloriza uma linha de log baseado no conteúdo
 function LogLine({ line, index }) {
   if (!line) return null;
 
+  const isAttrRequired =
+    line.includes('are required for category') ||
+    line.includes('é obrigatório e não foi adicionado') ||
+    line.includes('[PART_NUMBER]') ||
+    /The attributes \[/.test(line);
+
   let cls = 'text-gray-400';
-  if (line.startsWith('>>')) cls = 'text-gray-500 italic';
+  if (isAttrRequired) cls = 'text-amber-300 font-semibold bg-amber-950/40 px-1 rounded';
+  else if (line.startsWith('>>')) cls = 'text-gray-500 italic';
   else if (line.startsWith('Resumo do Lote:')) cls = 'text-white font-bold text-base mt-2';
   else if (line.startsWith('✅')) cls = 'text-emerald-300 font-semibold';
   else if (line.startsWith('❌')) cls = 'text-red-400 font-semibold';
@@ -197,6 +219,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
 
   const erros = lines.filter(l => l.includes('Erro:')).length;
   const sucessos = lines.filter(l => l.startsWith('[ID:') && !l.includes('Erro:')).length;
+  const atributosObrigatorios = extrairAtributosObrigatorios(detalhes);
 
   const copyLog = () => {
     navigator.clipboard.writeText(detalhes || '').catch(() => {});
@@ -299,6 +322,30 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed }) {
                 className="bg-blue-500 h-2 rounded-full transition-all duration-500"
                 style={{ width: `${progress.pct}%` }}
               />
+            </div>
+          </div>
+        )}
+
+        {/* Banner: atributos obrigatórios faltando */}
+        {atributosObrigatorios.length > 0 && (
+          <div className="px-4 py-3 bg-amber-900/50 border-b border-amber-700/60 flex-shrink-0">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-400 text-sm mt-0.5 flex-shrink-0">⚠</span>
+              <div>
+                <p className="text-amber-300 text-xs font-bold mb-1">
+                  Campo(s) obrigatório(s) não preenchido(s) — a publicação foi rejeitada pelo Mercado Livre:
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {atributosObrigatorios.map(attr => (
+                    <span key={attr} className="bg-amber-700/60 text-amber-200 text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-amber-600/50">
+                      {attr}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-amber-500/80 text-[10px] mt-1.5">
+                  Preencha esses campos na Ficha Técnica do anúncio antes de reprocessar.
+                </p>
+              </div>
             </div>
           </div>
         )}

@@ -23,6 +23,7 @@ import ClienteAPI from './components/ClienteAPI.jsx';
 import DimensoesEmbalagem from './components/DimensoesEmbalagem.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import AgendadorTarefas from './components/AgendadorTarefas.jsx';
+import CorretorPrecoPlanilha from './components/CorretorPrecoPlanilha.jsx';
 
 function App() {
   const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role } = useAuth();
@@ -133,6 +134,7 @@ function App() {
       {canAccess('otimizadorImagens') && activePage === 'otimizadorImagens' && <OtimizadorImagens usuarioId={uid} />}
       {canAccess('clienteAPI') && activePage === 'clienteAPI' && <ClienteAPI usuarioId={uid} />}
       {canAccess('dimensoesEmbalagem') && activePage === 'dimensoesEmbalagem' && <DimensoesEmbalagem usuarioId={uid} />}
+      {canAccess('corretorPrecoPlanilha') && activePage === 'corretorPrecoPlanilha' && <CorretorPrecoPlanilha usuarioId={uid} />}
     </DashboardLayout>
   );
 }

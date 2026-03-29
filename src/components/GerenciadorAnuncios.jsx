@@ -1086,14 +1086,11 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
   }, [modo, regraId, precosTinyMap, regra, temMultiplosSKUs]);
 
 
-// ✅ Busca frete apenas de uma AMOSTRA (os 5 primeiros) para visualização rápida
   useEffect(() => {
     if (anunciosSelecionados.length === 0 || modo !== 'regra') {
       setLoadingFrete(false);
       return;
     }
-
-    const amostra = anunciosSelecionados.slice(0, 5); // Apenas 5 para não travar!
 
     setLoadingFrete(true);
     fetch('/api/ml/shipping-cost-items', {
@@ -1101,7 +1098,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: usuarioId,
-        items: amostra.map(ad => ({ itemId: ad.id, contaId: ad.contaId }))
+        items: anunciosSelecionados.map(ad => ({ itemId: ad.id, contaId: ad.contaId }))
       })
     })
       .then(r => r.json())
@@ -2358,21 +2355,13 @@ const handleFetchBySku = async () => {
     const groups = {};
 
     displayedAnuncios.forEach(ad => {
-      // Determina SKU do anúncio pai
-      const skuPai = ad.sku || '__sem_sku__';
+      // Coleta SKUs de variações do campo direto do banco
+      const skusVariacoes = Array.isArray(ad.skusVariacoes) ? ad.skusVariacoes.filter(Boolean) : [];
 
-      // Coleta SKUs de variações (podem ser iguais ao pai ou diferentes)
-      const variations = ad.dadosML?.variations || [];
-      const skusVariacoes = variations.map(v =>
-        v.seller_custom_field
-        || (v.attributes && v.attributes.find(a => a.id === 'SELLER_SKU'))?.value_name
-        || null
-      ).filter(Boolean);
+      // Determina SKU do anúncio pai.
+      // Se o pai não tem SKU mas tem variações com SKU, usa o primeiro SKU de variação como grupo.
+      let skuPai = ad.sku || (skusVariacoes.length > 0 ? skusVariacoes[0] : null) || '__sem_sku__';
 
-      // Determina o conjunto de SKUs que este anúncio representa
-      // Se todas as variações têm o mesmo SKU do pai (ou não têm SKU próprio),
-      // agrupamos sob o SKU pai. Se há variações com SKUs distintos, o anúncio
-      // ainda é contado pelo SKU pai (visitas/vendas são do listing, não por variação).
       const skuGroup = skuPai;
 
       if (!groups[skuGroup]) {

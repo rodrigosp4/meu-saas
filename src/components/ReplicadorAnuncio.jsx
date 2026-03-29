@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { ModalPreenchimentoRapido } from './CompatibilidadeAutopecas';
 
 // Extrai o ID de um anúncio/produto ML a partir de uma URL ou ID direto
 // Retorna { tipo: 'item' | 'produto', id: 'MLB...' | 'MLBU...' , itemId?: 'MLB...' }
@@ -156,7 +157,10 @@ export default function ReplicadorAnuncio({ usuarioId }) {
   const [abaAtiva, setAbaAtiva] = useState('geral');
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState('');
+  const [loadingDimTiny, setLoadingDimTiny] = useState(false);
   const [dadosOriginais, setDadosOriginais] = useState(null);
+  const veioDeRecomendacoesRef = useRef(false);
+  const skuRecomendadoRef = useRef(null);
   const [replicando, setReplicando] = useState(false);
 
   // Geral
@@ -249,6 +253,8 @@ export default function ReplicadorAnuncio({ usuarioId }) {
   const [perfilCompatId, setPerfilCompatId] = useState('');
   const [perfilCompatData, setPerfilCompatData] = useState(null);
   const [posicoesSelecionadas, setPosicoesSelecionadas] = useState(new Set());
+  const [compatRapida, setCompatRapida] = useState(null);
+  const [modalPreenchRapido, setModalPreenchRapido] = useState(false);
 
   // Modo principal
   const [modoAtivo, setModoAtivo] = useState('replicar'); // 'replicar' | 'recomendacoes'
@@ -451,11 +457,56 @@ export default function ReplicadorAnuncio({ usuarioId }) {
     setLoadingBusca(false);
   };
 
-  const handleSelecionarProduto = (produto) => {
+  const handleSelecionarProduto = async (produto) => {
     setProdutoVinculado(produto);
     setResultadosBusca([]);
     setBuscaProduto('');
     setNovoSku(produto.sku || '');
+
+    // Se alguma dimensão estiver vazia/zero, busca em tempo real na Tiny
+    const vazio = (v) => !v || Number(v) === 0;
+    const dimFalta = vazio(altura) || vazio(largura) || vazio(comprimento) || vazio(pesoG);
+    if (!dimFalta) return;
+
+    const sku = produto.sku;
+    if (!sku) return;
+
+    setLoadingDimTiny(true);
+    try {
+      // 1) Resolve o ID Tiny: usa dadosTiny.id ou busca pelo SKU
+      let idTiny = produto.dadosTiny?.id;
+      if (!idTiny) {
+        const listRes = await fetch('/api/cliente-api/tiny', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: usuarioId, path: '/produtos', queryParams: { codigo: sku, limit: 1 } }),
+        });
+        const listJson = await listRes.json();
+        idTiny = listJson?.data?.itens?.[0]?.id;
+      }
+      if (!idTiny) return;
+
+      // 2) Busca detalhes do produto para obter dimensões
+      const detRes = await fetch('/api/cliente-api/tiny', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, path: `/produtos/${idTiny}` }),
+      });
+      const detJson = await detRes.json();
+      const dim = detJson?.data?.dimensoes;
+      if (dim) {
+        if (vazio(altura) && dim.altura) setAltura(String(dim.altura));
+        if (vazio(largura) && dim.largura) setLargura(String(dim.largura));
+        if (vazio(comprimento) && dim.comprimento) setComprimento(String(dim.comprimento));
+        if (vazio(pesoG) && (dim.pesoBruto || dim.pesoLiquido)) {
+          // Tiny armazena em kg, ML espera gramas
+          const pesoKg = dim.pesoBruto || dim.pesoLiquido;
+          setPesoG(String(Math.round(pesoKg * 1000)));
+        }
+      }
+    } catch {}
+    finally { setLoadingDimTiny(false); }
+
     // Simulação de preço é disparada pelo useEffect que monitora produtoVinculado
   };
 
@@ -521,6 +572,45 @@ export default function ReplicadorAnuncio({ usuarioId }) {
       setComprimento(String(dims.comprimento || ''));
       setPesoG(String(dims.pesoG || ''));
 
+      // Se dimensões ainda vazias/zero e houver SKU, busca automaticamente na Tiny
+      const vazio = (v) => !v || Number(v) === 0;
+      const dimFaltaAposML = vazio(dims.altura) || vazio(dims.largura) || vazio(dims.comprimento) || vazio(dims.pesoG);
+      const skuAnuncio = data.seller_custom_field;
+      if (dimFaltaAposML && skuAnuncio) {
+        setLoadingDimTiny(true);
+        (async () => {
+          try {
+            let idTiny = null;
+            const listRes = await fetch('/api/cliente-api/tiny', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: usuarioId, path: '/produtos', queryParams: { codigo: skuAnuncio, limit: 1 } }),
+            });
+            const listJson = await listRes.json();
+            idTiny = listJson?.data?.itens?.[0]?.id;
+            if (idTiny) {
+              const detRes = await fetch('/api/cliente-api/tiny', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: usuarioId, path: `/produtos/${idTiny}` }),
+              });
+              const detJson = await detRes.json();
+              const dim = detJson?.data?.dimensoes;
+              if (dim) {
+                if (vazio(dims.altura) && dim.altura) setAltura(String(dim.altura));
+                if (vazio(dims.largura) && dim.largura) setLargura(String(dim.largura));
+                if (vazio(dims.comprimento) && dim.comprimento) setComprimento(String(dim.comprimento));
+                if (vazio(dims.pesoG) && (dim.pesoBruto || dim.pesoLiquido)) {
+                  const pesoKg = dim.pesoBruto || dim.pesoLiquido;
+                  setPesoG(String(Math.round(pesoKg * 1000)));
+                }
+              }
+            }
+          } catch {}
+          finally { setLoadingDimTiny(false); }
+        })();
+      }
+
       // Mapa de valores do produto original (id → { value_id, value_name })
       const mapaOriginal = Object.fromEntries(
         (data.attributes || [])
@@ -557,7 +647,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                   const match = a.values.find(v => v.name.toLowerCase() === value_name.toLowerCase());
                   if (match) value_id = String(match.id);
                 }
-                return { id: a.id, name: a.name, values: a.values || [], value_id, value_name };
+                return { id: a.id, name: a.name, values: a.values || [], value_id, value_name, required: !!a.tags?.required };
               });
             // Adiciona extras read-only que o produto possui mas não vieram na lista da categoria
             const catAttrIds = new Set(attrsFinais.map(a => a.id));
@@ -581,6 +671,25 @@ export default function ReplicadorAnuncio({ usuarioId }) {
         attributes: (v.attributes || []).filter(a => a.id !== 'SELLER_SKU'),
       }));
       setVariacoes(vars);
+
+      // Quando veio de Recomendações: auto-vincular produto pelo SKU para usar precificação da Tiny
+      const skuParaVincular = data.seller_custom_field || skuRecomendadoRef.current;
+      if (veioDeRecomendacoesRef.current && skuParaVincular) {
+        veioDeRecomendacoesRef.current = false;
+        skuRecomendadoRef.current = null;
+        const skuRec = skuParaVincular;
+        (async () => {
+          try {
+            const res = await fetch(`/api/produtos?userId=${usuarioId}&search=${encodeURIComponent(skuRec)}&limit=5`);
+            const json = await res.json();
+            const match = (json.produtos || []).find(p => p.sku === skuRec) || json.produtos?.[0];
+            if (match) {
+              setProdutoVinculado(match);
+              setBuscaProduto('');
+            }
+          } catch {}
+        })();
+      }
 
     } catch (e) {
       setErro('Falha na conexão com o servidor.');
@@ -830,6 +939,8 @@ export default function ReplicadorAnuncio({ usuarioId }) {
     setUrlAnuncio(ad.id);
     const ids = Array.isArray(contaIds) ? contaIds : [contaIds];
     if (ids.length > 0) setContasSelecionadas(new Set(ids));
+    veioDeRecomendacoesRef.current = true;
+    skuRecomendadoRef.current = ad.allSkus?.[0] || ad.variacoes?.[0]?.sku || null;
     setModoAtivo('replicar');
     setTimeout(() => {
       document.getElementById('btn-buscar-anuncio')?.click();
@@ -842,6 +953,12 @@ export default function ReplicadorAnuncio({ usuarioId }) {
     const algumTipoSelecionado = [...contasSelecionadas].some(id => { const t = getTiposConta(id); return t.classico || t.premium; });
     if (!algumTipoSelecionado) { alert('Selecione ao menos um tipo de anúncio em uma das contas.'); return; }
     if (!titulo.trim()) { alert('O título do anúncio é obrigatório.'); return; }
+    const atributosObrigatoriosFaltando = atributos.filter(a => a.required && !a.readOnly && !a.value_name?.trim());
+    if (atributosObrigatoriosFaltando.length > 0) {
+      alert(`Preencha os campos obrigatórios da Ficha Técnica antes de publicar:\n\n${atributosObrigatoriosFaltando.map(a => `• ${a.name}`).join('\n')}`);
+      setAbaAtiva('fichaTecnica');
+      return;
+    }
     const temPrecoValido = (produtoVinculado && (precosSimulados.classico?.precoFinal > 0 || precosSimulados.premium?.precoFinal > 0)) || Number(precoVenda) > 0;
     if (!temPrecoValido) { alert('Informe um preço de venda válido ou vincule um produto com regra de preço.'); return; }
     const catFinal = categoriaId || dadosOriginais.category_id;
@@ -947,7 +1064,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
               ativarPromocoes,
               enviarAtacado,
               inflar: Number(inflarPct) || 0,
-              compatibilidades: perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : [],
+              compatibilidades: compatRapida ? compatRapida.slice(0, 200) : perfilCompatData ? (perfilCompatData.compatibilities || []).slice(0, 200) : [],
               posicoes: Array.from(posicoesSelecionadas),
             }),
           });
@@ -1020,7 +1137,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
 
   const abas = [
     { id: 'geral', label: 'Geral & Preço' },
-    { id: 'dimensoes', label: 'Dimensões & Peso' },
+    { id: 'dimensoes', label: loadingDimTiny ? 'Dimensões & Peso ⏳' : 'Dimensões & Peso' },
     { id: 'descricao', label: 'Descrição' },
     { id: 'imagens', label: `Imagens${imagens.length ? ` (${imagensSelecionadas.size}/${imagens.length})` : ''}` },
     { id: 'fichaTecnica', label: 'Ficha Técnica' },
@@ -1586,10 +1703,19 @@ export default function ReplicadorAnuncio({ usuarioId }) {
               <>
                 <div style={{ fontSize: '0.82em', color: '#555', marginBottom: '10px' }}>
                   Edite os valores dos atributos conforme necessário:
+                  {atributos.some(a => a.required && !a.readOnly && !a.value_name?.trim()) && (
+                    <span style={{ marginLeft: '10px', color: '#dc2626', fontWeight: 700, fontSize: '0.92em' }}>
+                      ⚠ Campos obrigatórios em vermelho precisam ser preenchidos
+                    </span>
+                  )}
                 </div>
-                {atributos.map((attr, idx) => (
-                  <div key={attr.id} style={s.attrRow}>
-                    <span style={{ ...s.attrName, color: attr.readOnly ? '#aaa' : '#555' }}>{attr.name}:</span>
+                {atributos.map((attr, idx) => {
+                  const vazio = attr.required && !attr.readOnly && !attr.value_name?.trim();
+                  return (
+                  <div key={attr.id} style={{ ...s.attrRow, ...(vazio ? { backgroundColor: '#fff5f5', border: '1px solid #fca5a5', borderRadius: '6px', padding: '4px 6px' } : {}) }}>
+                    <span style={{ ...s.attrName, color: attr.readOnly ? '#aaa' : vazio ? '#dc2626' : '#555', fontWeight: vazio ? 700 : undefined }}>
+                      {attr.name}{attr.required && !attr.readOnly ? <span style={{ color: '#dc2626', marginLeft: '2px' }}>*</span> : ''}:
+                    </span>
                     {attr.readOnly ? (
                       <input
                         type="text"
@@ -1613,7 +1739,8 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                       />
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </div>
@@ -1815,21 +1942,36 @@ export default function ReplicadorAnuncio({ usuarioId }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div>
                 <div style={{ fontSize: '0.78em', fontWeight: 600, color: '#555', marginBottom: '6px', textTransform: 'uppercase' }}>Compatibilidade de Veículos</div>
-                {perfisCompat.length === 0 ? (
-                  <div style={{ fontSize: '0.78em', color: '#b45309', backgroundColor: '#fef3c7', padding: '6px 10px', borderRadius: '4px', border: '1px solid #fcd34d' }}>
-                    Nenhum perfil salvo. Crie em "Compatibilidade".
-                  </div>
-                ) : (
-                  <select
-                    value={perfilCompatId}
-                    onChange={e => handlePerfilCompatChange(e.target.value)}
-                    style={{ width: '100%', padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '0.82em', outline: 'none' }}
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  {perfisCompat.length === 0 ? (
+                    <div style={{ fontSize: '0.78em', color: '#b45309', backgroundColor: '#fef3c7', padding: '6px 10px', borderRadius: '4px', border: '1px solid #fcd34d', flex: 1 }}>
+                      Nenhum perfil salvo. Crie em "Compatibilidade".
+                    </div>
+                  ) : (
+                    <select
+                      value={perfilCompatId}
+                      onChange={e => { handlePerfilCompatChange(e.target.value); setCompatRapida(null); }}
+                      style={{ flex: 1, padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '0.82em', outline: 'none' }}
+                    >
+                      <option value="">-- Não aplicar --</option>
+                      {perfisCompat.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setModalPreenchRapido(true)}
+                    style={{ padding: '5px 10px', fontSize: '0.78em', fontWeight: 700, border: '1px solid #c4b5fd', color: '#6d28d9', backgroundColor: '#f5f3ff', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}
                   >
-                    <option value="">-- Não aplicar --</option>
-                    {perfisCompat.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                  </select>
+                    ⚡ Preenchimento Rápido
+                  </button>
+                </div>
+                {compatRapida && (
+                  <div style={{ marginTop: '6px', fontSize: '0.75em', color: '#6d28d9', backgroundColor: '#f5f3ff', padding: '4px 8px', borderRadius: '4px', border: '1px solid #c4b5fd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>⚡ {compatRapida.length} veículos (preenchimento rápido)</span>
+                    <button onClick={() => setCompatRapida(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '1em', lineHeight: 1 }}>×</button>
+                  </div>
                 )}
-                {perfilCompatData && (
+                {!compatRapida && perfilCompatData && (
                   <div style={{ marginTop: '6px', fontSize: '0.75em', color: '#15803d', backgroundColor: '#f0fdf4', padding: '4px 8px', borderRadius: '4px', border: '1px solid #bbf7d0' }}>
                     ✅ {(perfilCompatData.compatibilities || []).length} veículos — enviado após criação
                   </div>
@@ -1890,6 +2032,16 @@ export default function ReplicadorAnuncio({ usuarioId }) {
         </div>
       </div>
       </> }
+
+      {/* Modal de Preenchimento Rápido de Compatibilidade */}
+      {modalPreenchRapido && (
+        <ModalPreenchimentoRapido
+          contaId={contasML[0]?.id}
+          usuarioId={usuarioId}
+          onClose={() => setModalPreenchRapido(false)}
+          onAplicarLocal={(veiculos) => { setCompatRapida(veiculos); setPerfilCompatId(''); setPerfilCompatData(null); setModalPreenchRapido(false); }}
+        />
+      )}
 
       {/* Modal de navegação de categoria */}
       {isModalCatOpen && (

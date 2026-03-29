@@ -158,101 +158,150 @@ export const promocoesController = {
     }
   },
 
-  // ─── POST /api/promocoes/sync (✅ CORRIGIDO & OTIMIZADO) ────────────────────
+  // ─── POST /api/promocoes/sync ────────────────────────────────────────────────
   async syncPromocoes(req, res) {
     try {
-      const { userId, contaId } = req.body;
+      const { userId, contaId, forceSync } = req.body;
       if (!userId) return res.status(400).json({ erro: 'userId obrigatório' });
 
+      // Scoped to userId — never leaks between users
       const contasWhere = { userId };
       if (contaId) contasWhere.id = contaId;
       const contas = await prisma.contaML.findMany({ where: contasWhere });
 
       if (contas.length === 0) return res.status(404).json({ erro: 'Nenhuma conta encontrada' });
 
-      let totalSynced = 0;
-      const errors = [];
+      // Cria tarefa para acompanhamento via polling
+      const tarefa = await prisma.tarefaFila.create({
+        data: { userId, tipo: 'PROMO_SYNC', status: 'PROCESSANDO', detalhes: '[0%] Iniciando...' },
+      });
 
-      for (const conta of contas) {
+      // Responde imediatamente com o tarefaId — processamento ocorre em background
+      res.json({ ok: true, tarefaId: tarefa.id });
+
+      // ── Processamento em background ──────────────────────────────────────────
+      (async () => {
+        const CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 horas
+        let totalSynced = 0;
+        let totalFromCache = 0;
+        const errors = [];
+
+        const updateProgresso = (pct, msg) =>
+          prisma.tarefaFila.update({ where: { id: tarefa.id }, data: { detalhes: `[${pct}%] ${msg}` } }).catch(() => {});
+
         try {
-          const token = await refreshContaToken(conta);
-          const headers = { Authorization: `Bearer ${token}` };
+          // Fase 1: coleta listagem de promoções de todas as contas (rápido, sem buscar itens)
+          await updateProgresso(0, 'Coletando lista de promoções...');
+          const promosPorConta = []; // [{ conta, token, promos[] }]
 
-          let allPromos = [];
-          let offset = 0;
-          const limit = 50;
-
-          while (true) {
-            const res2 = await axios.get(
-              `https://api.mercadolibre.com/seller-promotions/users/${conta.id}?app_version=v2&limit=${limit}&offset=${offset}`,
-              { headers, timeout: 15000 }
-            );
-            const batch = res2.data.results || [];
-            allPromos.push(...batch);
-            const paging = res2.data.paging || {};
-            if (offset + limit >= (paging.total || 0) || batch.length === 0) break;
-            offset += limit;
-            await delay(300);
+          for (const conta of contas) {
+            const token = await refreshContaToken(conta);
+            const headers = { Authorization: `Bearer ${token}` };
+            let allPromos = [];
+            let offset = 0;
+            const limit = 50;
+            while (true) {
+              const r = await axios.get(
+                `https://api.mercadolibre.com/seller-promotions/users/${conta.id}?app_version=v2&limit=${limit}&offset=${offset}`,
+                { headers, timeout: 15000 }
+              );
+              const batch = r.data.results || [];
+              allPromos.push(...batch);
+              const paging = r.data.paging || {};
+              if (offset + limit >= (paging.total || 0) || batch.length === 0) break;
+              offset += limit;
+              await delay(300);
+            }
+            console.log(`[PromoML] Conta ${conta.nickname}: ${allPromos.length} promoções encontradas.`);
+            promosPorConta.push({ conta, token, promos: allPromos });
           }
 
-          console.log(`[PromoML] Conta ${conta.nickname}: ${allPromos.length} promoções encontradas.`);
+          const totalPromos = promosPorConta.reduce((s, c) => s + c.promos.length, 0);
+          let processado = 0;
 
-          for (const promo of allPromos) {
-            try {
-              // ✅ OTIMIZAÇÃO: Não busca itens de campanhas finalizadas para poupar API
-              let items = [];
-              if (promo.status === 'started' || promo.status === 'pending') {
-                items = await fetchPromoItems(promo.id, promo.type, token);
-                await delay(200);
-              } else {
-                const existente = await prisma.promoML.findUnique({ where: { id_contaId: { id: promo.id, contaId: conta.id } } });
-                items = existente?.itens || [];
+          // Fase 2: processa cada promoção com progresso real
+          for (const { conta, token, promos } of promosPorConta) {
+            for (const promo of promos) {
+              try {
+                let items = [];
+                const existente = await prisma.promoML.findUnique({
+                  where: { id_contaId: { id: promo.id, contaId: conta.id } },
+                });
+
+                const statusAtivo = promo.status === 'started' || promo.status === 'pending';
+
+                if (!statusAtivo) {
+                  items = existente?.itens || [];
+                  console.log(`[PromoML]   ${promo.id} (${promo.type}) — finalizada, usando banco`);
+                } else {
+                  const statusMudou = existente?.status !== promo.status;
+                  const cacheExpirado = !existente?.fetchedAt ||
+                    (Date.now() - new Date(existente.fetchedAt).getTime()) > CACHE_TTL_MS;
+
+                  if (!forceSync && !statusMudou && !cacheExpirado) {
+                    items = existente.itens || [];
+                    totalFromCache++;
+                    console.log(`[PromoML]   ${promo.id} (${promo.type}) — cache válido (${items.length} itens)`);
+                  } else {
+                    const motivo = forceSync ? 'forceSync' : statusMudou ? 'status mudou' : 'cache expirado';
+                    console.log(`[PromoML]   ${promo.id} (${promo.type}) — buscando itens via API [${motivo}]...`);
+                    items = await fetchPromoItems(promo.id, promo.type, token);
+                    console.log(`[PromoML]   ${promo.id} — ${items.length} itens carregados`);
+                    await delay(200);
+                  }
+                }
+
+                await prisma.promoML.upsert({
+                  where: { id_contaId: { id: promo.id, contaId: conta.id } },
+                  create: {
+                    id: promo.id, contaId: conta.id, tipo: promo.type,
+                    sub_type: promo.sub_type || null, status: promo.status,
+                    nome: promo.name || null,
+                    startDate: promo.start_date ? new Date(promo.start_date) : null,
+                    finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
+                    deadline_date: promo.deadline_date ? new Date(promo.deadline_date) : null,
+                    itens: items, benefits: promo.benefits || null, dadosML: promo,
+                  },
+                  update: {
+                    tipo: promo.type, sub_type: promo.sub_type || null, status: promo.status,
+                    nome: promo.name || null,
+                    startDate: promo.start_date ? new Date(promo.start_date) : null,
+                    finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
+                    deadline_date: promo.deadline_date ? new Date(promo.deadline_date) : null,
+                    itens: items, benefits: promo.benefits || null, dadosML: promo,
+                    fetchedAt: new Date(),
+                  },
+                });
+
+                totalSynced++;
+              } catch (promoErr) {
+                errors.push({ promoId: promo.id, erro: promoErr.message });
               }
 
-              await prisma.promoML.upsert({
-                where: { id_contaId: { id: promo.id, contaId: conta.id } },
-                create: {
-                  id: promo.id,
-                  contaId: conta.id,
-                  tipo: promo.type,
-                  sub_type: promo.sub_type || null, // ✅ NOVO
-                  status: promo.status,
-                  nome: promo.name || null,
-                  startDate: promo.start_date ? new Date(promo.start_date) : null,
-                  finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
-                  deadline_date: promo.deadline_date ? new Date(promo.deadline_date) : null, // ✅ NOVO
-                  itens: items,
-                  benefits: promo.benefits || null, // ✅ NOVO
-                  dadosML: promo,
-                },
-                update: {
-                  tipo: promo.type,
-                  sub_type: promo.sub_type || null, // ✅ NOVO
-                  status: promo.status,
-                  nome: promo.name || null,
-                  startDate: promo.start_date ? new Date(promo.start_date) : null,
-                  finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
-                  deadline_date: promo.deadline_date ? new Date(promo.deadline_date) : null, // ✅ NOVO
-                  itens: items,
-                  benefits: promo.benefits || null, // ✅ NOVO
-                  dadosML: promo,
-                  fetchedAt: new Date(),
-                },
-              });
-
-              totalSynced++;
-            } catch (promoErr) {
-              errors.push({ promoId: promo.id, erro: promoErr.message });
+              processado++;
+              const pct = totalPromos > 0 ? Math.round((processado / totalPromos) * 100) : 0;
+              await updateProgresso(pct, `${conta.nickname}: ${processado}/${totalPromos} promoções`);
             }
           }
-        } catch (contaErr) {
-          errors.push({ contaId: conta.id, erro: contaErr.message });
-        }
-      }
 
-      res.json({ ok: true, totalSynced, errors });
+          const cacheInfo = totalFromCache > 0 ? ` (${totalFromCache} do cache, ${totalSynced - totalFromCache} via API)` : '';
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: {
+              status: 'CONCLUIDO',
+              detalhes: `[100%] ${totalSynced} promoções sincronizadas${cacheInfo}${errors.length ? ` — ${errors.length} erro(s)` : ''}`,
+            },
+          });
+        } catch (err) {
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: { status: 'FALHA', detalhes: `Erro: ${err.message}` },
+          });
+        }
+      })();
+
     } catch (err) {
-      res.status(500).json({ erro: 'Erro ao sincronizar promoções', detalhes: err.message });
+      res.status(500).json({ erro: 'Erro ao iniciar sincronização', detalhes: err.message });
     }
   },
 
@@ -554,6 +603,8 @@ export const promocoesController = {
         const tolerancia = parseFloat(regra.tolerancia) || 0;
         const limiteMax = maxPct + tolerancia;
 
+        const agora = new Date();
+
         const promos = await prisma.promoML.findMany({
           where: {
             contaId: { in: contas.map(c => c.id) },
@@ -563,6 +614,12 @@ export const promocoesController = {
         });
 
         for (const promo of promos) {
+          // Ignora promos cuja data de término já passou (banco desatualizado)
+          if (promo.finishDate && new Date(promo.finishDate) < agora) {
+            console.log(`[Orquestrador] Promo ${promo.id} ignorada: finishDate no passado (${promo.finishDate})`);
+            continue;
+          }
+
           const items = Array.isArray(promo.itens) ? promo.itens : [];
           const candidates = items.filter(item => {
             if (item.status !== 'candidate') return false;
@@ -583,7 +640,12 @@ export const promocoesController = {
 
             if (TIPOS_COM_PRECO_ORC.has(promo.tipo)) {
               const priceToUse = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
-              if (priceToUse && !isNaN(priceToUse)) filaItem.dealPrice = Number(priceToUse);
+              if (!priceToUse || isNaN(priceToUse)) {
+                // Sem preço disponível: ignora o item
+                skipped.push({ promoId: promo.id, itemId: item.id, motivo: 'sem_preco' });
+                continue;
+              }
+              filaItem.dealPrice = Number(priceToUse);
             }
 
             itensFila.push(filaItem);

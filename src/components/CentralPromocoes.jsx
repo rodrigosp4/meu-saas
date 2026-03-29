@@ -137,7 +137,16 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
     setBulkLoading(true);
     setBulkResult(null);
     try {
-      const itensParaFila = candidateItems.filter(item => !itemActions[item.id]?.done).map(item => {
+      const itensParaFila = candidateItems.filter(item => {
+        if (itemActions[item.id]?.done) return false;
+        if (TIPOS_COM_PRECO.has(promo.tipo)) {
+          const st = itemActions[item.id] || {};
+          const suggestedPrice = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
+          const dealPrice = st.dealPrice ?? suggestedPrice;
+          if (!dealPrice || isNaN(Number(dealPrice)) || Number(dealPrice) <= 0) return false;
+        }
+        return true;
+      }).map(item => {
         const st = itemActions[item.id] || {};
         const suggestedPrice = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
         const dealPrice = st.dealPrice ?? suggestedPrice;
@@ -147,7 +156,7 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
           promoId: promo.id,
           promoTipo: promo.tipo,
           offerId: item.offer_id,
-          dealPrice: dealPrice,
+          dealPrice: dealPrice ? Number(dealPrice) : undefined,
           topDealPrice: st.topDealPrice,
           stock: st.stock,
         };
@@ -418,6 +427,9 @@ function TabPromocoes({ usuarioId, contas }) {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [syncProgress, setSyncProgress] = useState(null); // null | { pct, msg }
+  const syncPollRef = React.useRef(null);
   const [filters, setFilters] = useState({ contaId: '', tipo: '', status: '', maxSellerPct: '', soComMargem: false });
   const [itemSearch, setItemSearch] = useState('');
   const [resettingMargem, setResettingMargem] = useState(false);
@@ -434,7 +446,13 @@ function TabPromocoes({ usuarioId, contas }) {
 
       const res = await fetch(`/api/promocoes?${params}`);
       const data = await res.json();
-      setPromos(data.results || []);
+      const results = data.results || [];
+      setPromos(results);
+      const maxFetchedAt = results.reduce((max, p) => {
+        const t = p.fetchedAt ? new Date(p.fetchedAt).getTime() : 0;
+        return t > max ? t : max;
+      }, 0);
+      if (maxFetchedAt > 0) setLastSyncAt(new Date(maxFetchedAt));
     } catch {
       setPromos([]);
     } finally {
@@ -444,11 +462,12 @@ function TabPromocoes({ usuarioId, contas }) {
 
   useEffect(() => { load(); }, [load]);
 
-  async function handleSync() {
+  async function handleSync(forceSync = false) {
     setSyncing(true);
     setSyncMsg('');
+    setSyncProgress({ pct: 0, msg: 'Iniciando...' });
     try {
-      const body = { userId: usuarioId };
+      const body = { userId: usuarioId, forceSync };
       if (filters.contaId) body.contaId = filters.contaId;
       const res = await fetch('/api/promocoes/sync', {
         method: 'POST',
@@ -456,12 +475,36 @@ function TabPromocoes({ usuarioId, contas }) {
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      setSyncMsg(`✅ ${data.totalSynced} promoções sincronizadas${data.errors?.length ? ` (${data.errors.length} erros)` : ''}`);
-      await load();
+      if (!res.ok || !data.tarefaId) throw new Error(data.erro || 'Erro ao iniciar sincronização');
+
+      // Polling de progresso via tarefaFila
+      if (syncPollRef.current) clearInterval(syncPollRef.current);
+      syncPollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/fila/${data.tarefaId}/detalhes?userId=${encodeURIComponent(usuarioId)}`);
+          if (!r.ok) return;
+          const d = await r.json();
+
+          // Extrai percentual do formato "[45%] mensagem"
+          const match = (d.detalhes || '').match(/^\[(\d+)%\]\s*(.*)/);
+          if (match) setSyncProgress({ pct: parseInt(match[1]), msg: match[2] });
+
+          if (d.status === 'CONCLUIDO' || d.status === 'FALHA') {
+            clearInterval(syncPollRef.current);
+            syncPollRef.current = null;
+            setSyncing(false);
+            setSyncProgress(null);
+            const icon = d.status === 'CONCLUIDO' ? '✅' : '❌';
+            setSyncMsg(`${icon} ${match ? match[2] : d.detalhes}`);
+            await load();
+          }
+        } catch (_) {}
+      }, 2000);
+
     } catch (e) {
-      setSyncMsg('❌ Erro ao sincronizar: ' + e.message);
-    } finally {
       setSyncing(false);
+      setSyncProgress(null);
+      setSyncMsg('❌ Erro ao sincronizar: ' + e.message);
     }
   }
 
@@ -578,18 +621,47 @@ function TabPromocoes({ usuarioId, contas }) {
 
         {syncMsg && <span className="text-xs text-gray-500">{syncMsg}</span>}
 
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-white text-sm font-bold px-4 py-1.5 rounded-lg transition-colors"
-        >
-          {syncing ? (
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-          ) : (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+        <div className="flex flex-col items-end gap-1">
+          {lastSyncAt && !syncing && (
+            <span className="text-[10px] text-gray-400">
+              Última sincronia: {lastSyncAt.toLocaleDateString('pt-BR')} às {lastSyncAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </span>
           )}
-          {syncing ? 'Sincronizando...' : 'Sincronizar via API'}
-        </button>
+          {syncing && syncProgress && (
+            <div className="w-56 flex flex-col gap-1">
+              <div className="flex justify-between text-[10px] text-orange-600">
+                <span className="truncate max-w-[180px]">{syncProgress.msg}</span>
+                <span className="font-bold ml-1">{syncProgress.pct}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-orange-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-orange-500 rounded-full transition-all duration-500"
+                  style={{ width: `${syncProgress.pct}%` }}
+                />
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => handleSync(false)}
+            disabled={syncing}
+            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-white text-sm font-bold px-4 py-1.5 rounded-lg transition-colors"
+          >
+            {syncing ? (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            )}
+            {syncing ? 'Sincronizando...' : 'Sincronizar via API'}
+          </button>
+          {!syncing && (
+            <button
+              onClick={() => { if (window.confirm('Isso vai re-buscar os itens de TODAS as promoções ativas na API do ML, ignorando o cache. Pode demorar vários minutos. Confirma?')) handleSync(true); }}
+              className="text-[10px] text-orange-400 hover:text-orange-600 underline transition-colors"
+            >
+              Forçar sincronização completa
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}

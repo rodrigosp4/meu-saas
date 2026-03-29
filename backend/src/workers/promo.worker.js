@@ -83,8 +83,32 @@ export const promoWorker = new Worker('promo-queue', async (job) => {
       sucessos++;
       detalhesLogs.push(logDesteItem);
     } catch (err) {
+      const errMsg = err.response?.data?.message || err.response?.data?.cause?.[0]?.error_message || err.message || '';
       falhas++;
-      detalhesLogs.push(`${logDesteItem} Erro: ${err.response?.data?.message || err.response?.data?.cause?.[0]?.error_message || err.message}`);
+      detalhesLogs.push(`${logDesteItem} Erro: ${errMsg}`);
+
+      // Erros permanentes: remove o item dos candidatos para não tentar novamente
+      const ERROS_PERMANENTES = [
+        'item condition must be new',
+        'PROMOTION_STATUS_OPT_IN - finished',
+        'The item must be active',
+        'item must be active',
+        'free listing',
+      ];
+      const isPermanente = ERROS_PERMANENTES.some(e => errMsg.toLowerCase().includes(e.toLowerCase()));
+      if (isPermanente && acao === 'ATIVAR' && item.promoId) {
+        try {
+          const promoRecord = await prisma.promoML.findUnique({
+            where: { id_contaId: { id: item.promoId, contaId: item.contaId } },
+          });
+          if (promoRecord && Array.isArray(promoRecord.itens)) {
+            await prisma.promoML.update({
+              where: { id_contaId: { id: item.promoId, contaId: item.contaId } },
+              data: { itens: promoRecord.itens.filter(i => i.id !== item.itemId) },
+            });
+          }
+        } catch (_) {}
+      }
     }
 
     processedCount++;

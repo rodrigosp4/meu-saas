@@ -1795,7 +1795,7 @@ async getAdsBySkuList(req, res) {
 async corrigirPreco(req, res) {
     try {
       const {
-        userId, items, modo, regraId, precoManual,
+        userId, items, modo, regraId, regraIdPorConta, precoManual,
         precoBaseManual, inflar, reduzir, removerPromocoes,
         enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase
       } = req.body;
@@ -1804,7 +1804,7 @@ async corrigirPreco(req, res) {
         return res.status(400).json({ erro: 'Parâmetros incompletos.' });
       }
 
-      const jobPayload = { modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase };
+      const jobPayload = { modo, regraId, regraIdPorConta, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase };
 
       const tarefa = await prisma.tarefaFila.create({
         data: {

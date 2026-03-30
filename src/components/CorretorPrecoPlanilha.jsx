@@ -148,9 +148,14 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
 
   // Config
   const [regrasPreco, setRegrasPreco] = useState([]);
+  const [contasML, setContasML] = useState([]);
   const [configAtacado, setConfigAtacado] = useState(null);
   const [tipoBase, setTipoBase] = useState('venda');
   const [regraId, setRegraId] = useState('');
+  // regrasPorConta: usa regraPrecoId de cada ContaML (configurado nas Configurações)
+  // regrasContaMap: override local para esta sessão { contaId: regraId }
+  const [regrasPorConta, setRegrasPorConta] = useState(false);
+  const [regrasContaMap, setRegrasContaMap] = useState({});
   const [inflar, setInflar] = useState(0);
   const [reduzir, setReduzir] = useState(0);
   const [removerPromocoes, setRemoverPromocoes] = useState(false);
@@ -175,8 +180,18 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
       .then(r => r.json())
       .then(d => {
         if (d.regrasPreco) setRegrasPreco(d.regrasPreco);
+        const contas = d.contasML || [];
+        if (contas.length) setContasML(contas);
         if (d.configAtacado) setConfigAtacado(d.configAtacado);
-        if (d.regrasPreco?.length) setRegraId(d.regrasPreco[0].id);
+        // Pré-carrega o mapa com as regras configuradas nas Configurações
+        const mapa = {};
+        for (const c of contas) { if (c.regraPrecoId) mapa[c.id] = c.regraPrecoId; }
+        if (Object.keys(mapa).length > 0) {
+          setRegrasContaMap(mapa);
+          setRegrasPorConta(true);
+        } else if (d.regrasPreco?.length) {
+          setRegraId(d.regrasPreco[0].id);
+        }
       })
       .catch(() => {});
   }, [usuarioId]);
@@ -293,7 +308,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
   };
 
   // ── Linhas da tabela ───────────────────────────────────────────────────
-  const regra = regrasPreco.find(r => r.id === regraId);
+  const regraGlobal = regrasPreco.find(r => r.id === regraId);
   const linhas = [];
 
   for (const produto of produtosFiltrados) {
@@ -307,6 +322,9 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
     } else {
       for (const ad of ads) {
         const tipoML = (ad.dadosML?.listing_type_id || '').includes('pro') ? 'premium' : 'classico';
+        const regra = regrasPorConta
+          ? regrasPreco.find(r => r.id === regrasContaMap[ad.contaId])
+          : regraGlobal;
         let precoCalculado, historico;
         if (regra) {
           const r = calcularPrecoRegraSimples(precoBase, regra, tipoML, Number(inflar), Number(reduzir), ad.custoFrete || 0);
@@ -374,8 +392,9 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
         body: JSON.stringify({
           userId: usuarioId,
           items,
-          modo: regraId ? 'csv' : 'csv',
-          regraId: regraId || undefined,
+          modo: 'csv',
+          regraId: !regrasPorConta ? (regraId || undefined) : undefined,
+          regraIdPorConta: regrasPorConta ? regrasContaMap : undefined,
           inflar: Number(inflar),
           reduzir: Number(reduzir),
           removerPromocoes,
@@ -477,6 +496,26 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
                 )}
               </div>
 
+              <button
+                type="button"
+                onClick={() => {
+                  const ws = XLSX.utils.aoa_to_sheet([
+                    ['Código (SKU)', 'Descrição', 'Tipo do produto', 'Situação', 'Código do pai', 'Preço', 'Preço de custo', 'Preço promocional'],
+                    ['SKU001', 'Produto Exemplo 1', 'P', 'Ativo', '', '99,90', '45,00', '89,90'],
+                    ['SKU002', 'Produto Exemplo 2', 'P', 'Ativo', '', '149,90', '70,00', ''],
+                    ['SKU003-P', 'Produto com Variação (pai)', 'V', 'Ativo', '', '', '', ''],
+                    ['SKU003-A', 'Produto com Variação (filho)', 'S', 'Ativo', 'SKU003-P', '79,90', '35,00', '69,90'],
+                  ]);
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Produtos');
+                  XLSX.writeFile(wb, 'planilha_exemplo_corretor.xlsx');
+                }}
+                className="mt-2 w-full flex items-center justify-center gap-1.5 text-xs text-emerald-600 hover:text-emerald-700 border border-emerald-200 hover:border-emerald-400 rounded-lg py-1.5 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                Baixar planilha de exemplo (.xlsx)
+              </button>
+
               {csvStats && (
                 <div className="mt-3 space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
@@ -538,15 +577,59 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
 
                 {/* Regra */}
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Regra de Markup</label>
-                  <select value={regraId} onChange={e => setRegraId(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400">
-                    <option value="">Sem regra — publica o preço base diretamente</option>
-                    {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
-                  </select>
-                  {regrasPreco.length === 0 && (
-                    <p className="text-xs text-amber-600 mt-1">Nenhuma regra cadastrada. Configure em Configurações API.</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Regra de Markup</label>
+                    {contasML.length > 0 && regrasPreco.length > 0 && (
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={regrasPorConta}
+                          onChange={e => {
+                            setRegrasPorConta(e.target.checked);
+                            if (!e.target.checked) setRegrasContaMap({});
+                          }}
+                          className="rounded border-gray-300 text-emerald-600"
+                        />
+                        <span className="text-[10px] text-gray-500 font-medium">Regra por conta</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {!regrasPorConta ? (
+                    <>
+                      <select value={regraId} onChange={e => setRegraId(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400">
+                        <option value="">Sem regra — publica o preço base diretamente</option>
+                        {regrasPreco.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
+                      </select>
+                      {regrasPreco.length === 0 && (
+                        <p className="text-xs text-amber-600 mt-1">Nenhuma regra cadastrada. Configure em Configurações API.</p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="space-y-2 mt-1">
+                      {contasML.map(conta => {
+                        const temPadrao = !!conta.regraPrecoId;
+                        return (
+                          <div key={conta.id} className="flex items-center gap-2">
+                            <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 w-24 truncate" title={conta.nickname}>{conta.nickname}</span>
+                            <select
+                              value={regrasContaMap[conta.id] || ''}
+                              onChange={e => setRegrasContaMap(prev => ({ ...prev, [conta.id]: e.target.value }))}
+                              className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                            >
+                              <option value="">Sem regra</option>
+                              {regrasPreco.map(r => (
+                                <option key={r.id} value={r.id}>
+                                  {r.nome}{temPadrao && conta.regraPrecoId === r.id ? ' ★' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                      <p className="text-[10px] text-gray-400">★ = regra padrão configurada nas Configurações API</p>
+                    </div>
                   )}
-                  {!regraId && <p className="text-xs text-gray-400 mt-1">O preço da planilha será publicado no ML sem nenhum cálculo adicional de margem ou tarifa.</p>}
                 </div>
 
                 {/* Inflar / Reduzir */}

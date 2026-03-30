@@ -14,6 +14,99 @@ const connection = {
 
 const ML_BASE = 'https://api.mercadolibre.com';
 
+// ===== MONITOR DE PROMOÇÕES =====
+async function verificarMonitorPromocoes(userId) {
+  const cfg = await prisma.monitorPromoConfig.findUnique({ where: { userId } });
+  if (!cfg || !cfg.ativo) return 0;
+
+  const tiposIgnorar = Array.isArray(cfg.tiposIgnorar) ? cfg.tiposIgnorar : [];
+  const contasML = await prisma.contaML.findMany({ where: { userId }, select: { id: true } });
+  const contaIds = contasML.map(c => c.id);
+  if (contaIds.length === 0) return 0;
+
+  // Busca promos pending/started que tenham itens candidatos e estejam dentro do limite
+  const promos = await prisma.promoML.findMany({
+    where: {
+      contaId: { in: contaIds },
+      status: { in: ['pending', 'started'] },
+      ...(tiposIgnorar.length > 0 ? { tipo: { notIn: tiposIgnorar } } : {}),
+    },
+  });
+
+  let novasAlertas = 0;
+
+  for (const promo of promos) {
+    const itens = Array.isArray(promo.itens) ? promo.itens : [];
+    const candidatos = itens.filter(i => i.status === 'candidate');
+    if (candidatos.length === 0) continue;
+
+    // Calcula % médio do vendedor nos candidatos
+    const percs = candidatos.map(i => i.seller_percentage ?? i.sellerPct ?? null).filter(p => p != null);
+    if (percs.length === 0) continue;
+    const avgPct = percs.reduce((a, b) => a + b, 0) / percs.length;
+
+    if (avgPct > cfg.maxSellerPct) continue;
+
+    // Cria alerta se ainda não existir
+    try {
+      await prisma.promoAlerta.upsert({
+        where: { userId_promoId: { userId, promoId: promo.id } },
+        create: {
+          userId,
+          contaId: promo.contaId,
+          promoId: promo.id,
+          tipo: promo.tipo,
+          nome: promo.nome,
+          sellerPct: avgPct,
+        },
+        update: { sellerPct: avgPct, nome: promo.nome },
+      });
+      novasAlertas++;
+    } catch {
+      // já existe, ignora
+    }
+
+    // Se autoAtivar, aciona via API (já existe lógica de ativar no controller)
+    if (cfg.autoAtivar) {
+      const conta = await prisma.contaML.findFirst({ where: { id: promo.contaId } });
+      if (conta) {
+        try {
+          const refreshed = await mlService.refreshToken(conta.refreshToken);
+          const token = refreshed?.access_token || conta.accessToken;
+          if (refreshed?.access_token) {
+            await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token } }).catch(() => {});
+          }
+          for (const item of candidatos) {
+            try {
+              const body = { promotion_id: promo.id };
+              if (item.offer_id) body.offer_id = item.offer_id;
+              const dealPrice = item.suggested_discounted_price ?? (item.price > 0 ? item.price : null);
+              if (dealPrice) body.deal_price = dealPrice;
+              await axios.put(
+                `${ML_BASE}/seller-promotions/promotions/${promo.id}/items/${item.id}`,
+                body,
+                { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
+              );
+              await new Promise(r => setTimeout(r, 300));
+            } catch (e) {
+              console.error(`[Monitor] erro ao auto-ativar item ${item.id}:`, e.message);
+            }
+          }
+          // Marca como aceita automaticamente
+          await prisma.promoAlerta.update({
+            where: { userId_promoId: { userId, promoId: promo.id } },
+            data: { aceita: true },
+          }).catch(() => {});
+        } catch (e) {
+          console.error(`[Monitor] erro ao auto-ativar promo ${promo.id}:`, e.message);
+        }
+      }
+    }
+  }
+
+  return novasAlertas;
+}
+
 async function getAuthHeaders(userId) {
   const conta = await prisma.contaML.findFirst({ where: { userId } });
   if (!conta) return {};
@@ -193,9 +286,20 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
     }
   }
 
-  const resumo = `[Cron] Varredura concluída: ${contasSincronizadas} conta(s) ML enfileirada(s), ${usuariosSincronizados} sync(s) Tiny agendado(s).`;
+  // 3) Monitora promoções para cada usuário
+  let totalAlertas = 0;
+  for (const user of usuarios) {
+    try {
+      const novas = await verificarMonitorPromocoes(user.id);
+      totalAlertas += novas;
+    } catch (e) {
+      console.error(`[Cron-Monitor] Erro para userId=${user.id}:`, e.message);
+    }
+  }
+
+  const resumo = `[Cron] Varredura concluída: ${contasSincronizadas} conta(s) ML, ${usuariosSincronizados} sync(s) Tiny, ${totalAlertas} alerta(s) de promoção gerado(s).`;
   console.log('✅', resumo);
-  return { contasSincronizadas, usuariosSincronizados };
+  return { contasSincronizadas, usuariosSincronizados, totalAlertas };
 }, {
   connection,
   concurrency: 1,

@@ -234,7 +234,7 @@ function calcularPrecoCorrigir(precoBase, inflar, reduzir) {
 
 // 🚀 START MAIN WORKER
 export const priceWorker = new Worker('update-price', async (job) => {
-  const { tarefaId, userId, items, modo, regraId, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase } = job.data;
+  const { tarefaId, userId, items, modo, regraId, regraIdPorConta, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase } = job.data;
 
   const tarefaExiste = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
   if (!tarefaExiste) return { success: false, message: 'Tarefa excluída' };
@@ -254,7 +254,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
 
   const tinyToken = await getTinyAccessToken(userId);
   const tinyLimits = getTinyRateLimit(userConfig?.tinyPlano);
-  const regra = regras.find(r => r.id === regraId);
+  const regraGlobal = regraIdPorConta ? null : regras.find(r => r.id === regraId);
   const faixasAtacado = (enviarAtacado && configAtacadoDb?.ativo && Array.isArray(configAtacadoDb.faixas)) ? configAtacadoDb.faixas : [];
   const modoCSV = modo === 'csv';
 
@@ -391,10 +391,26 @@ export const priceWorker = new Worker('update-price', async (job) => {
         }
       }
 
+      const regra = regraIdPorConta
+        ? regras.find(r => r.id === regraIdPorConta[item.contaId])
+        : regraGlobal;
+
+      let regraEfetiva = regra;
+      if (regra && regra.variacoesPorConta && typeof regra.variacoesPorConta === 'object' && regra.variacoesPorConta[item.contaId]) {
+         const variacao = regra.variacoesPorConta[item.contaId];
+         if (variacao.variaveis && variacao.variaveis.length > 0) {
+           regraEfetiva = {
+             ...regra,
+             precoBase: variacao.precoBase || regra.precoBase,
+             variaveis: variacao.variaveis
+           };
+         }
+      }
+
       let precoNum = 0;
       if (modo === 'manual') {
         precoNum = calcularPrecoCorrigir(Number(precoManual), inflar || 0, reduzir || 0);
-      } else if (modoCSV && !regra) {
+      } else if (modoCSV && !regraEfetiva) {
         // CSV sem regra: usa preço direto da planilha com inflar/reduzir
         const dadosCSV = skuDoAnuncio ? precosTinyMap[skuDoAnuncio] : null;
         if (dadosCSV && dadosCSV !== 'NOT_FOUND' && !dadosCSV.error) {
@@ -404,11 +420,11 @@ export const priceWorker = new Worker('update-price', async (job) => {
                           : Number(dadosCSV.preco) || 0;
           precoNum = calcularPrecoCorrigir(precoBase, inflar || 0, reduzir || 0);
         }
-      } else if (regra) {
+      } else if (regraEfetiva) {
         let precoBaseItem = 0;
         if ((tinyToken || modoCSV) && skuDoAnuncio) {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
-          if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) precoBaseItem = resolverPrecoBase(dadosTiny, regra.precoBase || 'promocional');
+          if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) precoBaseItem = resolverPrecoBase(dadosTiny, regraEfetiva.precoBase || 'promocional');
         } else {
           precoBaseItem = Number(precoBaseManual) || 0;
         }
@@ -435,7 +451,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
               itemId: item.id, zipCode: userConfig?.cepOrigem
             }).catch(() => 0);
           }
-          precoNum = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar || 0, reduzir || 0, custoFrete, tarifaMLReal, fixedFeeReal);
+          precoNum = calcularPrecoRegra(precoBaseItem, regraEfetiva, tipoML, inflar || 0, reduzir || 0, custoFrete, tarifaMLReal, fixedFeeReal);
         }
       }
 

@@ -222,6 +222,27 @@ router.get('/api/usuario/:id/config', async (req, res) => {
 });
 
 
+// 5b. SALVAR REGRA POR CONTA ML
+router.post('/api/usuario/:id/contas-ml/regras', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { mapa } = req.body; // { [contaId]: regraId | null }
+    if (!mapa || typeof mapa !== 'object') {
+      return res.status(400).json({ erro: 'Parâmetro "mapa" inválido.' });
+    }
+    const updates = Object.entries(mapa).map(([contaId, regraId]) =>
+      prisma.contaML.updateMany({
+        where: { id: contaId, userId },
+        data: { regraPrecoId: regraId || null },
+      })
+    );
+    await Promise.all(updates);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
 // 6. SALVAR CREDENCIAIS DO TINY (client_id e client_secret por usuário)
 router.post('/api/usuario/:id/tiny-credentials', async (req, res) => {
   try {
@@ -283,7 +304,7 @@ router.delete('/api/usuario/:id/contas-ml/:contaId', async (req, res) => {
 router.post('/api/usuario/:id/regras', async (req, res) => {
   try {
     const userId = req.userId;
-    const { id, nome, precoBase, variaveis } = req.body;
+    const { id, nome, precoBase, variaveis, variacoesPorConta } = req.body;
     const regraId = id || undefined;
 
     const existe = regraId ? await prisma.regraPreco.findUnique({ where: { id: regraId } }) : null;
@@ -291,12 +312,12 @@ router.post('/api/usuario/:id/regras', async (req, res) => {
     if (existe) {
       const regra = await prisma.regraPreco.update({
         where: { id: regraId },
-        data: { nome, precoBase, variaveis }
+        data: { nome, precoBase, variaveis, variacoesPorConta: variacoesPorConta ?? null }
       });
       return res.json(regra);
     } else {
       const regra = await prisma.regraPreco.create({
-        data: { userId, nome, precoBase, variaveis }
+        data: { userId, nome, precoBase, variaveis, variacoesPorConta: variacoesPorConta ?? null }
       });
       return res.json(regra);
     }

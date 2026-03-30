@@ -344,16 +344,28 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         precosTinyMap[skuDoAnuncio] = (precosTiny && !precosTiny.error) ? precosTiny : (precosTiny?.error ? precosTiny : 'NOT_FOUND');
       }
 
+      let regraEfetiva = regra;
+      if (regra && regra.variacoesPorConta && typeof regra.variacoesPorConta === 'object' && regra.variacoesPorConta[ad.contaId]) {
+         const variacao = regra.variacoesPorConta[ad.contaId];
+         if (variacao.variaveis && variacao.variaveis.length > 0) {
+           regraEfetiva = {
+             ...regra,
+             precoBase: variacao.precoBase || regra.precoBase,
+             variaveis: variacao.variaveis
+           };
+         }
+      }
+
       if (modo === 'manual') {
         resultadoCalculo = calcularPrecoCorrigir(Number(precoManual), inflar, reduzir);
-      } else if (regra) {
+      } else if (regraEfetiva) {
         let precoBaseItem = 0;
         
         // ✅ CORREÇÃO CRÍTICA: Bloqueia o uso do "precoBaseManual" vazado da interface caso a intenção seja usar o Tiny
         if (tinyToken && skuDoAnuncio) {
             const dadosTiny = precosTinyMap[skuDoAnuncio];
             if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) {
-                precoBaseItem = resolverPrecoBase(dadosTiny, regra.precoBase || 'promocional');
+                precoBaseItem = resolverPrecoBase(dadosTiny, regraEfetiva.precoBase || 'promocional');
             } else {
                 precoBaseItem = 0; // Força falhar se o Tiny deu erro ou não encontrou
             }
@@ -390,7 +402,7 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
               itemId: ad.id,
             }).catch(() => 0);
           }
-          resultadoCalculo = calcularPrecoRegra(precoBaseItem, regra, tipoML, inflar, reduzir, custoFrete, tarifaMLReal, fixedFeeReal);
+          resultadoCalculo = calcularPrecoRegra(precoBaseItem, regraEfetiva, tipoML, inflar, reduzir, custoFrete, tarifaMLReal, fixedFeeReal);
         }
       }
 

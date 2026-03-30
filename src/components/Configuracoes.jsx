@@ -22,6 +22,10 @@ export default function Configuracoes({ usuarioId }) {
   const [varTipo, setVarTipo] = useState('perc_custo');
   const [varValor, setVarValor] = useState('');
   const [editandoRegraId, setEditandoRegraId] = useState(null);
+  
+  const [novaRegraPorConta, setNovaRegraPorConta] = useState(false);
+  const [novaRegraVariacoes, setNovaRegraVariacoes] = useState({});
+  const [abaContaAtiva, setAbaContaAtiva] = useState('padrao');
 
   // Atacado (Preço por Quantidade)
   const [cepOrigem, setCepOrigem] = useState('');
@@ -53,6 +57,11 @@ export default function Configuracoes({ usuarioId }) {
   const [subPermissoesCustom, setSubPermissoesCustom] = useState([]);
   const [salvandoSub, setSalvandoSub] = useState(false);
 
+  // ===== REGRA POR CONTA =====
+  const [regrasPorContaMap, setRegrasPorContaMap] = useState({}); // { contaId: regraId }
+  const [salvandoRegrasConta, setSalvandoRegrasConta] = useState(false);
+  const [regrasSalvas, setRegrasSalvas] = useState(false);
+
   // ===== SUPORTE =====
   const [suporteAtivo, setSuporteAtivo] = useState(false);
   const [suporteExpira, setSuporteExpira] = useState(null);
@@ -71,8 +80,13 @@ export default function Configuracoes({ usuarioId }) {
         setTinyPlano(data.tinyPlano || 'descontinuado');
         if (data.tinyClientId) setTinyClientId(data.tinyClientId);
         if (data.tinyClientSecret) setTinyClientSecret(data.tinyClientSecret);
-        setContasML(data.contasML || []);
+        const contas = data.contasML || [];
+        setContasML(contas);
         setRegrasPreco(data.regrasPreco || []);
+        // Carrega mapa de regras por conta
+        const mapa = {};
+        for (const c of contas) { if (c.regraPrecoId) mapa[c.id] = c.regraPrecoId; }
+        setRegrasPorContaMap(mapa);
         if (data.cepOrigem) setCepOrigem(data.cepOrigem);
         if (data.configAtacado) {
           setAtacadoAtivo(data.configAtacado.ativo || false);
@@ -178,12 +192,13 @@ export default function Configuracoes({ usuarioId }) {
   // 4. SALVAR REGRAS NO BANCO
   const salvarRegra = async () => {
     if (!novaRegraNome.trim()) return alert("Dê um nome à regra.");
-    if (novaRegraVariaveis.length === 0) return alert("Adicione pelo menos uma taxa.");
+    if (novaRegraVariaveis.length === 0) return alert("A estrutura padrão deve ter pelo menos uma taxa.");
     const payload = {
       id: editandoRegraId,
       nome: novaRegraNome.trim(),
       precoBase: novaRegraPrecoBase,
-      variaveis: novaRegraVariaveis
+      variaveis: novaRegraVariaveis,
+      variacoesPorConta: novaRegraPorConta ? novaRegraVariacoes : null
     };
     const res = await fetch(`/api/usuario/${usuarioId}/regras`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -205,28 +220,95 @@ export default function Configuracoes({ usuarioId }) {
     }
   };
 
+  const salvarRegrasPorConta = async () => {
+    setSalvandoRegrasConta(true);
+    setRegrasSalvas(false);
+    try {
+      const res = await fetch(`/api/usuario/${usuarioId}/contas-ml/regras`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapa: regrasPorContaMap }),
+      });
+      if (!res.ok) throw new Error((await res.json()).erro || 'Erro');
+      setRegrasSalvas(true);
+      setTimeout(() => setRegrasSalvas(false), 3000);
+    } catch (err) {
+      alert('Erro ao salvar: ' + err.message);
+    } finally {
+      setSalvandoRegrasConta(false);
+    }
+  };
+
   const adicionarVariavel = () => {
     if (!varNome.trim() || !varValor) return alert("Preencha o nome e o valor da taxa/custo.");
     const novaVariavel = { id: Date.now().toString(), nome: varNome.trim(), tipo: varTipo, valor: Number(varValor) };
-    setNovaRegraVariaveis([...novaRegraVariaveis, novaVariavel]);
+    if (abaContaAtiva === 'padrao') {
+      setNovaRegraVariaveis([...novaRegraVariaveis, novaVariavel]);
+    } else {
+      setNovaRegraVariacoes(prev => {
+        const atual = prev[abaContaAtiva] || { precoBase: 'promocional', variaveis: [] };
+        return { ...prev, [abaContaAtiva]: { ...atual, variaveis: [...atual.variaveis, novaVariavel] } };
+      });
+    }
     setVarNome(''); setVarValor('');
   };
-  const removerVariavelTemp = (id) => setNovaRegraVariaveis(novaRegraVariaveis.filter(v => v.id !== id));
-  const moverVariavelTemp = (index, direcao) => {
-    const novasVars = [...novaRegraVariaveis];
-    if (direcao === -1 && index > 0) [novasVars[index - 1], novasVars[index]] = [novasVars[index], novasVars[index - 1]];
-    else if (direcao === 1 && index < novasVars.length - 1) [novasVars[index + 1], novasVars[index]] = [novasVars[index], novasVars[index + 1]];
-    setNovaRegraVariaveis(novasVars);
+
+  const removerVariavelTemp = (id) => {
+    if (abaContaAtiva === 'padrao') {
+      setNovaRegraVariaveis(prev => prev.filter(v => v.id !== id));
+    } else {
+      setNovaRegraVariacoes(prev => {
+        const atual = prev[abaContaAtiva] || { precoBase: 'promocional', variaveis: [] };
+        return { ...prev, [abaContaAtiva]: { ...atual, variaveis: atual.variaveis.filter(v => v.id !== id) } };
+      });
+    }
   };
+
+  const moverVariavelTemp = (index, direcao) => {
+    if (abaContaAtiva === 'padrao') {
+      const novasVars = [...novaRegraVariaveis];
+      if (direcao === -1 && index > 0) [novasVars[index - 1], novasVars[index]] = [novasVars[index], novasVars[index - 1]];
+      else if (direcao === 1 && index < novasVars.length - 1) [novasVars[index + 1], novasVars[index]] = [novasVars[index], novasVars[index + 1]];
+      setNovaRegraVariaveis(novasVars);
+    } else {
+      setNovaRegraVariacoes(prev => {
+        const atual = prev[abaContaAtiva] || { precoBase: 'promocional', variaveis: [] };
+        const novasVars = [...atual.variaveis];
+        if (direcao === -1 && index > 0) [novasVars[index - 1], novasVars[index]] = [novasVars[index], novasVars[index - 1]];
+        else if (direcao === 1 && index < novasVars.length - 1) [novasVars[index + 1], novasVars[index]] = [novasVars[index], novasVars[index + 1]];
+        return { ...prev, [abaContaAtiva]: { ...atual, variaveis: novasVars } };
+      });
+    }
+  };
+
+  const atualizarPrecoBase = (valor) => {
+    if (abaContaAtiva === 'padrao') {
+      setNovaRegraPrecoBase(valor);
+    } else {
+      setNovaRegraVariacoes(prev => {
+        const atual = prev[abaContaAtiva] || { precoBase: 'promocional', variaveis: [] };
+        return { ...prev, [abaContaAtiva]: { ...atual, precoBase: valor } };
+      });
+    }
+  };
+
   const editarRegra = (id) => {
     const regra = regrasPreco.find(r => r.id === id);
     if (regra) {
-      setNovaRegraNome(regra.nome); setNovaRegraPrecoBase(regra.precoBase || 'promocional'); setNovaRegraVariaveis(regra.variaveis); setEditandoRegraId(id);
+      setNovaRegraNome(regra.nome); 
+      setNovaRegraPrecoBase(regra.precoBase || 'promocional'); 
+      setNovaRegraVariaveis(regra.variaveis || []); 
+      setNovaRegraPorConta(!!(regra.variacoesPorConta && Object.keys(regra.variacoesPorConta).length > 0));
+      setNovaRegraVariacoes(regra.variacoesPorConta || {});
+      setAbaContaAtiva('padrao');
+      setEditandoRegraId(id);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
+
   const cancelarEdicao = () => {
     setNovaRegraNome(''); setNovaRegraPrecoBase('promocional'); setNovaRegraVariaveis([]); setEditandoRegraId(null);
+    setNovaRegraPorConta(false); setNovaRegraVariacoes({}); setAbaContaAtiva('padrao');
   };
 
   const adicionarFaixaAtacado = () => {
@@ -715,90 +797,154 @@ export default function Configuracoes({ usuarioId }) {
         
         <div className="p-5 rounded-lg mb-6" style={{ backgroundColor: '#fef5e7', border: '1px solid #f5d9a0' }}>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="text-sm font-bold" style={{ color: c.headingSub }}>1. Nome da Regra</label>
-              <input 
-                type="text" 
-                value={novaRegraNome} 
-                onChange={e => setNovaRegraNome(e.target.value)} 
-                placeholder="Ex: Fórmula Padrão com Frete Grátis" 
-                className="w-full mt-1 px-3 py-2 rounded-md" 
-                style={{ border: `1px solid ${c.orange}40` }}
-              />
-            </div>
-            
-            <div>
-              <label className="text-sm font-bold" style={{ color: c.headingSub }}>2. Preço Base (Base de Cálculo)</label>
-              <select 
-                value={novaRegraPrecoBase} 
-                onChange={e => setNovaRegraPrecoBase(e.target.value)} 
-                className="w-full mt-1 px-3 py-2 rounded-md bg-white"
-                style={{ border: `1px solid ${c.orange}40` }}
-              >
-                <option value="promocional">Preço Promocional (Se houver) ou Venda</option>
-                <option value="venda">Apenas Preço de Venda</option>
-                <option value="custo">Apenas Preço de Custo</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="pt-4 mb-4" style={{ borderTop: `1px solid ${c.orange}30` }}>
-            <label className="text-sm font-bold mb-2 block" style={{ color: c.headingSub }}>3. Adicionar Variáveis (Custos, Taxas, Margens)</label>
-            <div className="flex flex-col sm:flex-row gap-3 items-start">
-              <div className="flex-1 w-full">
-                <input type="text" value={varNome} onChange={e => setVarNome(e.target.value)} placeholder="Nome (Ex: Custo da Caixa, Imposto...)" className="w-full px-3 py-2 border rounded-md text-sm" />
+          <div className="mb-5 pb-5" style={{ borderBottom: `1px solid ${c.orange}30` }}>
+            <label className="text-sm font-bold mb-3 block" style={{ color: c.headingSub }}>1. Opções da Regra</label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold block mb-1" style={{ color: c.muted }}>Nome da Regra</label>
+                <input 
+                  type="text" 
+                  value={novaRegraNome} 
+                  onChange={e => setNovaRegraNome(e.target.value)} 
+                  placeholder="Ex: Fórmula Padrão com Frete Grátis" 
+                  className="w-full px-3 py-2 rounded-md" 
+                  style={{ border: `1px solid ${c.orange}40` }}
+                />
               </div>
-              <div className="flex-1 w-full">
-                <select value={varTipo} onChange={e => setVarTipo(e.target.value)} className="w-full px-3 py-2 border rounded-md text-sm bg-white">
-                  <option value="perc_custo">% Sobre o Custo (Margem de Lucro)</option>
-                  <option value="fixo_custo">R$ Fixo Adicionado ao Custo</option>
-                  <option value="perc_venda">% Sobre o Valor Final de Venda (Impostos)</option>
+              <div>
+                <label className="text-xs font-bold block mb-1" style={{ color: c.muted }}>Tipo de Cálculo</label>
+                <select 
+                  value={novaRegraPorConta ? 'por_conta' : 'global'} 
+                  onChange={e => { 
+                    const isPorConta = e.target.value === 'por_conta';
+                    setNovaRegraPorConta(isPorConta);
+                    setAbaContaAtiva('padrao');
+                  }} 
+                  className="w-full px-3 py-2 rounded-md bg-white"
+                  style={{ border: `1px solid ${c.orange}40` }}
+                >
+                  <option value="global">Mesma precificação para todas as contas</option>
+                  <option value="por_conta">Regra diferente por conta ML</option>
                 </select>
               </div>
-              <div className="w-full sm:w-32">
-                <input type="number" step="0.01" value={varValor} onChange={e => setVarValor(e.target.value)} placeholder="Valor" className="w-full px-3 py-2 border rounded-md text-sm" />
-              </div>
-              <button 
-                onClick={adicionarVariavel} 
-                className="w-full sm:w-auto px-4 py-2 text-white font-bold rounded text-sm transition"
-                style={{ backgroundColor: c.orange }}
-                onMouseOver={e => e.target.style.backgroundColor = c.orangeHover}
-                onMouseOut={e => e.target.style.backgroundColor = c.orange}
-              >
-                + Adicionar
-              </button>
             </div>
           </div>
 
-          {/* Lista de Variáveis Adicionadas */}
-          {novaRegraVariaveis.length > 0 && (
-            <div className="bg-white p-3 rounded border shadow-sm mb-4" style={{ borderColor: c.border }}>
-              <h5 className="text-xs font-bold uppercase mb-2" style={{ color: c.muted }}>Composição da Regra (Ordem de Cálculo):</h5>
-              <ul className="space-y-1">
-                {novaRegraVariaveis.map((v, index) => (
-                  <li key={v.id} className="flex justify-between items-center text-sm py-1 border-b last:border-0 hover:bg-gray-50 px-2 rounded">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium" style={{ color: c.headingSub }}>{index + 1}. {v.nome}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold" style={{ color: v.valor >= 0 ? c.orange : c.red }}>
-                        {v.valor > 0 ? '+' : ''}{v.tipo === 'fixo_custo' ? `R$ ${v.valor}` : `${v.valor}%`}
-                        <span className="text-xs font-normal ml-1" style={{ color: c.muted }}>
-                          ({v.tipo === 'perc_venda' ? 'S/ Venda' : 'S/ Custo'})
-                        </span>
-                      </span>
-                      <div className="flex items-center gap-1 ml-2">
-                        <button onClick={() => moverVariavelTemp(index, -1)} disabled={index === 0} className="hover:text-blue-600 disabled:opacity-30 p-1" style={{ color: c.muted }}>▲</button>
-                        <button onClick={() => moverVariavelTemp(index, 1)} disabled={index === novaRegraVariaveis.length - 1} className="hover:text-blue-600 disabled:opacity-30 p-1" style={{ color: c.muted }}>▼</button>
-                        <button onClick={() => removerVariavelTemp(v.id)} className="font-bold px-2 ml-1" style={{ color: c.red }}>&times;</button>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+          {novaRegraPorConta && (
+            <div className="flex gap-2 overflow-x-auto mb-4 pb-2 border-b" style={{ borderColor: c.orange + '40' }}>
+              <button
+                onClick={() => setAbaContaAtiva('padrao')}
+                className={`px-3 py-1.5 text-xs font-bold whitespace-nowrap rounded ${abaContaAtiva === 'padrao' ? 'text-white shadow-sm' : ''}`}
+                style={{ 
+                  backgroundColor: abaContaAtiva === 'padrao' ? c.orange : 'transparent',
+                  color: abaContaAtiva === 'padrao' ? 'white' : c.orange,
+                  border: `1px solid ${abaContaAtiva === 'padrao' ? c.orange : c.orange + '50'}`
+                }}
+              >
+                Regra Padrão (Global)
+              </button>
+              {contasML.map(conta => (
+                <button
+                  key={conta.id}
+                  onClick={() => setAbaContaAtiva(conta.id)}
+                  className={`px-3 py-1.5 text-xs font-bold whitespace-nowrap rounded flex items-center gap-1 ${abaContaAtiva === conta.id ? 'text-white shadow-sm' : ''}`}
+                  style={{ 
+                    backgroundColor: abaContaAtiva === conta.id ? '#2c3e50' : 'transparent',
+                    color: abaContaAtiva === conta.id ? 'white' : '#2c3e50',
+                    border: `1px solid ${abaContaAtiva === conta.id ? '#2c3e50' : '#2c3e5050'}`
+                  }}
+                >
+                  {novaRegraVariacoes[conta.id] ? '✅' : ''} {conta.nickname}
+                </button>
+              ))}
             </div>
           )}
+
+          {(() => {
+            const varsAtuais = abaContaAtiva === 'padrao' ? novaRegraVariaveis : (novaRegraVariacoes[abaContaAtiva]?.variaveis || []);
+            const precoBaseAtual = abaContaAtiva === 'padrao' ? novaRegraPrecoBase : (novaRegraVariacoes[abaContaAtiva]?.precoBase || 'promocional');
+            
+            return (
+              <div className="transition-all duration-300">
+                <h5 className="text-sm font-bold mb-3 flex items-center gap-2" style={{ color: abaContaAtiva === 'padrao' ? c.orange : '#2c3e50' }}>
+                  {abaContaAtiva === 'padrao' ? 'Configuração Padrão' : `Configuração para: ${contasML.find(c => c.id === abaContaAtiva)?.nickname}`}
+                  {abaContaAtiva !== 'padrao' && (!novaRegraVariacoes[abaContaAtiva] || varsAtuais.length === 0) && (
+                    <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded cursor-help"
+                          title="Se deixado vazio, esta conta usará a Configuração Padrão.">
+                      Usando Fallback (Padrão)
+                    </span>
+                  )}
+                </h5>
+                <div className="mb-4">
+                  <label className="text-xs font-bold block mb-1" style={{ color: c.muted }}>2. Preço Base (Base de Cálculo)</label>
+                  <select 
+                    value={precoBaseAtual} 
+                    onChange={e => atualizarPrecoBase(e.target.value)} 
+                    className="w-full max-w-md px-3 py-2 rounded-md bg-white border"
+                    style={{ borderColor: abaContaAtiva === 'padrao' ? `${c.orange}40` : '#2c3e5040' }}
+                  >
+                    <option value="promocional">Preço Promocional (Se houver) ou Venda</option>
+                    <option value="venda">Apenas Preço de Venda</option>
+                    <option value="custo">Apenas Preço de Custo</option>
+                  </select>
+                </div>
+
+                <div className="pt-4 mb-4" style={{ borderTop: `1px solid ${abaContaAtiva === 'padrao' ? c.orange + '30' : '#2c3e5030'}` }}>
+                  <label className="text-xs font-bold mb-2 block" style={{ color: c.muted }}>3. Adicionar Variáveis (Custos, Taxas, Margens)</label>
+                  <div className="flex flex-col sm:flex-row gap-3 items-start">
+                    <div className="flex-1 w-full">
+                      <input type="text" value={varNome} onChange={e => setVarNome(e.target.value)} placeholder="Nome (Ex: Custo da Caixa, Imposto...)" className="w-full px-3 py-2 border rounded-md text-sm" />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <select value={varTipo} onChange={e => setVarTipo(e.target.value)} className="w-full px-3 py-2 border rounded-md text-sm bg-white">
+                        <option value="perc_custo">% Sobre o Custo (Margem de Lucro)</option>
+                        <option value="fixo_custo">R$ Fixo Adicionado ao Custo</option>
+                        <option value="perc_venda">% Sobre o Valor Final de Venda (Impostos)</option>
+                      </select>
+                    </div>
+                    <div className="w-full sm:w-32">
+                      <input type="number" step="0.01" value={varValor} onChange={e => setVarValor(e.target.value)} placeholder="Valor" className="w-full px-3 py-2 border rounded-md text-sm" />
+                    </div>
+                    <button 
+                      onClick={adicionarVariavel} 
+                      className="w-full sm:w-auto px-4 py-2 text-white font-bold rounded text-sm transition shadow-sm"
+                      style={{ backgroundColor: abaContaAtiva === 'padrao' ? c.orange : '#2c3e50' }}
+                    >
+                      + Adicionar
+                    </button>
+                  </div>
+                </div>
+
+                {varsAtuais.length > 0 && (
+                  <div className="bg-white p-3 rounded border shadow-sm mb-4" style={{ borderColor: c.border }}>
+                    <h5 className="text-[11px] font-bold uppercase mb-2" style={{ color: c.muted }}>Composição (Ordem de Cálculo):</h5>
+                    <ul className="space-y-1">
+                      {varsAtuais.map((v, index) => (
+                        <li key={v.id} className="flex justify-between items-center text-sm py-1 border-b last:border-0 hover:bg-gray-50 px-2 rounded">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium" style={{ color: c.headingSub }}>{index + 1}. {v.nome}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="font-bold" style={{ color: v.valor >= 0 ? c.orange : c.red }}>
+                              {v.valor > 0 ? '+' : ''}{v.tipo === 'fixo_custo' ? `R$ ${v.valor}` : `${v.valor}%`}
+                              <span className="text-[10px] font-normal ml-1" style={{ color: c.muted }}>
+                                ({v.tipo === 'perc_venda' ? 'S/ Venda' : 'S/ Custo'})
+                              </span>
+                            </span>
+                            <div className="flex items-center gap-1 ml-2">
+                              <button onClick={() => moverVariavelTemp(index, -1)} disabled={index === 0} className="hover:text-blue-600 disabled:opacity-30 p-1" style={{ color: c.muted }}>▲</button>
+                              <button onClick={() => moverVariavelTemp(index, 1)} disabled={index === varsAtuais.length - 1} className="hover:text-blue-600 disabled:opacity-30 p-1" style={{ color: c.muted }}>▼</button>
+                              <button onClick={() => removerVariavelTemp(v.id)} className="font-bold px-2 ml-1" style={{ color: c.red }}>&times;</button>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="text-right flex justify-end gap-3 mt-6">
             {editandoRegraId && (

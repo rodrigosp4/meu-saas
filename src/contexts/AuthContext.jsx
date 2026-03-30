@@ -11,7 +11,7 @@ const PERMISSIONS_BY_ROLE = {
     'replicadorAnuncio', 'criarAnuncio', 'fila', 'compatibilidade',
     'centralPromocoes', 'monitorConcorrentes', 'perguntasPreVenda',
     'posVenda', 'catalogo', 'qualidadePublicacoes', 'otimizadorImagens',
-    'dimensoesEmbalagem',
+    'dimensoesEmbalagem', 'corretorPrecoPlanilha', 'planejadorProductAds',
   ],
   VIEWER: [
     'home', 'produtosErp', 'gerenciadorML', 'fila', 'catalogo',

@@ -53,6 +53,8 @@ model User {
   perfisCompat         PerfilCompatibilidade[]
   produtos             Produto[]
   regrasOrquestrador   RegraOrquestrador[]
+  monitorPromoConfig   MonitorPromoConfig?
+  promoAlertas         PromoAlerta[]
   regras               RegraPreco[]
   tarefas              TarefaFila[]
   verificacaoPreco     VerificacaoPreco?
@@ -106,10 +108,12 @@ model ContaML {
   refreshToken String
   expiresAt    BigInt
   logistica    String       @default("ME2")
+  regraPrecoId String?
   anuncios     AnuncioML[]
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   perguntas    PerguntaML[]
   promocoes    PromoML[]
+  regraPreco   RegraPreco?  @relation(fields: [regraPrecoId], references: [id], onDelete: SetNull)
 }
 
 model AnuncioML {
@@ -137,12 +141,14 @@ model AnuncioML {
 }
 
 model RegraPreco {
-  id        String @id @default(uuid())
-  userId    String
-  nome      String
-  variaveis Json
-  precoBase String @default("promocional")
-  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                String    @id @default(uuid())
+  userId            String
+  nome              String
+  variaveis         Json
+  precoBase         String    @default("promocional")
+  variacoesPorConta Json?
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contasMl          ContaML[]
 }
 
 model Produto {
@@ -307,4 +313,33 @@ model LojaMonitorada {
 
   @@unique([userId, sellerId])
   @@index([userId])
+}
+
+// ── Monitor de Promoções ──────────────────────────────────────────────────────
+
+model MonitorPromoConfig {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  ativo         Boolean  @default(true)
+  maxSellerPct  Float    @default(20)
+  autoAtivar    Boolean  @default(false)
+  tiposIgnorar  Json     @default("[]")
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PromoAlerta {
+  id           String    @id @default(uuid())
+  userId       String
+  contaId      String
+  promoId      String
+  tipo         String
+  nome         String?
+  sellerPct    Float?
+  detectadaEm  DateTime  @default(now())
+  aceita       Boolean?  // null = pendente, true = aceita, false = ignorada
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, promoId])
+  @@index([userId, aceita])
 }

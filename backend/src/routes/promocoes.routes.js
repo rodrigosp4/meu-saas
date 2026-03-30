@@ -30,4 +30,10 @@ router.get('/api/orquestrador/regras', promocoesController.getRegras);
 router.post('/api/orquestrador/regras', promocoesController.salvarRegras);
 router.post('/api/orquestrador/executar', promocoesController.executarOrquestrador);
 
+// Monitor de Promoções
+router.get('/api/monitor-promo/config', promocoesController.getMonitorConfig);
+router.post('/api/monitor-promo/config', promocoesController.saveMonitorConfig);
+router.get('/api/monitor-promo/alertas', promocoesController.getMonitorAlertas);
+router.post('/api/monitor-promo/alertas/:id/acao', promocoesController.acaoMonitorAlerta);
+
 export default router;

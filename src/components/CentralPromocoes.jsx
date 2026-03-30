@@ -1005,6 +1005,274 @@ function TabCriarCampanha({ usuarioId, contas }) {
   );
 }
 
+// ─── Tab: Monitor de Promoções ────────────────────────────────────────────────
+function TabMonitor({ usuarioId }) {
+  const [config, setConfig] = useState({ ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [] });
+  const [alertas, setAlertas] = useState([]);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+  const [loadingAlertas, setLoadingAlertas] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState('');
+  const [acaoLoading, setAcaoLoading] = useState({});
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/monitor-promo/config?userId=${usuarioId}`)
+      .then(r => r.json())
+      .then(d => setConfig({ ativo: d.ativo ?? true, maxSellerPct: d.maxSellerPct ?? 20, autoAtivar: d.autoAtivar ?? false, tiposIgnorar: d.tiposIgnorar ?? [] }))
+      .catch(() => {})
+      .finally(() => setLoadingConfig(false));
+  }, [usuarioId]);
+
+  const loadAlertas = useCallback(async () => {
+    setLoadingAlertas(true);
+    try {
+      const params = new URLSearchParams({ userId: usuarioId });
+      if (!showAll) params.set('pendentesOnly', 'true');
+      const res = await fetch(`/api/monitor-promo/alertas?${params}`);
+      const data = await res.json();
+      setAlertas(data.alertas || []);
+    } catch {
+      setAlertas([]);
+    } finally {
+      setLoadingAlertas(false);
+    }
+  }, [usuarioId, showAll]);
+
+  useEffect(() => { loadAlertas(); }, [loadAlertas]);
+
+  async function handleSaveConfig() {
+    setSaving(true);
+    setSavedMsg('');
+    try {
+      const res = await fetch('/api/monitor-promo/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, ...config }),
+      });
+      const data = await res.json();
+      setSavedMsg(data.ok ? '✅ Configuração salva!' : '❌ Erro ao salvar');
+    } catch (e) {
+      setSavedMsg('❌ ' + e.message);
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSavedMsg(''), 3000);
+    }
+  }
+
+  async function handleAcao(alerta, acao) {
+    setAcaoLoading(prev => ({ ...prev, [alerta.id]: true }));
+    try {
+      const res = await fetch(`/api/monitor-promo/alertas/${alerta.id}/acao`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, acao }),
+      });
+      const data = await res.json();
+      if (data.ok) await loadAlertas();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAcaoLoading(prev => ({ ...prev, [alerta.id]: false }));
+    }
+  }
+
+  function toggleTipoIgnorar(tipo) {
+    setConfig(prev => {
+      const cur = prev.tiposIgnorar || [];
+      return { ...prev, tiposIgnorar: cur.includes(tipo) ? cur.filter(t => t !== tipo) : [...cur, tipo] };
+    });
+  }
+
+  const pendentes = alertas.filter(a => a.aceita === null);
+  const aceitas = alertas.filter(a => a.aceita === true);
+
+  return (
+    <div className="space-y-6">
+      {/* Config Card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 space-y-5">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-800">Regra do Monitor</h3>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <span className="text-sm text-gray-600">Monitor ativo</span>
+            <div
+              onClick={() => setConfig(prev => ({ ...prev, ativo: !prev.ativo }))}
+              className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer ${config.ativo ? 'bg-orange-500' : 'bg-gray-300'}`}
+            >
+              <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${config.ativo ? 'left-5' : 'left-0.5'}`} />
+            </div>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+              % Máximo do Vendedor
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min="0" max="100" step="0.5"
+                value={config.maxSellerPct}
+                onChange={e => setConfig(prev => ({ ...prev, maxSellerPct: parseFloat(e.target.value) || 0 }))}
+                className="w-24 text-sm border border-gray-200 rounded-lg px-3 py-2 text-center font-bold focus:outline-none focus:ring-2 focus:ring-orange-300"
+              />
+              <span className="text-sm text-gray-500">%</span>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">Alertar apenas promoções com sua contribuição ≤ este valor</p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+              Aceitar Automaticamente
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none mt-2">
+              <div
+                onClick={() => setConfig(prev => ({ ...prev, autoAtivar: !prev.autoAtivar }))}
+                className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer ${config.autoAtivar ? 'bg-green-500' : 'bg-gray-300'}`}
+              >
+                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${config.autoAtivar ? 'left-5' : 'left-0.5'}`} />
+              </div>
+              <span className="text-sm text-gray-600">{config.autoAtivar ? 'Sim — ativa automaticamente' : 'Não — mostrar no painel para decidir'}</span>
+            </label>
+            <p className="text-[11px] text-gray-400 mt-1">Se ativo, o agendador noturno ativa os itens candidatos sem confirmação</p>
+          </div>
+        </div>
+
+        {/* Tipos ignorar */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Tipos a Ignorar
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(TIPO_LABELS).map(([tipo, info]) => {
+              const ativo = (config.tiposIgnorar || []).includes(tipo);
+              return (
+                <button key={tipo} type="button"
+                  onClick={() => toggleTipoIgnorar(tipo)}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-all ${ativo ? 'bg-gray-200 text-gray-500 border-gray-300 line-through' : `${info.color} border-transparent`}`}
+                >
+                  {info.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1">Clique em um tipo para ignorá-lo no monitoramento</p>
+        </div>
+
+        <div className="flex items-center gap-3 pt-1">
+          <button type="button" onClick={handleSaveConfig} disabled={saving || loadingConfig}
+            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-white text-sm font-bold px-5 py-2 rounded-xl transition-colors">
+            {saving
+              ? <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+              : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+            }
+            {saving ? 'Salvando...' : 'Salvar Configuração'}
+          </button>
+          {savedMsg && <span className="text-xs text-gray-500">{savedMsg}</span>}
+        </div>
+      </div>
+
+      {/* Info box */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
+        <strong>Como funciona:</strong> O agendador noturno (2h da manhã) verifica todas as promoções disponíveis para suas contas.
+        Quando encontra promoções com % do vendedor dentro do limite configurado, gera um alerta aqui.
+        {config.autoAtivar
+          ? ' Com auto-aceitar ativo, os itens candidatos serão ativados automaticamente.'
+          : ' Você pode aceitar ou ignorar cada promoção manualmente abaixo.'}
+      </div>
+
+      {/* Alertas */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-gray-800 text-sm">Promoções Detectadas</span>
+            {pendentes.length > 0 && (
+              <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                {pendentes.length} pendente{pendentes.length !== 1 ? 's' : ''}
+              </span>
+            )}
+            {aceitas.length > 0 && (
+              <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                {aceitas.length} aceita{aceitas.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+              <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="w-3.5 h-3.5 rounded accent-orange-500" />
+              Mostrar todas
+            </label>
+            <button onClick={loadAlertas} className="text-xs text-orange-500 hover:text-orange-600 font-semibold">
+              Atualizar
+            </button>
+          </div>
+        </div>
+
+        {loadingAlertas ? (
+          <div className="flex items-center justify-center py-12 text-gray-400">
+            <svg className="w-5 h-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+            Carregando alertas...
+          </div>
+        ) : alertas.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-14 gap-3 text-gray-400">
+            <svg className="w-12 h-12 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+            <p className="text-sm">Nenhum alerta encontrado.</p>
+            <p className="text-xs text-gray-300">O monitor roda automaticamente toda noite. Salve a configuração e aguarde o próximo ciclo.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {alertas.map(alerta => {
+              const promo = alerta.promo;
+              const loading = acaoLoading[alerta.id];
+              const isPendente = alerta.aceita === null;
+              const isAceita = alerta.aceita === true;
+              const tipoInfo = TIPO_LABELS[alerta.tipo] || { label: alerta.tipo, color: 'bg-gray-100 text-gray-700' };
+              return (
+                <div key={alerta.id} className={`px-4 py-3 flex items-center gap-3 ${!isPendente ? 'opacity-60' : ''}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${tipoInfo.color}`}>{tipoInfo.label}</span>
+                      {isAceita && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">Aceita</span>}
+                      {alerta.aceita === false && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Ignorada</span>}
+                      <span className="text-xs font-semibold text-gray-700 truncate">{alerta.nome || alerta.promoId}</span>
+                    </div>
+                    <div className="flex items-center gap-4 mt-1 text-[11px] text-gray-400">
+                      <span>% Vendedor: <strong className={`${alerta.sellerPct <= config.maxSellerPct ? 'text-green-600' : 'text-red-500'}`}>{alerta.sellerPct?.toFixed(1)}%</strong></span>
+                      {promo?.itens && <span>{Array.isArray(promo.itens) ? promo.itens.filter(i => i.status === 'candidate').length : 0} item(s) candidato(s)</span>}
+                      <span>Detectada: {new Date(alerta.detectadaEm).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                  </div>
+                  {isPendente && (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => handleAcao(alerta, 'aceitar')}
+                        disabled={loading}
+                        className="flex items-center gap-1 bg-green-500 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors"
+                      >
+                        {loading ? <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> : '✓'}
+                        Aceitar
+                      </button>
+                      <button
+                        onClick={() => handleAcao(alerta, 'ignorar')}
+                        disabled={loading}
+                        className="flex items-center gap-1 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-600 text-xs font-bold px-3 py-1.5 rounded-lg border border-gray-200 transition-colors"
+                      >
+                        ✕ Ignorar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Tab: Orquestrador ────────────────────────────────────────────────────────
 function TabOrquestrador({ usuarioId, contas }) {
   const [contaFiltro, setContaFiltro] = useState('');
@@ -1287,6 +1555,9 @@ export default function CentralPromocoes({ usuarioId }) {
     { id: 'orquestrador', label: 'Orquestrador', icon: (
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
     )},
+    { id: 'monitor', label: 'Monitor', icon: (
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+    )},
   ];
 
   return (
@@ -1327,6 +1598,7 @@ export default function CentralPromocoes({ usuarioId }) {
       {activeTab === 'promocoes' && <TabPromocoes usuarioId={usuarioId} contas={contas} />}
       {activeTab === 'criar' && <TabCriarCampanha usuarioId={usuarioId} contas={contas} />}
       {activeTab === 'orquestrador' && <TabOrquestrador usuarioId={usuarioId} contas={contas} />}
+      {activeTab === 'monitor' && <TabMonitor usuarioId={usuarioId} />}
     </div>
   );
 }

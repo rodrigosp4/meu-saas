@@ -682,4 +682,107 @@ export const promocoesController = {
       res.status(500).json({ erro: 'Erro ao executar orquestrador', detalhes: err.message });
     }
   },
+
+  // ─── Monitor de Promoções ──────────────────────────────────────────────────
+  async getMonitorConfig(req, res) {
+    try {
+      const { userId } = req.query;
+      const config = await prisma.monitorPromoConfig.findUnique({ where: { userId } });
+      res.json(config || { ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [] });
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
+    }
+  },
+
+  async saveMonitorConfig(req, res) {
+    try {
+      const { userId, ativo, maxSellerPct, autoAtivar, tiposIgnorar } = req.body;
+      const config = await prisma.monitorPromoConfig.upsert({
+        where: { userId },
+        create: { userId, ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [] },
+        update: { ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [] },
+      });
+      res.json({ ok: true, config });
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
+    }
+  },
+
+  async getMonitorAlertas(req, res) {
+    try {
+      const { userId, pendentesOnly } = req.query;
+      const where = { userId };
+      if (pendentesOnly === 'true') where.aceita = null;
+
+      const alertas = await prisma.promoAlerta.findMany({
+        where,
+        orderBy: { detectadaEm: 'desc' },
+        take: 100,
+      });
+
+      // Enriquece com dados da PromoML
+      const enriched = await Promise.all(alertas.map(async (a) => {
+        const promo = await prisma.promoML.findFirst({
+          where: { id: a.promoId, contaId: a.contaId },
+          select: { id: true, tipo: true, nome: true, status: true, startDate: true, finishDate: true, itens: true, benefits: true },
+        });
+        return { ...a, promo: promo || null };
+      }));
+
+      res.json({ alertas: enriched });
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
+    }
+  },
+
+  async acaoMonitorAlerta(req, res) {
+    try {
+      const { id } = req.params;
+      const { userId, acao } = req.body; // acao: 'aceitar' | 'ignorar'
+
+      const alerta = await prisma.promoAlerta.findFirst({ where: { id, userId } });
+      if (!alerta) return res.status(404).json({ erro: 'Alerta não encontrado' });
+
+      const aceita = acao === 'aceitar';
+      await prisma.promoAlerta.update({ where: { id }, data: { aceita } });
+
+      // Se aceitar, aciona o orquestrador para ativar os itens candidate desta promo
+      if (aceita) {
+        const conta = await prisma.contaML.findFirst({ where: { id: alerta.contaId } });
+        if (conta) {
+          const token = await refreshContaToken(conta);
+          const promo = await prisma.promoML.findFirst({ where: { id: alerta.promoId, contaId: alerta.contaId } });
+          if (promo) {
+            const itens = Array.isArray(promo.itens) ? promo.itens : [];
+            const candidatos = itens.filter(i => i.status === 'candidate');
+            let joined = 0, errors = 0;
+
+            for (const item of candidatos) {
+              try {
+                const body = { promotion_id: alerta.promoId };
+                if (item.offer_id) body.offer_id = item.offer_id;
+                const dealPrice = item.suggested_discounted_price ?? (item.price > 0 ? item.price : null);
+                if (dealPrice) body.deal_price = dealPrice;
+                await axios.put(
+                  `https://api.mercadolibre.com/seller-promotions/promotions/${alerta.promoId}/items/${item.id}`,
+                  body,
+                  { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
+                );
+                joined++;
+                await delay(300);
+              } catch (e) {
+                errors++;
+                console.error(`[MonitorPromo] erro ao ativar item ${item.id}:`, e.response?.data?.message || e.message);
+              }
+            }
+            return res.json({ ok: true, aceita: true, joined, errors });
+          }
+        }
+      }
+
+      res.json({ ok: true, aceita });
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
+    }
+  },
 };

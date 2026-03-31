@@ -16,6 +16,8 @@ export const MODULOS = [
   { id: 'clienteAPI',           label: 'Cliente API' },
   { id: 'fila',                 label: 'Gerenciador de Fila' },
   { id: 'configuracoes',        label: 'Configurações API' },
+  { id: 'corretorPrecoPlanilha',label: 'Corretor de Preço (Planilha)' },
+  { id: 'planejadorProductAds', label: 'Planejador de Product Ads' },
 ];
 
 // Recursos granulares (ações dentro dos módulos)

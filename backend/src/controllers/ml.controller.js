@@ -722,7 +722,7 @@ async syncAds(req, res) {
         descontoMin = '', descontoMax = '',
         semSku = 'false',
         sortBy = 'padrao',
-        priceCheckStatus = 'Todos', userId = '',
+        priceCheckStatus = 'Todos', freteGratis = 'Todos', userId = '',
         page = 1, limit = 50
       } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
@@ -867,6 +867,14 @@ async syncAds(req, res) {
         total = anuncios.length;
       }
       
+      if (freteGratis !== 'Todos') {
+        anuncios = anuncios.filter(ad => {
+          const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
+          return freteGratis === 'sim' ? freeShipping : !freeShipping;
+        });
+        total = anuncios.length;
+      }
+
       if (sortBy === 'desconto_desc' || sortBy === 'desconto_asc') {
         anuncios.sort((a, b) => {
           const descA = (a.precoOriginal && a.precoOriginal > a.preco)
@@ -1034,7 +1042,7 @@ async syncAds(req, res) {
         contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
         semSku = 'false',
-        priceCheckStatus = 'Todos', userId = '',
+        priceCheckStatus = 'Todos', freteGratis = 'Todos', userId = '',
       } = req.query;
 
       const where = {};
@@ -1103,8 +1111,16 @@ async syncAds(req, res) {
         select: { id: true, contaId: true, sku: true, titulo: true, preco: true, thumbnail: true, dadosML: true }
       });
 
+      let anunciosFiltrados = anuncios;
+      if (freteGratis !== 'Todos') {
+        anunciosFiltrados = anuncios.filter(ad => {
+          const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
+          return freteGratis === 'sim' ? freeShipping : !freeShipping;
+        });
+      }
+
       // Extrai apenas os dados necessários para o modal do frontend não pesar a memória
-      const formatados = anuncios.map(a => ({
+      const formatados = anunciosFiltrados.map(a => ({
         id: a.id,
         contaId: a.contaId,
         sku: a.sku,
@@ -1117,7 +1133,7 @@ async syncAds(req, res) {
         }
       }));
 
-      res.json({ ids: formatados.map(a => a.id), anuncios: formatados });
+      res.json({ ids: anunciosFiltrados.map(a => a.id), anuncios: formatados });
     } catch (e) {
       res.status(500).json({ erro: e.message });
     }

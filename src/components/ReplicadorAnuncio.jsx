@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ModalPreenchimentoRapido } from './CompatibilidadeAutopecas';
+import { useDraftManager, formatarDataDraft } from '../hooks/useDraftManager';
 
 // Extrai o ID de um anúncio/produto ML a partir de uma URL ou ID direto
 // Retorna { tipo: 'item' | 'produto', id: 'MLB...' | 'MLBU...' , itemId?: 'MLB...' }
@@ -258,7 +259,13 @@ export default function ReplicadorAnuncio({ usuarioId }) {
   const [modalPreenchRapido, setModalPreenchRapido] = useState(false);
 
   // Modo principal
-  const [modoAtivo, setModoAtivo] = useState('replicar'); // 'replicar' | 'recomendacoes'
+  const [modoAtivo, setModoAtivo] = useState('replicar'); // 'replicar' | 'recomendacoes' | 'rascunhos'
+
+  // Rascunhos
+  const { drafts, salvarDraft, excluirDraft } = useDraftManager();
+  const draftIdRef = useRef(null);
+  const timerRascunho = useRef(null);
+  const rascunhosReplicar = drafts.filter(d => d.tipo === 'replicar');
 
   // Recomendações
   const [recomendacoes, setRecomendacoes] = useState([]);
@@ -266,6 +273,49 @@ export default function ReplicadorAnuncio({ usuarioId }) {
   const [erroRec, setErroRec] = useState('');
   const [recBuscado, setRecBuscado] = useState(false);
   const [filtrarSemEstoque, setFiltrarSemEstoque] = useState(false);
+
+  const cargaInicialConcluida = useRef(false);
+
+  const carregarRascunhoReplicar = (draft) => {
+    setUrlAnuncio(draft.urlAnuncio || '');
+    setTitulo(draft.titulo || '');
+    setPrecoVenda(draft.precoVenda || '');
+    setNovoSku(draft.novoSku || '');
+    setQuantidade(draft.quantidade || '1');
+    setAltura(draft.altura || '');
+    setLargura(draft.largura || '');
+    setComprimento(draft.comprimento || '');
+    setPesoG(draft.pesoG || '');
+    setDescricao(draft.descricao || '');
+    if (Array.isArray(draft.imagens)) setImagens(draft.imagens);
+    if (Array.isArray(draft.imagensSelecionadas)) setImagensSelecionadas(new Set(draft.imagensSelecionadas));
+    if (Array.isArray(draft.atributos)) setAtributos(draft.atributos);
+    setCategoriaId(draft.categoriaId || '');
+    setCategoriaFullPath(draft.categoriaFullPath || '');
+    setCategoriaDomainName(draft.categoriaDomainName || '');
+    if (Array.isArray(draft.contasSelecionadas)) setContasSelecionadas(new Set(draft.contasSelecionadas));
+    if (draft.tiposPorConta) setTiposPorConta(draft.tiposPorConta);
+    setAtivarPromocoes(draft.ativarPromocoes || false);
+    setTolercanciaPromo(draft.toleranciaPromo || 0);
+    setEnviarAtacado(draft.enviarAtacado || false);
+    setInflarPct(draft.inflarPct || 0);
+    setReduzirPct(draft.reduzirPct || 0);
+    setPermitirRetirada(draft.permitirRetirada || false);
+    setPrazoFabricacao(draft.prazoFabricacao || '');
+    draftIdRef.current = draft.id;
+    setModoAtivo('replicar');
+  };
+
+  // Aplica rascunho pendente (vindo do PainelRascunhos) no mount
+  useEffect(() => {
+    try {
+      const pd = JSON.parse(localStorage.getItem('ml_pending_draft') || 'null');
+      if (pd?.tipo === 'replicar') {
+        carregarRascunhoReplicar(pd);
+        localStorage.removeItem('ml_pending_draft');
+      }
+    } catch (_) {}
+  }, []);
 
   // Carrega contas, regras de preço e perfis de compatibilidade
   useEffect(() => {
@@ -283,6 +333,52 @@ export default function ReplicadorAnuncio({ usuarioId }) {
       .then(data => { if (Array.isArray(data)) setPerfisCompat(data); })
       .catch(() => {});
   }, [usuarioId]);
+
+  // Auto-save rascunho com debounce de 1.5s (só após carga inicial concluída)
+  useEffect(() => {
+    if (!cargaInicialConcluida.current || !titulo || !draftIdRef.current) return;
+    clearTimeout(timerRascunho.current);
+    timerRascunho.current = setTimeout(() => {
+      salvarDraft({
+        id: draftIdRef.current,
+        tipo: 'replicar',
+        titulo,
+        urlAnuncio,
+        precoVenda,
+        novoSku,
+        quantidade,
+        altura,
+        largura,
+        comprimento,
+        pesoG,
+        descricao,
+        imagens,
+        imagensSelecionadas: [...imagensSelecionadas],
+        atributos,
+        categoriaId,
+        categoriaFullPath,
+        categoriaDomainName,
+        contasSelecionadas: [...contasSelecionadas],
+        tiposPorConta,
+        ativarPromocoes,
+        toleranciaPromo,
+        enviarAtacado,
+        inflarPct,
+        reduzirPct,
+        permitirRetirada,
+        prazoFabricacao,
+      });
+    }, 1500);
+    return () => clearTimeout(timerRascunho.current);
+  }, [
+    dadosOriginais, titulo, precoVenda, novoSku, quantidade,
+    altura, largura, comprimento, pesoG, descricao,
+    imagens, imagensSelecionadas, atributos,
+    categoriaId, categoriaFullPath, categoriaDomainName,
+    contasSelecionadas, tiposPorConta,
+    ativarPromocoes, toleranciaPromo, enviarAtacado, inflarPct, reduzirPct,
+    permitirRetirada, prazoFabricacao,
+  ]);
 
   // Refresh do token ML (idêntico ao CriarAnuncio)
   const refreshTokenIfNeeded = async (conta) => {
@@ -536,6 +632,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
     setErro('');
     setLoading(true);
     setDadosOriginais(null);
+    cargaInicialConcluida.current = false;
 
     const endpoint = extraido.tipo === 'produto'
       ? `/api/ml/item-clone-data/produto/${extraido.id}?userId=${usuarioId}${extraido.itemId ? `&itemId=${extraido.itemId}` : ''}`
@@ -550,6 +647,9 @@ export default function ReplicadorAnuncio({ usuarioId }) {
       }
 
       setDadosOriginais(data);
+      // Estabelece o ID do draft baseado no ID do anúncio ML
+      const parsedId = extrairId(urlAnuncio);
+      if (parsedId) draftIdRef.current = `replicar_${parsedId.id}`;
       setTitulo(data.title || '');
       setPrecoVenda(String(data.price || ''));
       setNovoSku(data.seller_custom_field || '');
@@ -691,6 +791,9 @@ export default function ReplicadorAnuncio({ usuarioId }) {
           } catch {}
         })();
       }
+
+      // Marca carga inicial como concluída — auto-save pode começar
+      cargaInicialConcluida.current = true;
 
     } catch (e) {
       setErro('Falha na conexão com o servidor.');
@@ -1087,6 +1190,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
     if (erros > 0) {
       alert(`⚠️ Finalizado com avisos.\nSucessos: ${sucessos} | Erros: ${erros}\n\n${msgs.join('\n')}`);
     } else {
+      if (draftIdRef.current) excluirDraft(draftIdRef.current);
       alert(`Sucesso! ${sucessos} tarefa(s) de publicação enviadas para a Fila.\n\nAcompanhe em "Gerenciador de Fila".`);
     }
   };
@@ -1204,7 +1308,53 @@ export default function ReplicadorAnuncio({ usuarioId }) {
         >
           💡 Recomendações
         </button>
+        {rascunhosReplicar.length > 0 && (
+          <button
+            onClick={() => setModoAtivo('rascunhos')}
+            style={{ flex: 1, padding: '9px 0', borderRadius: '8px', border: `2px solid ${modoAtivo === 'rascunhos' ? '#d97706' : '#fbbf24'}`, backgroundColor: modoAtivo === 'rascunhos' ? '#fef3c7' : '#fffbeb', color: '#92400e', fontWeight: modoAtivo === 'rascunhos' ? 700 : 500, fontSize: '0.85em', cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            📝 Rascunhos ({rascunhosReplicar.length})
+          </button>
+        )}
       </div>
+
+      {/* ====== MODO RASCUNHOS ====== */}
+      {modoAtivo === 'rascunhos' && (
+        <div style={{ backgroundColor: '#fffbeb', border: '1.5px solid #fbbf24', borderRadius: '10px', padding: '20px 22px' }}>
+          <div style={{ fontSize: '0.78em', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
+            📝 Rascunhos salvos — clique para retomar
+          </div>
+          {rascunhosReplicar.length === 0 ? (
+            <div style={{ color: '#94a3b8', fontSize: '0.86em', textAlign: 'center', padding: '20px 0' }}>Nenhum rascunho salvo.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {rascunhosReplicar.map(d => (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#fff', border: '1px solid #fde68a', borderRadius: '8px', padding: '10px 14px' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.87em', color: '#1e293b' }}>{d.titulo || d.urlAnuncio || d.id}</div>
+                    <div style={{ fontSize: '0.75em', color: '#94a3b8', marginTop: '2px' }}>
+                      {d.urlAnuncio && <span style={{ marginRight: '8px' }}>URL: {d.urlAnuncio.substring(0, 40)}…</span>}
+                      Salvo: {formatarDataDraft(d.updatedAt)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => carregarRascunhoReplicar(d)}
+                    style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 600, fontSize: '0.79em', cursor: 'pointer' }}
+                  >
+                    Retomar
+                  </button>
+                  <button
+                    onClick={() => excluirDraft(d.id)}
+                    style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: '0.79em', cursor: 'pointer' }}
+                  >
+                    Excluir
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ====== MODO RECOMENDAÇÕES ====== */}
       {modoAtivo === 'recomendacoes' && (
@@ -2034,6 +2184,31 @@ export default function ReplicadorAnuncio({ usuarioId }) {
               </div>
             </div>
           </div>
+        )}
+
+        {dadosOriginais && (
+          <button
+            onClick={() => {
+              if (!draftIdRef.current) {
+                const parsed = extrairId(urlAnuncio);
+                draftIdRef.current = parsed ? `replicar_${parsed.id}` : `replicar_${Date.now()}`;
+              }
+              salvarDraft({
+                id: draftIdRef.current, tipo: 'replicar', titulo,
+                urlAnuncio, precoVenda, novoSku, quantidade,
+                altura, largura, comprimento, pesoG, descricao,
+                imagens, imagensSelecionadas: [...imagensSelecionadas],
+                atributos, categoriaId, categoriaFullPath, categoriaDomainName,
+                contasSelecionadas: [...contasSelecionadas], tiposPorConta,
+                ativarPromocoes, toleranciaPromo, enviarAtacado, inflarPct, reduzirPct,
+                permitirRetirada, prazoFabricacao,
+              });
+              alert('Rascunho salvo!');
+            }}
+            style={{ width: '100%', padding: '11px', marginBottom: '8px', backgroundColor: '#f59e0b', color: '#fff', border: 'none', borderRadius: '10px', cursor: 'pointer', fontSize: '0.88em', fontWeight: 700, fontFamily: 'inherit' }}
+          >
+            📝 Salvar Rascunho
+          </button>
         )}
 
         <button

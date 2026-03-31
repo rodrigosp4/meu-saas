@@ -23,7 +23,7 @@ function tierPerf(vendas) {
 }
 
 // ── Gera prompt estruturado ──────────────────────────────────────────────────
-function gerarPrompt(ads, contasML) {
+function gerarPrompt(ads) {
   if (!ads.length) return '';
 
   // Agrupar por domínio
@@ -51,7 +51,7 @@ function gerarPrompt(ads, contasML) {
       return `  • ${dom}: ${lista.length} anúncio(s) | ${totalVendas} vendas | ${premium} Premium | ${catalogo} em catálogo | ${semEstoque} sem estoque`;
     }).join('\n');
 
-  const contas = contasML.map(c => c.nickname).join(', ') || 'não informado';
+  const contas = [...new Set(ads.map(a => a.conta?.nickname).filter(Boolean))].join(', ') || 'não informado';
   const totalVendas = ads.reduce((s, a) => s + a.vendas, 0);
   const totalVisitas = ads.reduce((s, a) => s + a.visitas, 0);
   const semVendas = ads.filter(a => a.vendas === 0).length;
@@ -108,10 +108,15 @@ ${linhasTabela}
    - ACOS = custo_total_anúncios / receita_gerada × 100 → quanto menor, mais eficiente
    - ROAS = receita_gerada / custo_total_anúncios → quanto maior, mais retorno
 
-6. **Recomendações gerais**:
-   - Novos produtos (sem vendas): usar estratégia VISIBILITY
-   - Produtos com vendas moderadas: estratégia INCREASE
-   - Bestsellers: estratégia PROFITABILITY para maximizar ROAS
+6. **Restrições de ROAS obrigatórias**:
+   - ROAS mínimo: **4** (abaixo disso a campanha não é viável)
+   - ROAS máximo: **35** (acima disso o lance é muito conservador e perde visibilidade)
+   - Para cada campanha, defina o ROAS alvo dentro desse intervalo com base no perfil dos produtos
+
+7. **Recomendações gerais**:
+   - Novos produtos (sem vendas): usar estratégia VISIBILITY, ROAS alvo entre 4 e 8
+   - Produtos com vendas moderadas: estratégia INCREASE, ROAS alvo entre 8 e 20
+   - Bestsellers: estratégia PROFITABILITY, ROAS alvo entre 20 e 35
    - Produtos com estoque 0: NÃO incluir em campanhas
    - Produtos com visitas altas e conversão < 0,5%: investigar preço/fotos antes de anunciar
 
@@ -121,19 +126,19 @@ ${linhasTabela}
 
 Com base em TODOS os dados fornecidos acima, por favor:
 
-1. **RECOMENDE AS CAMPANHAS A CRIAR**, especificando para cada uma:
+1. **MONTE AS CAMPANHAS A CRIAR**, especificando para cada uma:
    - Nome sugerido
    - Tipo (Automática ou Personalizada)
    - Estratégia (PROFITABILITY / INCREASE / VISIBILITY)
-   - Quais MLBs incluir (liste os IDs)
+   - **ROAS alvo** (obrigatório, entre 4 e 35 — justifique o valor escolhido)
+   - **Lista dos MLB IDs que entram nessa campanha** (escolha anúncio por anúncio com base nas métricas — NÃO agrupe apenas por categoria/domínio)
    - Budget diário sugerido (em R$)
-   - Justificativa baseada nas métricas
+   - Justificativa baseada nas métricas individuais de cada anúncio selecionado
 
-2. **AGRUPE OS PRODUTOS** por suas características relevantes:
-   - Por domínio/categoria (domain_id)
-   - Por tipo de anúncio (Premium vs Clássico)
-   - Por perfil de performance (bestsellers, crescimento, lançamento)
-   - Por faixa de preço, se relevante
+2. **CRITÉRIOS DE SELEÇÃO DOS ANÚNCIOS** por campanha:
+   - Avalie cada anúncio individualmente pelo seu desempenho real (vendas, visitas, conversão, estoque, tipo)
+   - Anúncios com perfil similar de performance devem compor a mesma campanha
+   - Domínio/categoria pode ser usado como referência, mas não é o critério principal — o que define a campanha é o perfil de performance do anúncio
 
 3. **IDENTIFIQUE PRODUTOS A EXCLUIR** de campanhas e justifique (ex: sem estoque, conversão muito baixa, preço fora de mercado, etc.)
 
@@ -142,9 +147,41 @@ Com base em TODOS os dados fornecidos acima, por favor:
 Responda em português, com objetividade, seguindo exatamente o formato de campanha do ML.`;
 }
 
+// ── Exportar CSV ─────────────────────────────────────────────────────────────
+function exportarCSV(ads) {
+  const header = ['MLB ID', 'Título', 'SKU', 'Conta', 'Tipo', 'Catálogo', 'Domínio', 'Preço', 'Estoque', 'Vendas', 'Visitas', 'Conv%', 'Performance'];
+  const rows = ads.map(ad => {
+    const conv = convRate(ad);
+    return [
+      ad.id,
+      `"${(ad.titulo || '').replace(/"/g, '""')}"`,
+      `"${(ad.sku || '').replace(/"/g, '""')}"`,
+      `"${(ad.conta?.nickname || '').replace(/"/g, '""')}"`,
+      tipoML(ad),
+      emCatalogo(ad) ? 'Sim' : 'Não',
+      dominio(ad),
+      (ad.preco || 0).toFixed(2).replace('.', ','),
+      ad.estoque,
+      ad.vendas,
+      ad.visitas,
+      conv != null ? conv : '',
+      tierPerf(ad.vendas).label,
+    ].join(';');
+  });
+  const csv = [header.join(';'), ...rows].join('\r\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `product-ads-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Componente principal ─────────────────────────────────────────────────────
 export default function PlanejadorProductAds({ usuarioId }) {
   const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState('');
   const [anuncios, setAnuncios] = useState([]);
   const [contasML, setContasML] = useState([]);
   const [carregado, setCarregado] = useState(false);
@@ -153,6 +190,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
   const [filtroTipo, setFiltroTipo] = useState('');
   const [filtroCatalogo, setFiltroCatalogo] = useState('');
   const [filtroPerf, setFiltroPerf] = useState('');
+  const [filtroFrete, setFiltroFrete] = useState('');
   const [busca, setBusca] = useState('');
 
   const [selecionados, setSelecionados] = useState(new Set());
@@ -162,6 +200,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
 
   const carregarAnuncios = async () => {
     setLoading(true);
+    setLoadingMsg('Buscando anúncios...');
     try {
       const cfgRes = await fetch(`/api/usuario/${usuarioId}/config`);
       const cfg = await cfgRes.json();
@@ -170,11 +209,24 @@ export default function PlanejadorProductAds({ usuarioId }) {
       if (!contas.length) { alert('Nenhuma conta ML conectada.'); return; }
 
       const ids = contas.map(c => c.id).join(',');
-      const res = await fetch(`/api/ml/anuncios?contasIds=${ids}&status=active&limit=500&sortBy=vendas_desc`);
-      const data = await res.json();
-      const ads = data.anuncios || [];
-      setAnuncios(ads);
-      setSelecionados(new Set(ads.map(a => a.id)));
+      const BATCH = 500;
+      let page = 1;
+      let allAds = [];
+      let total = null;
+
+      do {
+        setLoadingMsg(`Carregando... ${allAds.length}${total ? '/' + total : ''} anúncios`);
+        const res = await fetch(`/api/ml/anuncios?contasIds=${ids}&status=active&limit=${BATCH}&page=${page}&sortBy=vendas_desc`);
+        const data = await res.json();
+        const batch = data.anuncios || [];
+        allAds = allAds.concat(batch);
+        total = data.total;
+        page++;
+        if (batch.length < BATCH) break;
+      } while (allAds.length < total);
+
+      setAnuncios(allAds);
+      setSelecionados(new Set(allAds.map(a => a.id)));
       setCarregado(true);
       setPrompt('');
       setAbaAtiva('tabela');
@@ -182,6 +234,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
       alert('Erro: ' + err.message);
     } finally {
       setLoading(false);
+      setLoadingMsg('');
     }
   };
 
@@ -195,17 +248,19 @@ export default function PlanejadorProductAds({ usuarioId }) {
         const tier = tierPerf(ad.vendas).label;
         if (tier !== filtroPerf) return false;
       }
+      if (filtroFrete === 'sim' && !ad.dadosML?.shipping?.free_shipping) return false;
+      if (filtroFrete === 'nao' && ad.dadosML?.shipping?.free_shipping) return false;
       if (busca) {
         const q = busca.toLowerCase();
         if (!ad.titulo.toLowerCase().includes(q) && !ad.id.toLowerCase().includes(q) && !(ad.sku || '').toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [anuncios, filtroConta, filtroTipo, filtroCatalogo, filtroPerf, busca]);
+  }, [anuncios, filtroConta, filtroTipo, filtroCatalogo, filtroPerf, filtroFrete, busca]);
 
   const adsSelecionadosParaPrompt = useMemo(
-    () => anuncios.filter(a => selecionados.has(a.id)),
-    [anuncios, selecionados]
+    () => adsFiltrados.filter(a => selecionados.has(a.id)),
+    [adsFiltrados, selecionados]
   );
 
   const toggleItem = (id) => setSelecionados(prev => {
@@ -226,7 +281,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
   };
 
   const handleGerarPrompt = () => {
-    const p = gerarPrompt(adsSelecionadosParaPrompt, contasML);
+    const p = gerarPrompt(adsSelecionadosParaPrompt);
     setPrompt(p);
     setAbaAtiva('prompt');
   };
@@ -284,7 +339,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             )}
-            {loading ? 'Carregando...' : carregado ? 'Recarregar Anúncios' : 'Carregar Anúncios Ativos'}
+            {loading ? (loadingMsg || 'Carregando...') : carregado ? 'Recarregar Anúncios' : 'Carregar Anúncios Ativos'}
           </button>
 
           {carregado && (
@@ -314,6 +369,11 @@ export default function PlanejadorProductAds({ usuarioId }) {
                 <option value="Baixo">Baixa (1–9)</option>
                 <option value="Nenhuma">Sem vendas</option>
               </select>
+              <select value={filtroFrete} onChange={e => setFiltroFrete(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-orange-400">
+                <option value="">Frete: Todos</option>
+                <option value="sim">Frete Grátis</option>
+                <option value="nao">Sem Frete Grátis</option>
+              </select>
               <input
                 type="text"
                 value={busca}
@@ -324,6 +384,16 @@ export default function PlanejadorProductAds({ usuarioId }) {
               <div className="flex-1" />
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500">{selecionados.size} selecionados de {anuncios.length}</span>
+                <button
+                  onClick={() => exportarCSV(adsFiltrados)}
+                  disabled={adsFiltrados.length === 0}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-sm rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                  </svg>
+                  Exportar Planilha ({adsFiltrados.length})
+                </button>
                 <button
                   onClick={handleGerarPrompt}
                   disabled={selecionados.size === 0}
@@ -346,7 +416,7 @@ export default function PlanejadorProductAds({ usuarioId }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
           <p className="text-gray-400 text-sm font-semibold">Clique em "Carregar Anúncios Ativos" para começar</p>
-          <p className="text-gray-300 text-xs mt-1">Carrega até 500 anúncios ativos ordenados por vendas</p>
+          <p className="text-gray-300 text-xs mt-1">Carrega todos os anúncios ativos ordenados por vendas</p>
         </div>
       )}
 

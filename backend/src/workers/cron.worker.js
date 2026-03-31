@@ -41,7 +41,15 @@ async function verificarMonitorPromocoes(userId) {
     if (candidatos.length === 0) continue;
 
     // Calcula % médio do vendedor nos candidatos
-    const percs = candidatos.map(i => i.seller_percentage ?? i.sellerPct ?? null).filter(p => p != null);
+    // SELLER_CAMPAIGN (FLEXIBLE_PERCENTAGE) não retorna seller_percentage — calcula a partir do suggested_discounted_price
+    const percs = candidatos.map(i => {
+      if (i.seller_percentage != null) return i.seller_percentage;
+      if (i.sellerPct != null) return i.sellerPct;
+      if (i.suggested_discounted_price != null && i.original_price > 0) {
+        return (1 - i.suggested_discounted_price / i.original_price) * 100;
+      }
+      return null;
+    }).filter(p => p != null);
     if (percs.length === 0) continue;
     const avgPct = percs.reduce((a, b) => a + b, 0) / percs.length;
 
@@ -78,18 +86,19 @@ async function verificarMonitorPromocoes(userId) {
           }
           for (const item of candidatos) {
             try {
-              const body = { promotion_id: promo.id };
+              const body = { promotion_id: promo.id, promotion_type: promo.tipo };
               if (item.offer_id) body.offer_id = item.offer_id;
+              // SELLER_CAMPAIGN retorna price=0 para candidatos; usa suggested_discounted_price como deal_price
               const dealPrice = item.suggested_discounted_price ?? (item.price > 0 ? item.price : null);
               if (dealPrice) body.deal_price = dealPrice;
-              await axios.put(
-                `${ML_BASE}/seller-promotions/promotions/${promo.id}/items/${item.id}`,
+              await axios.post(
+                `${ML_BASE}/seller-promotions/items/${item.id}?app_version=v2`,
                 body,
                 { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
               );
               await new Promise(r => setTimeout(r, 300));
             } catch (e) {
-              console.error(`[Monitor] erro ao auto-ativar item ${item.id}:`, e.message);
+              console.error(`[Monitor] erro ao auto-ativar item ${item.id}:`, e.response?.data?.message || e.message);
             }
           }
           // Marca como aceita automaticamente

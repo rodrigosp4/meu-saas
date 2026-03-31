@@ -24,6 +24,9 @@ router.post('/api/promocoes/exclusao', promocoesController.gerenciarExclusaoItem
 // ✅ NOVO: Ativação/Remoção em massa via fila BullMQ
 router.post('/api/promocoes/massa-fila', promocoesController.ativarRemoverMassaFila);
 
+// Exclusão em massa de campanhas (todas ou acima de X%)
+router.post('/api/promocoes/excluir-campanhas-massa', promocoesController.excluirCampanhasMassa);
+
 
 // Orquestrador
 router.get('/api/orquestrador/regras', promocoesController.getRegras);

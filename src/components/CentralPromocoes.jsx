@@ -25,7 +25,7 @@ const STATUS_COLORS = {
 };
 
 const TIPOS_ORQUESTRADOR = [
-  'MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'DEAL', 'PRE_NEGOTIATED',
+  'MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'DEAL', 'PRE_NEGOTIATED', 'SELLER_CAMPAIGN'
 ];
 
 // Tipos que precisam de deal_price para ativar
@@ -50,11 +50,17 @@ function fmt(d) {
 }
 
 // ─── Expandable items row ─────────────────────────────────────────────────────
-function PromoRow({ promo, usuarioId, onRefresh }) {
+function PromoRow({ promo, usuarioId, onRefresh, itemSearch }) {
+  const searchTerm = itemSearch?.trim().toLowerCase() || '';
   const [expanded, setExpanded] = useState(false);
   const [itemActions, setItemActions] = useState({}); // { [itemId]: { loading, done, removed, error, dealPrice, topDealPrice, stock } }
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
+
+  // Auto-expand when filtering by item
+  useEffect(() => {
+    if (searchTerm) setExpanded(true);
+  }, [searchTerm]);
 
   const setItemAction = (id, updates) =>
     setItemActions(prev => ({ ...prev, [id]: { ...(prev[id] || {}), ...updates } }));
@@ -62,9 +68,13 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
   const needsPrice = TIPOS_COM_PRECO.has(promo.tipo);
   const needsStock = promo.tipo === 'LIGHTNING';
 
-  const candidateItems = promo.itens.filter(i => i.status === 'candidate');
-  const activeItems = promo.itens.filter(i => i.status === 'started');
-  const pendingItems = promo.itens.filter(i => i.status === 'pending');
+  const visibleItens = searchTerm
+    ? promo.itens.filter(i => i.id?.toLowerCase().includes(searchTerm))
+    : promo.itens;
+
+  const candidateItems = visibleItens.filter(i => i.status === 'candidate');
+  const activeItems = visibleItens.filter(i => i.status === 'started');
+  const pendingItems = visibleItens.filter(i => i.status === 'pending');
 
   // Deadline urgency
   const deadlineDate = promo.dadosML?.deadline_date;
@@ -255,8 +265,8 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
               )}
             </div>
 
-            {promo.itens.length === 0 ? (
-              <p className="text-xs text-gray-400 italic">Nenhum item nesta promoção.</p>
+            {visibleItens.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">{searchTerm ? `Nenhum item com "${itemSearch?.trim()}" nesta promoção.` : 'Nenhum item nesta promoção.'}</p>
             ) : (
               <div className="overflow-x-auto">
                 <p className="text-[10px] text-gray-400 italic mb-2 bg-gray-100 p-1.5 rounded inline-block">
@@ -278,7 +288,7 @@ function PromoRow({ promo, usuarioId, onRefresh }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {promo.itens.map((item, i) => {
+                    {visibleItens.map((item, i) => {
                       const st = itemActions[item.id] || {};
                       const isCandidate = item.status === 'candidate';
                       const isRemovable = (item.status === 'started' || item.status === 'pending')
@@ -697,7 +707,7 @@ function TabPromocoes({ usuarioId, contas }) {
                 </tr>
               </thead>
               <tbody>
-                {displayPromos.map(p => <PromoRow key={`${p.id}-${p.contaId}`} promo={p} usuarioId={usuarioId} onRefresh={load} />)}
+                {displayPromos.map(p => <PromoRow key={`${p.id}-${p.contaId}`} promo={p} usuarioId={usuarioId} onRefresh={load} itemSearch={itemSearch} />)}
               </tbody>
             </table>
           </div>

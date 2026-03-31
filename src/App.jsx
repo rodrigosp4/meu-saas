@@ -25,6 +25,7 @@ import AdminPanel from './components/AdminPanel.jsx';
 import AgendadorTarefas from './components/AgendadorTarefas.jsx';
 import CorretorPrecoPlanilha from './components/CorretorPrecoPlanilha.jsx';
 import PlanejadorProductAds from './components/PlanejadorProductAds.jsx';
+import PainelRascunhos from './components/PainelRascunhos.jsx';
 
 function App() {
   const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role } = useAuth();
@@ -137,6 +138,7 @@ function App() {
       {canAccess('dimensoesEmbalagem') && activePage === 'dimensoesEmbalagem' && <DimensoesEmbalagem usuarioId={uid} />}
       {canAccess('corretorPrecoPlanilha') && activePage === 'corretorPrecoPlanilha' && <CorretorPrecoPlanilha usuarioId={uid} />}
       {canAccess('planejadorProductAds') && activePage === 'planejadorProductAds' && <PlanejadorProductAds usuarioId={uid} />}
+      {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} />}
     </DashboardLayout>
   );
 }

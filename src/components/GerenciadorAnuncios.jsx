@@ -1689,6 +1689,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [descontoMin, setDescontoMin] = useState('');
   const [descontoMax, setDescontoMax] = useState('');
   const [semSkuFilter, setSemSkuFilter] = useState(false);
+  const [freteGratisFilter, setFreteGratisFilter] = useState('Todos');
   const [palavrasExcluir, setPalavrasExcluir] = useState([]);
   const [palavrasExcluirInput, setPalavrasExcluirInput] = useState('');
 
@@ -1717,6 +1718,8 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [modalRapido, setModalRapido] = useState(false);
   const [dropdownCompat, setDropdownCompat] = useState(false);
   const dropdownCompatRef = useRef(null);
+  const [dropdownCampanhas, setDropdownCampanhas] = useState(false);
+  const dropdownCampanhasRef = useRef(null);
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
@@ -1737,6 +1740,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     descontoMax !== '',
     priceCheckFilter !== 'Todos',
     semSkuFilter,
+    freteGratisFilter !== 'Todos',
     palavrasExcluir.length > 0,
   ].filter(Boolean).length;
   
@@ -1760,6 +1764,17 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownCompat]);
+
+  useEffect(() => {
+    if (!dropdownCampanhas) return;
+    const handler = (e) => {
+      if (dropdownCampanhasRef.current && !dropdownCampanhasRef.current.contains(e.target)) {
+        setDropdownCampanhas(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownCampanhas]);
 
   const fetchAvailableTags = async () => {
     try {
@@ -1794,7 +1809,7 @@ const fetchAnuncios = async () => {
         status: statusFilter, tag: tagFilter, promo: promoFilter, precoMin: precoMin,
         precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
         descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
-        priceCheckStatus: priceCheckFilter, userId: usuarioId,
+        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, userId: usuarioId,
       });
 
       const res = await fetch(`/api/ml/anuncios?${params.toString()}`);
@@ -1818,7 +1833,7 @@ const fetchAnuncios = async () => {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter]);
+  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter, freteGratisFilter]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
@@ -1835,6 +1850,7 @@ const fetchAnuncios = async () => {
     setDescontoMax('');
     setPriceCheckFilter('Todos');
     setSemSkuFilter(false);
+    setFreteGratisFilter('Todos');
     setPalavrasExcluir([]);
     setPalavrasExcluirInput('');
     setCurrentPage(1);
@@ -1849,7 +1865,7 @@ const handleSelectAllFiltered = async () => {
         contasIds: queryConta, search: searchTerm, searchType: searchType, status: statusFilter,
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
         descontoMin, descontoMax, semSku: semSkuFilter,
-        priceCheckStatus: priceCheckFilter, userId: usuarioId,
+        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, userId: usuarioId,
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
@@ -2181,6 +2197,50 @@ const getSelectedItemsData = () => {
       }
     } catch (e) {
       alert('Erro ao ativar desconto: ' + e.message);
+    } finally {
+      setIsSyncingSelected(false);
+    }
+  };
+
+  const handleExcluirTodasCampanhas = async () => {
+    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
+    if (!window.confirm(`Excluir TODAS as campanhas ativas dos ${selectedIds.size} anúncio(s) selecionado(s)?\n\nIsso removerá todas as promoções started/pending encontradas no banco local.`)) return;
+    setIsSyncingSelected(true);
+    try {
+      const res = await fetch('/api/promocoes/excluir-campanhas-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds], maxPct: null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
+      alert(`✅ Exclusão enfileirada!\n\nAcompanhe na aba "Gerenciador de Fila".${data.tarefaId ? `\nTarefa: ${data.tarefaId}` : ''}`);
+    } catch (e) {
+      alert('Erro ao excluir campanhas: ' + e.message);
+    } finally {
+      setIsSyncingSelected(false);
+    }
+  };
+
+  const handleExcluirCampanhasAte = async () => {
+    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
+    const input = window.prompt('Digite o % máximo do vendedor:\n\nCampanhas cujo desconto do vendedor ULTRAPASSAR esse valor serão excluídas. As demais serão mantidas.');
+    if (input === null) return;
+    const maxPct = parseFloat(input);
+    if (isNaN(maxPct) || maxPct <= 0) return alert('Percentual inválido.');
+    if (!window.confirm(`Excluir campanhas acima de ${maxPct}% dos ${selectedIds.size} anúncio(s) selecionado(s)?\n\nCampanhas com desconto do vendedor ≤ ${maxPct}% serão mantidas.`)) return;
+    setIsSyncingSelected(true);
+    try {
+      const res = await fetch('/api/promocoes/excluir-campanhas-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds], maxPct }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
+      alert(`✅ Exclusão enfileirada!\n\nAcompanhe na aba "Gerenciador de Fila".${data.tarefaId ? `\nTarefa: ${data.tarefaId}` : ''}`);
+    } catch (e) {
+      alert('Erro ao excluir campanhas: ' + e.message);
     } finally {
       setIsSyncingSelected(false);
     }
@@ -2724,6 +2784,20 @@ const handleFetchBySku = async () => {
                   )}
                 </div>
 
+                {/* Filtro Frete Grátis */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Frete Grátis</label>
+                  <select
+                    value={freteGratisFilter}
+                    onChange={(e) => { setFreteGratisFilter(e.target.value); setCurrentPage(1); }}
+                    className="w-48 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="Todos">Todos</option>
+                    <option value="sim">🚚 Com Frete Grátis</option>
+                    <option value="nao">Sem Frete Grátis</option>
+                  </select>
+                </div>
+
                 {/* Filtro Sem SKU */}
                 <div className="flex flex-col gap-1.5 justify-end">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -2895,14 +2969,42 @@ const handleFetchBySku = async () => {
                 </button>
                 )}
 
-                <button
-                  onClick={handleAtivarDesconto}
-                  disabled={isSyncingSelected}
-                  title="Ativa todos os anúncios candidatos nas promoções do ML com desconto do vendedor até o % informado"
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-pink-700 bg-pink-50 border-pink-200 hover:bg-pink-100 disabled:opacity-50"
-                >
-                  🏷️ Ativar Desconto
-                </button>
+                <div className="relative" ref={dropdownCampanhasRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCampanhas(v => !v); }}
+                    disabled={isSyncingSelected}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-pink-700 bg-pink-50 border-pink-200 hover:bg-pink-100 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    🏷️ Campanhas
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownCampanhas ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownCampanhas && (
+                    <div
+                      className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[240px] py-1"
+                      onMouseLeave={() => setDropdownCampanhas(false)}
+                    >
+                      <button
+                        onClick={() => { setDropdownCampanhas(false); handleAtivarDesconto(); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-pink-700 hover:bg-pink-50 flex items-center gap-2"
+                      >
+                        🏷️ <span><span className="font-semibold">Ativar Campanhas</span><br/><span className="text-xs text-gray-400">Ativa candidatos até o % informado</span></span>
+                      </button>
+                      <div className="border-t border-gray-100 my-1" />
+                      <button
+                        onClick={() => { setDropdownCampanhas(false); handleExcluirTodasCampanhas(); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-red-700 hover:bg-red-50 flex items-center gap-2"
+                      >
+                        🗑️ <span><span className="font-semibold">Excluir todas as campanhas</span><br/><span className="text-xs text-gray-400">Remove todas as promoções ativas</span></span>
+                      </button>
+                      <button
+                        onClick={() => { setDropdownCampanhas(false); handleExcluirCampanhasAte(); }}
+                        className="w-full text-left px-4 py-2.5 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2"
+                      >
+                        ✂️ <span><span className="font-semibold">Excluir campanhas acima de X%</span><br/><span className="text-xs text-gray-400">Mantém as de menor desconto</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
               {canUseResource('gerenciadorML.pausar') && (
                 <button

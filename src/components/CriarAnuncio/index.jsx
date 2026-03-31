@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useContasML } from '../../contexts/ContasMLContext';
 import { stripHtml } from '../../utils/formatters';
 import { ModalPreenchimentoRapido } from '../CompatibilidadeAutopecas';
+import { useDraftManager, formatarDataDraft } from '../../hooks/useDraftManager';
 
 import FormularioBasico from './FormularioBasico';
 import SeletorCategoria from './SeletorCategoria';
@@ -78,6 +79,13 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [isCalculatingPrices, setIsCalculatingPrices] = useState(false);
   const [configAtacado, setConfigAtacado] = useState(null);
 
+  // Rascunhos
+  const { drafts, salvarDraft, excluirDraft } = useDraftManager();
+  const timerRascunho = useRef(null);
+  const cargaInicialConcluida = useRef(false); // impede auto-save durante carga inicial da API
+  const draftId = `criar_${produto?.sku || produto?.id || 'sem-id'}`;
+  const rascunhosCriar = drafts.filter(d => d.tipo === 'criar');
+
   // 2. CORRIGIDO O USEEFFECT PARA BUSCAR DADOS DO BANCO DE DADOS (ONLINE)
   useEffect(() => {
     const carregarConfiguracoes = async () => {
@@ -119,6 +127,56 @@ export default function CriarAnuncio({ produto, usuarioId }) {
     if (categoriaSelecionada?.category_id) buscarFichaTecnica(categoriaSelecionada.category_id);
   }, [categoriaSelecionada]);
 
+  // Auto-save rascunho com debounce de 1.5s (só após carga inicial completa)
+  useEffect(() => {
+    if (!cargaInicialConcluida.current || !tituloAnuncio) return;
+    clearTimeout(timerRascunho.current);
+    timerRascunho.current = setTimeout(() => {
+      salvarDraft({
+        id: draftId,
+        tipo: 'criar',
+        titulo: tituloAnuncio,
+        produtoNome: produto?.nome,
+        produtoSku: produto?.sku,
+        produtoId: produto?.id,
+        tituloAnuncio,
+        descricaoAnuncio,
+        prazoFabricacao,
+        pesoEmbalagem,
+        alturaEmbalagem,
+        larguraEmbalagem,
+        comprimentoEmbalagem,
+        imagensOrdenadas,
+        categoriaSelecionada,
+        valoresAtributos,
+        strategy,
+        configPublicacao,
+      });
+    }, 1500);
+    return () => clearTimeout(timerRascunho.current);
+  }, [
+    tituloAnuncio, descricaoAnuncio, prazoFabricacao,
+    pesoEmbalagem, alturaEmbalagem, larguraEmbalagem, comprimentoEmbalagem,
+    imagensOrdenadas, categoriaSelecionada, valoresAtributos,
+    strategy, configPublicacao,
+  ]);
+
+  const carregarRascunho = (draft) => {
+    setTituloAnuncio(draft.tituloAnuncio || '');
+    setDescricaoAnuncio(draft.descricaoAnuncio || '');
+    setPrazoFabricacao(draft.prazoFabricacao || '');
+    setPesoEmbalagem(draft.pesoEmbalagem ?? 0.1);
+    setAlturaEmbalagem(draft.alturaEmbalagem ?? 10);
+    setLarguraEmbalagem(draft.larguraEmbalagem ?? 10);
+    setComprimentoEmbalagem(draft.comprimentoEmbalagem ?? 15);
+    if (Array.isArray(draft.imagensOrdenadas)) setImagensOrdenadas(draft.imagensOrdenadas);
+    if (draft.categoriaSelecionada) setCategoriaSelecionada(draft.categoriaSelecionada);
+    if (draft.valoresAtributos) setValoresAtributos(draft.valoresAtributos);
+    if (draft.strategy) setStrategy(draft.strategy);
+    if (draft.configPublicacao) setConfigPublicacao(draft.configPublicacao);
+    setShowRascunhos(false);
+  };
+
   const fetchDetalhesTiny = async () => {
     setIsLoading(true);
     setFetchError(null);
@@ -151,6 +209,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       }
 
       setDetalhesProduto(data);
+
       // Inicializa imagens — prefere imagens customizadas > ordem salva no DB (dadosTiny) > API fresca
       const storedAnexos = produto.dadosTiny?.anexos;
       const urlsIniciais = (storedAnexos?.length > 0 ? storedAnexos : (data.anexos || []))
@@ -188,6 +247,38 @@ export default function CriarAnuncio({ produto, usuarioId }) {
         setCategoriasSugeridas(pData);
         if(!categoriaSelecionada && pData.length > 0) setCategoriaSelecionada(pData[0]);
       }
+
+      // Aplica rascunho pendente (vindo do PainelRascunhos ou salvo manualmente) — DEPOIS dos setters do Tiny
+      const aplicarDraft = (pd) => {
+        if (pd.tituloAnuncio)    setTituloAnuncio(pd.tituloAnuncio);
+        if (pd.descricaoAnuncio) setDescricaoAnuncio(pd.descricaoAnuncio);
+        if (pd.prazoFabricacao)  setPrazoFabricacao(pd.prazoFabricacao);
+        if (pd.pesoEmbalagem)    setPesoEmbalagem(pd.pesoEmbalagem);
+        if (pd.alturaEmbalagem)  setAlturaEmbalagem(pd.alturaEmbalagem);
+        if (pd.larguraEmbalagem) setLarguraEmbalagem(pd.larguraEmbalagem);
+        if (pd.comprimentoEmbalagem) setComprimentoEmbalagem(pd.comprimentoEmbalagem);
+        if (Array.isArray(pd.imagensOrdenadas) && pd.imagensOrdenadas.length > 0) setImagensOrdenadas(pd.imagensOrdenadas);
+        if (pd.categoriaSelecionada) setCategoriaSelecionada(pd.categoriaSelecionada);
+        if (pd.valoresAtributos)  setValoresAtributos(pd.valoresAtributos);
+        if (pd.strategy)          setStrategy(pd.strategy);
+        if (pd.configPublicacao)  setConfigPublicacao(pd.configPublicacao);
+      };
+      try {
+        const pd = JSON.parse(localStorage.getItem('ml_pending_draft') || 'null');
+        if (pd?.tipo === 'criar' && (pd.produtoId === produto?.id || pd.produtoSku === produto?.sku)) {
+          aplicarDraft(pd);
+          localStorage.removeItem('ml_pending_draft');
+        } else {
+          // Tenta carregar rascunho salvo manualmente para este produto
+          const allDrafts = JSON.parse(localStorage.getItem('ml_rascunhos') || '[]');
+          const currentDraftId = `criar_${produto?.sku || produto?.id || 'sem-id'}`;
+          const savedDraft = allDrafts.find(d => d.id === currentDraftId);
+          if (savedDraft) aplicarDraft(savedDraft);
+        }
+      } catch (_) {}
+
+      // Marca carga inicial como concluída — auto-save pode começar a partir daqui
+      cargaInicialConcluida.current = true;
     } catch (e) {
       setFetchError(e.message);
     } finally { setIsLoading(false); }
@@ -232,7 +323,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
           }
         }
       });
-      setValoresAtributos(valores);
+      setValoresAtributos(prev => ({ ...valores, ...prev }));
     } catch(e) {}
   };
 
@@ -772,6 +863,7 @@ const publicarAnuncios = async () => {
     if (erros > 0) {
       alert(`⚠️ Finalizado com avisos.\n\nSucessos enviados para a fila: ${sucessos}\nErros: ${erros}\n\nDetalhes:\n- ${mensagensErro.join('\n- ')}`);
     } else if (sucessos > 0) {
+      excluirDraft(draftId);
       alert(`🚀 Sucesso! ${sucessos} tarefa(s) de publicação foram enviadas para a Fila.\n\nAcompanhe o status e a publicação final no menu "Gerenciador de Fila".`);
     }
   };
@@ -815,6 +907,12 @@ const publicarAnuncios = async () => {
             </button>
           )
         })}
+
+        {rascunhosCriar.length > 0 && (
+          <button onClick={() => setActiveTab('rascunhos')} className={`py-4 px-6 text-sm font-bold whitespace-nowrap border-b-4 transition-colors focus:outline-none flex items-center gap-2 ${activeTab === 'rascunhos' ? 'border-amber-500 text-amber-700 bg-amber-50/40' : 'border-transparent text-amber-600 hover:text-amber-800 hover:bg-amber-50'}`}>
+            📝 Rascunhos ({rascunhosCriar.length})
+          </button>
+        )}
       </div>
 
       <div className="bg-white p-6 rounded-b-lg shadow-sm border border-t-0 border-gray-200 mb-6">
@@ -832,6 +930,39 @@ const publicarAnuncios = async () => {
             uploadando={uploadando} onUploadImagem={uploadParaImgur}
             onRemoverFundo={removerFundoEOtimizar} removendoFundo={removendoFundo}
           />
+        )}
+
+        {activeTab === 'rascunhos' && (
+          <div>
+            <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
+              Rascunhos salvos — clique em Retomar para continuar o preenchimento
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {rascunhosCriar.map(d => (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: '8px', padding: '12px 16px' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.9em', color: '#1e293b' }}>{d.titulo || d.produtoNome || '(sem título)'}</div>
+                    <div style={{ fontSize: '0.75em', color: '#94a3b8', marginTop: '3px' }}>
+                      {d.produtoSku && <span style={{ marginRight: '10px' }}>SKU: <b>{d.produtoSku}</b></span>}
+                      Salvo em: {formatarDataDraft(d.updatedAt)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => carregarRascunho(d)}
+                    style={{ padding: '6px 14px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 700, fontSize: '0.82em', cursor: 'pointer' }}
+                  >
+                    Retomar
+                  </button>
+                  <button
+                    onClick={() => { excluirDraft(d.id); if (activeTab === 'rascunhos' && rascunhosCriar.length <= 1) setActiveTab('pai'); }}
+                    style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: '0.82em', cursor: 'pointer' }}
+                  >
+                    Excluir
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {typeof activeTab === 'number' && filhos[activeTab] && (() => {
@@ -1010,6 +1141,19 @@ const publicarAnuncios = async () => {
       <TabelaContas contasML={contasML} regrasPreco={regrasPreco} configPublicacao={configPublicacao} setConfigPublicacao={setConfigPublicacao} precosCalculados={precosCalculados} isCalculatingPrices={isCalculatingPrices} strategy={strategy} setStrategy={setStrategy} configAtacado={configAtacado} />
 
       <div className="flex justify-end gap-4 mt-6">
+        <button
+          onClick={() => {
+            salvarDraft({
+              id: draftId, tipo: 'criar', titulo: tituloAnuncio, produtoNome: produto?.nome, produtoSku: produto?.sku, produtoId: produto?.id,
+              tituloAnuncio, descricaoAnuncio, prazoFabricacao, pesoEmbalagem, alturaEmbalagem, larguraEmbalagem, comprimentoEmbalagem,
+              imagensOrdenadas, categoriaSelecionada, valoresAtributos, strategy, configPublicacao,
+            });
+            alert('Rascunho salvo!');
+          }}
+          className="px-6 py-4 bg-amber-500 hover:bg-amber-600 text-white text-base font-bold rounded-lg shadow"
+        >
+          📝 Salvar Rascunho
+        </button>
         <button onClick={publicarAnuncios} disabled={isPublishing || isCalculatingPrices} className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white text-lg font-black uppercase rounded-lg shadow-lg disabled:opacity-50 transition-all transform hover:scale-105">
           {isPublishing ? '⏳ Publicando no ML...' : '🚀 Publicar Anúncios Agora'}
         </button>

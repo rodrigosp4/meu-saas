@@ -248,6 +248,30 @@ export const promocoesController = {
                     items = await fetchPromoItems(promo.id, promo.type, token);
                     console.log(`[PromoML]   ${promo.id} — ${items.length} itens carregados`);
                     await delay(200);
+
+                    // Campanhas com preço: o endpoint bulk frequentemente não retorna suggested/max_discounted_price.
+                    // Enriquecer candidatos via GET /seller-promotions/items/{itemId} para ter o dealPrice no orquestrador.
+                    const TIPOS_COM_PRECO = ['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING'];
+                    if (TIPOS_COM_PRECO.includes(promo.type) && items.length > 0) {
+                      const needsEnrich = items.filter(i => i.status === 'candidate' && i.suggested_discounted_price == null);
+                      for (const candidate of needsEnrich) {
+                        try {
+                          const r = await axios.get(
+                            `https://api.mercadolibre.com/seller-promotions/items/${candidate.id}?app_version=v2`,
+                            { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
+                          );
+                          const allPromos = Array.isArray(r.data) ? r.data : [r.data];
+                          const match = allPromos.find(p => p.id === promo.id);
+                          if (match) {
+                            if (match.suggested_discounted_price != null) candidate.suggested_discounted_price = match.suggested_discounted_price;
+                            if (match.max_discounted_price != null) candidate.max_discounted_price = match.max_discounted_price;
+                            if (match.min_discounted_price != null) candidate.min_discounted_price = match.min_discounted_price;
+                          }
+                        } catch (_) { /* silently skip enrichment errors */ }
+                        await delay(150);
+                      }
+                      if (needsEnrich.length > 0) console.log(`[PromoML]   ${promo.id} — enriquecidos ${needsEnrich.length} candidatos SELLER_CAMPAIGN com preços sugeridos`);
+                    }
                   }
                 }
 
@@ -591,6 +615,16 @@ export const promocoesController = {
       const contas = await prisma.contaML.findMany({ where: contasWhere });
       if (contas.length === 0) return res.status(404).json({ erro: 'Nenhuma conta encontrada' });
 
+      // Mapa contaId → token (lazy-refreshed)
+      const tokenMap = {};
+      async function getToken(cId) {
+        if (!tokenMap[cId]) {
+          const c = contas.find(x => x.id === cId);
+          tokenMap[cId] = c ? await refreshContaToken(c) : null;
+        }
+        return tokenMap[cId];
+      }
+
       const itensFila = [];
       const skipped = [];
 
@@ -624,8 +658,13 @@ export const promocoesController = {
           const candidates = items.filter(item => {
             if (item.status !== 'candidate') return false;
             const sp = item.seller_percentage ?? item.sellerPercentage ?? null;
-            if (sp === null) return true;
-            return sp <= limiteMax;
+            if (sp !== null) return sp <= limiteMax;
+            // SELLER_CAMPAIGN não retorna seller_percentage — calcula pelo suggested_discounted_price
+            if (item.suggested_discounted_price != null && item.original_price > 0) {
+              const pctEfetivo = (1 - item.suggested_discounted_price / item.original_price) * 100;
+              return pctEfetivo <= limiteMax;
+            }
+            return true; // sem dados suficientes para calcular, inclui
           });
 
           for (const item of candidates) {
@@ -639,9 +678,33 @@ export const promocoesController = {
             if (item.offer_id && TIPOS_COM_OFFER_ID_ORC.has(promo.tipo)) filaItem.offerId = item.offer_id;
 
             if (TIPOS_COM_PRECO_ORC.has(promo.tipo)) {
-              const priceToUse = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
+              let priceToUse = item.suggested_discounted_price ?? item.max_discounted_price ?? null;
+
+              // Campanhas com preço: endpoint bulk de itens muitas vezes não retorna preços sugeridos.
+              // Se não tiver no banco (dados antigos), busca ao vivo via per-item endpoint.
+              if ((!priceToUse || isNaN(priceToUse)) && TIPOS_COM_PRECO_ORC.has(promo.tipo)) {
+                try {
+                  const tk = await getToken(promo.contaId);
+                  if (tk) {
+                    const r = await axios.get(
+                      `https://api.mercadolibre.com/seller-promotions/items/${item.id}?app_version=v2`,
+                      { headers: { Authorization: `Bearer ${tk}` }, timeout: 10000 }
+                    );
+                    const allPromos = Array.isArray(r.data) ? r.data : [r.data];
+                    const match = allPromos.find(p => p.id === promo.id);
+                    if (match) {
+                      priceToUse = match.suggested_discounted_price ?? match.max_discounted_price ?? null;
+                      // Persiste no item para não buscar novamente
+                      if (match.suggested_discounted_price != null) item.suggested_discounted_price = match.suggested_discounted_price;
+                      if (match.max_discounted_price != null) item.max_discounted_price = match.max_discounted_price;
+                      if (match.min_discounted_price != null) item.min_discounted_price = match.min_discounted_price;
+                    }
+                  }
+                } catch (_) { /* falha silenciosa, será pulado abaixo */ }
+                await delay(150);
+              }
+
               if (!priceToUse || isNaN(priceToUse)) {
-                // Sem preço disponível: ignora o item
                 skipped.push({ promoId: promo.id, itemId: item.id, motivo: 'sem_preco' });
                 continue;
               }
@@ -680,6 +743,104 @@ export const promocoesController = {
     } catch (err) {
       console.error('[PromoML] executarOrquestrador error:', err);
       res.status(500).json({ erro: 'Erro ao executar orquestrador', detalhes: err.message });
+    }
+  },
+
+  // ─── POST /api/promocoes/excluir-campanhas-massa ────────────────────────────
+  // Exclui campanhas ativas dos itens selecionados.
+  // maxPct = null  → exclui TODAS
+  // maxPct = número → exclui apenas as que ultrapassam aquele % do vendedor
+  async excluirCampanhasMassa(req, res) {
+    try {
+      const { userId, itemIds, maxPct } = req.body;
+      if (!userId || !Array.isArray(itemIds) || itemIds.length === 0) {
+        return res.status(400).json({ erro: 'userId e itemIds são obrigatórios' });
+      }
+
+      const contasML = await prisma.contaML.findMany({ where: { userId }, select: { id: true } });
+      const contaIds = contasML.map(c => c.id);
+
+      const anuncios = await prisma.anuncioML.findMany({
+        where: { id: { in: itemIds }, contaId: { in: contaIds } },
+        select: { id: true, contaId: true },
+      });
+      if (anuncios.length === 0) return res.status(404).json({ erro: 'Nenhum anúncio encontrado' });
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: { userId, tipo: 'PROMO_REMOVER', status: 'PENDENTE', detalhes: 'Preparando exclusão de campanhas...' },
+      });
+      res.json({ ok: true, tarefaId: tarefa.id });
+
+      // Processamento em background
+      (async () => {
+        try {
+          const itemContaMap = Object.fromEntries(anuncios.map(a => [a.id, a.contaId]));
+          const itensFila = [];
+
+          const promos = await prisma.promoML.findMany({
+            where: {
+              contaId: { in: contaIds },
+              status: { in: ['started', 'pending'] },
+            },
+          });
+
+          for (const promo of promos) {
+            const itens = Array.isArray(promo.itens) ? promo.itens : [];
+            for (const item of itens) {
+              if (!itemIds.includes(item.id)) continue;
+              if (!['started', 'pending', 'candidate'].includes(item.status)) continue;
+
+              if (maxPct != null) {
+                // Só exclui campanhas que ultrapassam o % máximo
+                const sp = item.seller_percentage ?? item.sellerPercentage ?? null;
+                if (sp !== null && sp <= maxPct) continue; // mantém esta
+                // SELLER_CAMPAIGN sem seller_percentage: calcula pelo preço
+                if (sp === null && item.suggested_discounted_price != null && item.original_price > 0) {
+                  const pctEfetivo = (1 - item.suggested_discounted_price / item.original_price) * 100;
+                  if (pctEfetivo <= maxPct) continue;
+                }
+              }
+
+              itensFila.push({
+                itemId: item.id,
+                contaId: promo.contaId,
+                promoTipo: promo.tipo,
+                promoId: promo.id,
+                offerId: item.offer_id || item.ref_id || null,
+              });
+            }
+          }
+
+          if (itensFila.length === 0) {
+            await prisma.tarefaFila.update({
+              where: { id: tarefa.id },
+              data: { status: 'CONCLUIDO', detalhes: 'Nenhuma campanha encontrada para excluir.' },
+            });
+            return;
+          }
+
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: { detalhes: `Enfileirando remoção de ${itensFila.length} campanha(s)...` },
+          });
+
+          await promoQueue.add('processar-massa', {
+            tarefaId: tarefa.id,
+            userId,
+            itens: itensFila,
+            acao: 'REMOVER',
+          }, { removeOnComplete: true, removeOnFail: true });
+
+        } catch (e) {
+          console.error('[excluirCampanhasMassa]', e.message);
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: { status: 'FALHA', detalhes: `Erro: ${e.message}` },
+          }).catch(() => {});
+        }
+      })();
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
     }
   },
 
@@ -759,12 +920,13 @@ export const promocoesController = {
 
             for (const item of candidatos) {
               try {
-                const body = { promotion_id: alerta.promoId };
+                const body = { promotion_id: alerta.promoId, promotion_type: promo.tipo };
                 if (item.offer_id) body.offer_id = item.offer_id;
+                // SELLER_CAMPAIGN retorna price=0 para candidatos; usa suggested_discounted_price como deal_price
                 const dealPrice = item.suggested_discounted_price ?? (item.price > 0 ? item.price : null);
                 if (dealPrice) body.deal_price = dealPrice;
-                await axios.put(
-                  `https://api.mercadolibre.com/seller-promotions/promotions/${alerta.promoId}/items/${item.id}`,
+                await axios.post(
+                  `https://api.mercadolibre.com/seller-promotions/items/${item.id}?app_version=v2`,
                   body,
                   { headers: { Authorization: `Bearer ${token}` }, timeout: 10000 }
                 );

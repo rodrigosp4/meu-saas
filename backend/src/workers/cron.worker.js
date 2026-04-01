@@ -279,11 +279,22 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
     select: { id: true, tinyAccessToken: true },
   });
 
+  // 1) Ativa promoções para cada usuário ANTES de enfileirar o sync ML
+  let totalAlertas = 0;
+  for (const user of usuarios) {
+    try {
+      const novas = await verificarMonitorPromocoes(user.id);
+      totalAlertas += novas;
+    } catch (e) {
+      console.error(`[Cron-Monitor] Erro para userId=${user.id}:`, e.message);
+    }
+  }
+
   let contasSincronizadas = 0;
   let usuariosSincronizados = 0;
 
+  // 2) Sincroniza todas as contas ML e Tiny (após ativação de promoções)
   for (const user of usuarios) {
-    // 1) Sincroniza todas as contas ML do usuário
     const contasML = await prisma.contaML.findMany({
       where: { userId: user.id },
       select: { id: true, refreshToken: true },
@@ -303,7 +314,7 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
       contasSincronizadas++;
     }
 
-    // 2) Importa produtos novos da Tiny (SKUs ainda não cadastrados no banco)
+    // Importa produtos novos da Tiny (SKUs ainda não cadastrados no banco)
     if (user.tinyAccessToken) {
       await syncQueue.add(
         'sync-tiny',
@@ -318,17 +329,6 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
         }
       );
       usuariosSincronizados++;
-    }
-  }
-
-  // 3) Monitora promoções para cada usuário
-  let totalAlertas = 0;
-  for (const user of usuarios) {
-    try {
-      const novas = await verificarMonitorPromocoes(user.id);
-      totalAlertas += novas;
-    } catch (e) {
-      console.error(`[Cron-Monitor] Erro para userId=${user.id}:`, e.message);
     }
   }
 

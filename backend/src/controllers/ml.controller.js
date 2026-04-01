@@ -1619,7 +1619,24 @@ async getItemPerguntas(req, res) {
     }
 
     const formatadas = mlRes?.data?.questions || [];
-    res.json({ questions: formatadas });
+
+    // Busca nicknames dos compradores únicos
+    const buyerIds = [...new Set(formatadas.map(q => q.from?.id).filter(Boolean))];
+    const buyerNicknames = {};
+    for (const buyerId of buyerIds) {
+      try {
+        const userRes = await axios.get(
+          `https://api.mercadolibre.com/users/${buyerId}?attributes=id,nickname`,
+          { headers: { Authorization: `Bearer ${activeToken}` }, timeout: 5000 }
+        );
+        buyerNicknames[buyerId] = userRes.data.nickname || String(buyerId);
+        await delay(200);
+      } catch {
+        buyerNicknames[buyerId] = String(buyerId);
+      }
+    }
+
+    res.json({ questions: formatadas, buyerNicknames });
 
   } catch (error) {
     res.status(500).json({ erro: error.message });

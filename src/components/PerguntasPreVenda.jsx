@@ -286,6 +286,7 @@ export default function PerguntasPreVenda({ usuarioId }) {
 
   const [modalAnuncio, setModalAnuncio] = useState(false);
   const [modalRespostas, setModalRespostas] = useState(false);
+  const [buyerNicknames, setBuyerNicknames] = useState({});
 
   // Cache de conversas/anúncios pré-carregados
   const conversaRef = useRef(null);
@@ -343,8 +344,9 @@ const fetchConversaItem = async (pergunta) => {
     }
 
     const payload = {
-      conversa: convData.questions ||[],
-      itemInfo: adData
+      conversa: convData.questions || [],
+      itemInfo: adData,
+      buyerNicknames: convData.buyerNicknames || {}
     };
 
     cacheRef.current[cacheKey] = payload;
@@ -390,8 +392,13 @@ const fetchConversaItem = async (pergunta) => {
     try {
       // O fetchConversaItem agora gerencia o cache e retorna os dados de forma limpa
       const dados = await fetchConversaItem(pergunta);
-      setConversa(dados.conversa);
+      const compradorId = String(pergunta.compradorId || pergunta.dadosML?.from?.id || '');
+      const conversaFiltrada = compradorId
+        ? dados.conversa.filter(q => String(q.from?.id) === compradorId)
+        : dados.conversa;
+      setConversa(conversaFiltrada);
       setItemInfo(dados.itemInfo);
+      setBuyerNicknames(dados.buyerNicknames || {});
     } catch (e) {
       console.error("Erro ao carregar conversa:", e);
     } finally {
@@ -657,7 +664,7 @@ const fetchConversaItem = async (pergunta) => {
                 {/* Pergunta */}
                 <div style={{ marginBottom: '3px' }}>
                   <div style={{ fontSize: '0.72em', color: '#888', marginBottom: '1px' }}>
-                    PERGUNTA ({formatarData(q.date_created)}):
+                    PERGUNTA ({formatarData(q.date_created)}){q.from?.id ? <span style={{ marginLeft: '6px', color: '#aaa' }}>Comprador: <span style={{ color: '#2980b9' }}>{buyerNicknames[q.from.id] || `#${q.from.id}`}</span></span> : ''}:
                   </div>
                   <div style={{ fontSize: '0.82em', color: '#1a6fbb', lineHeight: 1.4 }}>{q.text || <em style={{ color: '#ccc' }}>[texto ocultado]</em>}</div>
                 </div>

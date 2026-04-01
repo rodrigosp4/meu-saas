@@ -1,7 +1,7 @@
 import { useDraftManager, formatarDataDraft } from '../hooks/useDraftManager';
 
-export default function PainelRascunhos({ setActivePage, setProdutoParaAnunciar }) {
-  const { drafts, excluirDraft } = useDraftManager();
+export default function PainelRascunhos({ setActivePage, setProdutoParaAnunciar, usuarioId }) {
+  const { drafts, excluirDraft } = useDraftManager(usuarioId);
 
   const retomar = (draft) => {
     localStorage.setItem('ml_pending_draft', JSON.stringify(draft));

@@ -120,6 +120,7 @@ function App() {
       canAccess={canAccess}
       impersonating={impersonating}
       role={role}
+      usuarioId={uid}
     >
       {canAccess('adminPanel') && activePage === 'adminPanel' && <AdminPanel setActivePage={setActivePage} />}
       {canAccess('agendadorTarefas') && activePage === 'agendadorTarefas' && <AgendadorTarefas />}
@@ -157,7 +158,7 @@ function App() {
       {canAccess('dimensoesEmbalagem') && activePage === 'dimensoesEmbalagem' && <DimensoesEmbalagem usuarioId={uid} />}
       {canAccess('corretorPrecoPlanilha') && activePage === 'corretorPrecoPlanilha' && <CorretorPrecoPlanilha usuarioId={uid} />}
       {canAccess('planejadorProductAds') && activePage === 'planejadorProductAds' && <PlanejadorProductAds usuarioId={uid} />}
-      {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} />}
+      {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} usuarioId={uid} />}
     </DashboardLayout>
   );
 }

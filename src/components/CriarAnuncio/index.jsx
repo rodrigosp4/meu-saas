@@ -40,6 +40,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [fetchError, setFetchError] = useState(null);
   
   const [activeTab, setActiveTab] = useState('pai');
+  const [showRascunhos, setShowRascunhos] = useState(false);
 
   // Basico
   const [tituloAnuncio, setTituloAnuncio] = useState('');
@@ -80,7 +81,7 @@ export default function CriarAnuncio({ produto, usuarioId }) {
   const [configAtacado, setConfigAtacado] = useState(null);
 
   // Rascunhos
-  const { drafts, salvarDraft, excluirDraft } = useDraftManager();
+  const { drafts, salvarDraft, excluirDraft } = useDraftManager(usuarioId);
   const timerRascunho = useRef(null);
   const cargaInicialConcluida = useRef(false); // impede auto-save durante carga inicial da API
   const draftId = `criar_${produto?.sku || produto?.id || 'sem-id'}`;
@@ -885,6 +886,11 @@ const publicarAnuncios = async () => {
         <h2 className="text-2xl font-black text-gray-800">
           Criar Anúncio: <span className="text-blue-600 font-medium">{produto.nome}</span>
         </h2>
+        {rascunhosCriar.length > 0 && (
+          <button onClick={() => setShowRascunhos(v => !v)} className={`py-2 px-4 text-sm font-bold rounded-lg border transition-colors flex items-center gap-2 ${showRascunhos ? 'bg-amber-100 border-amber-400 text-amber-800' : 'bg-white border-amber-300 text-amber-700 hover:bg-amber-50'}`}>
+            📝 Rascunhos ({rascunhosCriar.length})
+          </button>
+        )}
       </div>
 
       {imagemAmpliada && (
@@ -893,6 +899,39 @@ const publicarAnuncios = async () => {
         </div>
       )}
       
+      {showRascunhos && (
+        <div style={{ marginBottom: '16px', padding: '16px', backgroundColor: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: '10px' }}>
+          <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
+            Rascunhos salvos — clique em Retomar para continuar o preenchimento
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {rascunhosCriar.map(d => (
+              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#fff', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px 16px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.9em', color: '#1e293b' }}>{d.titulo || d.produtoNome || '(sem título)'}</div>
+                  <div style={{ fontSize: '0.75em', color: '#94a3b8', marginTop: '3px' }}>
+                    {d.produtoSku && <span style={{ marginRight: '10px' }}>SKU: <b>{d.produtoSku}</b></span>}
+                    Salvo em: {formatarDataDraft(d.updatedAt)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => carregarRascunho(d)}
+                  style={{ padding: '6px 14px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 700, fontSize: '0.82em', cursor: 'pointer' }}
+                >
+                  Retomar
+                </button>
+                <button
+                  onClick={() => { excluirDraft(d.id); if (rascunhosCriar.length <= 1) setShowRascunhos(false); }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: '0.82em', cursor: 'pointer' }}
+                >
+                  Excluir
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex bg-white rounded-t-lg border-b border-gray-200 overflow-x-auto custom-scrollbar shadow-sm">
         <button onClick={() => setActiveTab('pai')} className={`py-4 px-6 text-sm font-bold whitespace-nowrap border-b-4 transition-colors focus:outline-none flex items-center gap-2 ${activeTab === 'pai' ? 'border-blue-600 text-blue-700 bg-blue-50/30' : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'}`}>
           📦 Dados Principais (Pai)
@@ -908,11 +947,6 @@ const publicarAnuncios = async () => {
           )
         })}
 
-        {rascunhosCriar.length > 0 && (
-          <button onClick={() => setActiveTab('rascunhos')} className={`py-4 px-6 text-sm font-bold whitespace-nowrap border-b-4 transition-colors focus:outline-none flex items-center gap-2 ${activeTab === 'rascunhos' ? 'border-amber-500 text-amber-700 bg-amber-50/40' : 'border-transparent text-amber-600 hover:text-amber-800 hover:bg-amber-50'}`}>
-            📝 Rascunhos ({rascunhosCriar.length})
-          </button>
-        )}
       </div>
 
       <div className="bg-white p-6 rounded-b-lg shadow-sm border border-t-0 border-gray-200 mb-6">
@@ -930,39 +964,6 @@ const publicarAnuncios = async () => {
             uploadando={uploadando} onUploadImagem={uploadParaImgur}
             onRemoverFundo={removerFundoEOtimizar} removendoFundo={removendoFundo}
           />
-        )}
-
-        {activeTab === 'rascunhos' && (
-          <div>
-            <div style={{ fontSize: '0.8em', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
-              Rascunhos salvos — clique em Retomar para continuar o preenchimento
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {rascunhosCriar.map(d => (
-                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: '8px', padding: '12px 16px' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.9em', color: '#1e293b' }}>{d.titulo || d.produtoNome || '(sem título)'}</div>
-                    <div style={{ fontSize: '0.75em', color: '#94a3b8', marginTop: '3px' }}>
-                      {d.produtoSku && <span style={{ marginRight: '10px' }}>SKU: <b>{d.produtoSku}</b></span>}
-                      Salvo em: {formatarDataDraft(d.updatedAt)}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => carregarRascunho(d)}
-                    style={{ padding: '6px 14px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 700, fontSize: '0.82em', cursor: 'pointer' }}
-                  >
-                    Retomar
-                  </button>
-                  <button
-                    onClick={() => { excluirDraft(d.id); if (activeTab === 'rascunhos' && rascunhosCriar.length <= 1) setActiveTab('pai'); }}
-                    style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: '0.82em', cursor: 'pointer' }}
-                  >
-                    Excluir
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
         )}
 
         {typeof activeTab === 'number' && filhos[activeTab] && (() => {

@@ -262,7 +262,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
   const [modoAtivo, setModoAtivo] = useState('replicar'); // 'replicar' | 'recomendacoes' | 'rascunhos'
 
   // Rascunhos
-  const { drafts, salvarDraft, excluirDraft } = useDraftManager();
+  const { drafts, salvarDraft, excluirDraft } = useDraftManager(usuarioId);
   const draftIdRef = useRef(null);
   const timerRascunho = useRef(null);
   const rascunhosReplicar = drafts.filter(d => d.tipo === 'replicar');

@@ -198,12 +198,12 @@ const pageTitles = {
 };
 
 // ── Componente principal ───────────────────────────────────────────────────
-export default function DashboardLayout({ children, setActivePage, activePage, onLogout, canAccess, impersonating, role }) {
+export default function DashboardLayout({ children, setActivePage, activePage, onLogout, canAccess, impersonating, role, usuarioId }) {
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const isSuperAdmin = role === 'SUPER_ADMIN' && !impersonating;
-  const { drafts } = useDraftManager();
+  const { drafts } = useDraftManager(usuarioId);
 
   // No desktop: sidebar colapsa quando não está em hover
   const collapsed = !isMobile && !sidebarHovered;

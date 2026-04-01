@@ -1,26 +1,40 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
-const STORAGE_KEY = 'ml_rascunhos';
 const MAX_DRAFTS = 10;
 
-function lerDrafts() {
+function getStorageKey(userId) {
+  return userId ? `ml_rascunhos_${userId}` : null;
+}
+
+function lerDrafts(userId) {
+  const key = getStorageKey(userId);
+  if (!key) return [];
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return JSON.parse(localStorage.getItem(key) || '[]');
   } catch {
     return [];
   }
 }
 
-function gravarDrafts(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function gravarDrafts(list, userId) {
+  const key = getStorageKey(userId);
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify(list));
 }
 
-export function useDraftManager() {
-  const [drafts, setDrafts] = useState(lerDrafts);
+export function useDraftManager(userId) {
+  const [drafts, setDrafts] = useState(() => lerDrafts(userId));
+
+  // Reler do localStorage quando userId ficar disponível (ex: carregamento assíncrono)
+  useEffect(() => {
+    if (userId) {
+      setDrafts(lerDrafts(userId));
+    }
+  }, [userId]);
 
   const salvarDraft = useCallback((data) => {
     // data deve ter: { id, tipo, titulo, ...estadoDoFormulario }
-    const all = lerDrafts();
+    const all = lerDrafts(userId);
     const idx = all.findIndex(d => d.id === data.id);
     const now = Date.now();
     if (idx >= 0) {
@@ -33,15 +47,15 @@ export function useDraftManager() {
       }
       all.push({ ...data, createdAt: now, updatedAt: now });
     }
-    gravarDrafts(all);
+    gravarDrafts(all, userId);
     setDrafts([...all]);
-  }, []);
+  }, [userId]);
 
   const excluirDraft = useCallback((draftId) => {
-    const all = lerDrafts().filter(d => d.id !== draftId);
-    gravarDrafts(all);
+    const all = lerDrafts(userId).filter(d => d.id !== draftId);
+    gravarDrafts(all, userId);
     setDrafts([...all]);
-  }, []);
+  }, [userId]);
 
   return { drafts, salvarDraft, excluirDraft };
 }

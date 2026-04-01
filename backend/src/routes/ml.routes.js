@@ -54,4 +54,9 @@ router.post('/api/ml/sync-perguntas-iniciais', mlController.syncPerguntasIniciai
 router.post('/api/ml/acoes-massa', mlController.acoesMassa);
 router.post('/api/ml/dimensoes-embalagem', mlController.atualizarDimensoes);
 router.post('/api/ml/buscar-dimensoes-ml', mlController.buscarDimensoesML);
+
+// Concorrência de Preço / Automação
+router.get('/api/ml/concorrencia-preco', mlController.getConcorrenciaPreco);
+router.post('/api/ml/automacao-preco', mlController.gerenciarAutomacaoPreco);
+
 export default router;

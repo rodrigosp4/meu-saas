@@ -28,6 +28,7 @@ import CorretorPrecoPlanilha from './components/CorretorPrecoPlanilha.jsx';
 import PlanejadorProductAds from './components/PlanejadorProductAds.jsx';
 import PainelRascunhos from './components/PainelRascunhos.jsx';
 import TabelaMedidas from './components/TabelaMedidas.jsx';
+import ConcorrenciaPreco from './components/ConcorrenciaPreco.jsx';
 
 function App() {
   const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura } = useAuth();
@@ -159,6 +160,7 @@ function App() {
       {canAccess('clienteAPI') && activePage === 'clienteAPI' && <ClienteAPI usuarioId={uid} />}
       {canAccess('dimensoesEmbalagem') && activePage === 'dimensoesEmbalagem' && <DimensoesEmbalagem usuarioId={uid} />}
       {canAccess('corretorPrecoPlanilha') && activePage === 'corretorPrecoPlanilha' && <CorretorPrecoPlanilha usuarioId={uid} />}
+      {canAccess('concorrenciaPreco') && activePage === 'concorrenciaPreco' && <ConcorrenciaPreco usuarioId={uid} />}
       {canAccess('planejadorProductAds') && activePage === 'planejadorProductAds' && <PlanejadorProductAds usuarioId={uid} />}
       {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} usuarioId={uid} />}
     </DashboardLayout>

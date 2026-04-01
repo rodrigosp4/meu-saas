@@ -143,6 +143,65 @@ function ModalCriarTabela({ contaId, userId, siteId, dominios, initialData, onCl
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState({ text: '', type: 'info' });
 
+
+// --- INÍCIO DA INTELIGÊNCIA DA TABELA ---
+  const [atributosDinamicos, setAtributosDinamicos] = useState([]);
+  const[buscandoFicha, setBuscandoFicha] = useState(false);
+
+  useEffect(() => {
+    // Só busca se tiver domínio e gênero selecionados
+    if (!domainId || !genero.name) return;
+
+    const fetchFichaTecnica = async () => {
+      setBuscandoFicha(true);
+      try {
+        const fullDomainId = domainId.includes('-') ? domainId.replace(`${siteId}-`, '') : domainId;
+        
+        const res = await fetch('/api/tabela-medidas/ficha-tecnica', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contaId, userId, domainId: fullDomainId,
+            attributes: [{ id: 'GENDER', value_name: genero.name }]
+          }),
+        });
+        const data = await res.json();
+
+        let extraidos =[];
+        // Navega na resposta do ML para extrair os campos exigidos
+        if (data.input?.groups) {
+          const chartGroup = data.input.groups.find(g => g.id === 'SIZE_CHART' || g.section === 'GRIDS');
+          if (chartGroup?.components) {
+            const grid = chartGroup.components.find(c => c.component === 'GRID');
+            if (grid?.components) {
+              grid.components.forEach(comp => {
+                if (comp.attributes?.[0]) {
+                  const attr = comp.attributes[0];
+                  // Pega os atributos referentes às medidas (ignora os gerais e o Main Attr)
+                  if (attr.hierarchy && attr.hierarchy.includes('CHILD') && attr.id !== mainAttr && attr.id !== 'FOOT_LENGTH') {
+                    extraidos.push({
+                      id: attr.id,
+                      name: comp.label || attr.name,
+                      required: attr.tags?.includes('required') // Marca se o ML obriga o envio
+                    });
+                  }
+                }
+              });
+            }
+          }
+        }
+        setAtributosDinamicos(extraidos);
+      } catch (e) {
+        console.error('Erro ao buscar exigências do ML:', e);
+      } finally {
+        setBuscandoFicha(false);
+      }
+    };
+
+    fetchFichaTecnica();
+  },[domainId, genero, contaId, userId, siteId, mainAttr]);
+  // --- FIM DA INTELIGÊNCIA ---
+
   // Gêneros disponíveis para MLB — value_id global ML + name em pt-BR
   const GENEROS = [
     { valueId: '',        name: '— selecione —' },
@@ -165,10 +224,8 @@ function ModalCriarTabela({ contaId, userId, siteId, dominios, initialData, onCl
   }, [domainId, initialData]);
 
   // Atributos que a API ML exige em domínios de roupa (TOPS/BOTTOMS/PAJAMAS, etc.)
-  const CLOTHING_EXTRAS_DEFAULT = [
-    { id: 'FILTRABLE_SIZE',         valor: '' },
-    { id: 'BUST_CIRCUMFERENCE_FROM',valor: '' },
-    { id: 'HIP_CIRCUMFERENCE_FROM', valor: '' },
+  const CLOTHING_EXTRAS_DEFAULT =[
+    { id: 'FILTRABLE_SIZE',         valor: '' }
   ];
   const defaultExtras = () => isFootwear(domainId) ? [] : CLOTHING_EXTRAS_DEFAULT.map(e => ({ ...e }));
 
@@ -328,14 +385,30 @@ function ModalCriarTabela({ contaId, userId, siteId, dominios, initialData, onCl
                         value={e.id}
                         onChange={ev => updateExtra(i, ei, 'id', ev.target.value)}
                       >
-                        <option value="">-- O que você quer informar? --</option>
-                        <option value="FILTRABLE_SIZE">Tamanho Filtro ML (P, M, G, GG — lista do domínio)</option>
-                        <option value="BUST_CIRCUMFERENCE_FROM">Busto / Tórax</option>
-                        <option value="WAIST_CIRCUMFERENCE_FROM">Cintura</option>
-                        <option value="HIP_CIRCUMFERENCE_FROM">Quadril</option>
-                        <option value="GARMENT_LENGTH_FROM">Comprimento da Roupa</option>
-                        <option value="THIGH_CIRCUMFERENCE_FROM">Coxa</option>
-                        <option value="INSEAM_LENGTH_FROM">Costura Interna / Cavalo</option>
+                        <option value="">
+                          {buscandoFicha ? "Carregando exigências do ML..." : "-- Selecione a medida --"}
+                        </option>
+                        <option value="FILTRABLE_SIZE">Tamanho Filtro ML (P, M, G...)</option>
+                        
+                        {/* Renderiza as opções inteligentes puxadas do ML */}
+                        {atributosDinamicos.length > 0 ? (
+                          atributosDinamicos.map(attr => (
+                            <option key={attr.id} value={attr.id}>
+                              {attr.name} {attr.required ? ' (Obrigatório)' : ''}
+                            </option>
+                          ))
+                        ) : (
+                          <>
+                            {/* Fallback caso a API demore */}
+                            <option value="BUST_CIRCUMFERENCE_FROM">Busto (Para Mulheres)</option>
+                            <option value="CHEST_CIRCUMFERENCE_FROM">Tórax / Peito (Para Homens)</option>
+                            <option value="WAIST_CIRCUMFERENCE_FROM">Cintura</option>
+                            <option value="HIP_CIRCUMFERENCE_FROM">Quadril</option>
+                            <option value="GARMENT_LENGTH_FROM">Comprimento da Roupa</option>
+                            <option value="GARMENT_HIP_WIDTH_FROM">Largura do Quadril (Roupa)</option>
+                            <option value="THIGH_CIRCUMFERENCE_FROM">Coxa</option>
+                          </>
+                        )}
                       </select>
 
                       <input
@@ -939,8 +1012,12 @@ export default function TabelaMedidas({ usuarioId }) {
           <div style={{ ...S.label, marginBottom: 4 }}>Gênero</div>
           <select style={S.select} value={generoFiltro} onChange={e => setGeneroFiltro(e.target.value)}>
             <option value="">Todos</option>
-            <option>Homem</option><option>Mulher</option><option>Unissex</option>
-            <option>Meninas</option><option>Meninos</option><option>Bebê</option>
+            <option value="Masculino">Masculino</option>
+            <option value="Feminino">Feminino</option>
+            <option value="Unissex">Unissex</option>
+            <option value="Meninas">Meninas</option>
+            <option value="Meninos">Meninos</option>
+            <option value="Bebê">Bebê</option>
           </select>
         </div>
 

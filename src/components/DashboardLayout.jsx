@@ -176,6 +176,12 @@ const icons = {
       <line x1="9" y1="3" x2="9" y2="21" />
     </svg>
   ),
+  concorrenciaPreco: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+      <polyline points="17 6 23 6 23 12" />
+    </svg>
+  ),
 };
 
 // ── Labels de página ───────────────────────────────────────────────────────
@@ -201,6 +207,7 @@ const pageTitles = {
   dimensoesEmbalagem: 'Dimensões de Embalagem',
   corretorPrecoPlanilha: 'Corretor de Preço (Planilha)',
   planejadorProductAds: 'Planejador de Product Ads',
+  concorrenciaPreco: 'Concorrência de Preço (Automação ML)',
   otimizadorImagens: 'Otimizador de Imagens',
   clienteAPI: 'Cliente API (ML & Tiny)',
   rascunhos: 'Rascunhos de Cadastro',
@@ -260,6 +267,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     { id: 'qualidadePublicacoes',label: 'Qualidade Publicações',  icon: icons.qualidade },
     { id: 'dimensoesEmbalagem',  label: 'Dimensões de Embalagem', icon: icons.dimensoes },
     { id: 'corretorPrecoPlanilha', label: 'Corretor Preço (CSV)', icon: icons.planilha },
+    { id: 'concorrenciaPreco',     label: 'Concorrência de Preço', icon: icons.concorrenciaPreco },
     { id: 'planejadorProductAds',  label: 'Product Ads (IA)',    icon: icons.productAds },
     { id: 'otimizadorImagens',   label: 'Otimizador de Imagens',  icon: icons.image },
     { id: 'clienteAPI',          label: 'Cliente API',            icon: icons.apiClient },

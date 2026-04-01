@@ -18,6 +18,7 @@ export const MODULOS = [
   { id: 'configuracoes',        label: 'Configurações API' },
   { id: 'corretorPrecoPlanilha',label: 'Corretor de Preço (Planilha)' },
   { id: 'planejadorProductAds', label: 'Planejador de Product Ads' },
+  { id: 'concorrenciaPreco',    label: 'Concorrência de Preço' },
 ];
 
 // Recursos granulares (ações dentro dos módulos)
@@ -52,6 +53,7 @@ export const RECURSOS_SISTEMA = [
   { id: 'precificacao.regras',       label: 'Criar / editar regras de preço',     grupo: 'Precificação',          modulo: 'configuracoes',      deps: [] },
   { id: 'precificacao.aplicar',      label: 'Aplicar regra de preço a anúncios', grupo: 'Precificação',          modulo: 'configuracoes',      deps: ['gerenciadorML.editarPreco', 'precificacao.regras'] },
   { id: 'precificacao.atacado',      label: 'Configurar preço por atacado',       grupo: 'Precificação',          modulo: 'configuracoes',      deps: [] },
+  { id: 'precificacao.automacao',    label: 'Ativar automação de preço (ML)',     grupo: 'Precificação',          modulo: 'concorrenciaPreco',  deps: [] },
 
   // ── Monitor de Concorrentes ──────────────────────────────────────────────
   { id: 'monitor.visualizar',        label: 'Visualizar grupos de monitoramento', grupo: 'Monitor Concorrentes',  modulo: 'monitorConcorrentes',deps: [] },

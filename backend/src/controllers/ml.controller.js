@@ -2326,4 +2326,168 @@ async syncPerguntasIniciais(req, res) {
     }
   },
 
+  // ── Concorrência de Preço ─────────────────────────────────────────────────
+
+  async getConcorrenciaPreco(req, res) {
+    try {
+      const { userId, contaId, offset = 0, limit = 20 } = req.query;
+
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada' });
+
+      let token = conta.accessToken;
+      try {
+        const r = await mlService.refreshToken(conta.refreshToken);
+        if (r?.access_token) {
+          token = r.access_token;
+          await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: r.refresh_token || conta.refreshToken } }).catch(() => {});
+        }
+      } catch {}
+      const headers = { Authorization: `Bearer ${token}` };
+
+      // 1. Busca IDs com sugestão de preço
+      let allSuggestionIds = [];
+      try {
+        const sugRes = await axios.get(
+          `https://api.mercadolibre.com/suggestions/user/${conta.id}/items`,
+          { headers, timeout: 15000 }
+        );
+        allSuggestionIds = sugRes.data.items || [];
+      } catch (e) {
+        if (e.response?.status === 404) return res.json({ items: [], total: 0 });
+        return res.status(500).json({ erro: 'Erro ao buscar sugestões de preço', detalhes: e.response?.data });
+      }
+
+      // 2. Busca IDs com automação ativa
+      const automatedIds = new Set();
+      try {
+        let autoOffset = 0;
+        while (true) {
+          const autoRes = await axios.get(
+            `https://api.mercadolibre.com/pricing-automation/users/${conta.id}/items?limit=100&offset=${autoOffset}`,
+            { headers, timeout: 10000 }
+          );
+          const pageItems = autoRes.data.items || [];
+          pageItems.forEach(id => automatedIds.add(id));
+          autoOffset += pageItems.length;
+          if (autoOffset >= (autoRes.data.paging?.total || 0) || pageItems.length === 0) break;
+        }
+      } catch {}
+
+      // 3. Paginação
+      const pageIds = allSuggestionIds.slice(Number(offset), Number(offset) + Number(limit));
+      if (pageIds.length === 0) return res.json({ items: [], total: allSuggestionIds.length, offset: Number(offset), limit: Number(limit) });
+
+      // 4. Enriquece com título/thumbnail do banco ou da API do ML
+      const dbAds = await prisma.anuncioML.findMany({
+        where: { id: { in: pageIds } },
+        select: { id: true, dadosML: true, preco: true }
+      });
+      const itemInfo = {};
+      for (const ad of dbAds) {
+        itemInfo[ad.id] = { title: ad.dadosML?.title || ad.id, price: ad.preco || ad.dadosML?.price || 0, thumbnail: ad.dadosML?.thumbnail };
+      }
+      const missingIds = pageIds.filter(id => !itemInfo[id]);
+      if (missingIds.length > 0) {
+        try {
+          const chunks = [];
+          for (let i = 0; i < missingIds.length; i += 20) chunks.push(missingIds.slice(i, i + 20));
+          for (const chunk of chunks) {
+            const r = await axios.get(
+              `https://api.mercadolibre.com/items?ids=${chunk.join(',')}&attributes=id,title,price,thumbnail`,
+              { headers, timeout: 15000 }
+            );
+            for (const entry of (r.data || [])) {
+              if (entry.code === 200 && entry.body) {
+                itemInfo[entry.body.id] = { title: entry.body.title, price: entry.body.price, thumbnail: entry.body.thumbnail };
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // 5. Busca detalhes de sugestão em paralelo
+      const suggestionResults = await Promise.allSettled(
+        pageIds.map(id => axios.get(`https://api.mercadolibre.com/suggestions/items/${id}/details`, { headers, timeout: 10000 }))
+      );
+
+      // 6. Busca detalhes de automação para itens automatizados nesta página
+      const automatedInPage = pageIds.filter(id => automatedIds.has(id));
+      const automationResults = await Promise.allSettled(
+        automatedInPage.map(id => axios.get(`https://api.mercadolibre.com/pricing-automation/items/${id}/automation`, { headers, timeout: 10000 }))
+      );
+      const automationMap = {};
+      automatedInPage.forEach((id, i) => {
+        if (automationResults[i].status === 'fulfilled') automationMap[id] = automationResults[i].value.data;
+      });
+
+      // 7. Monta resultado final
+      const items = pageIds.map((id, i) => {
+        const sug = suggestionResults[i].status === 'fulfilled' ? suggestionResults[i].value.data : null;
+        return {
+          id,
+          title: itemInfo[id]?.title || id,
+          thumbnail: itemInfo[id]?.thumbnail,
+          currentPrice: sug?.current_price?.amount || itemInfo[id]?.price || 0,
+          suggestedPrice: sug?.suggested_price?.amount,
+          lowestPrice: sug?.lowest_price?.amount,
+          internalPrice: sug?.internal_price?.amount,
+          status: sug?.status,
+          percentDifference: sug?.percent_difference,
+          costs: sug?.costs,
+          applicableSuggestion: sug?.applicable_suggestion,
+          promotionDetail: sug?.promotion_detail,
+          currencyId: sug?.currency_id || 'BRL',
+          hasAutomation: automatedIds.has(id),
+          automation: automationMap[id] || null,
+        };
+      });
+
+      res.json({ items, total: allSuggestionIds.length, offset: Number(offset), limit: Number(limit) });
+    } catch (err) {
+      console.error('[getConcorrenciaPreco]', err.message);
+      res.status(500).json({ erro: 'Erro ao buscar oportunidades de preço', detalhes: err.response?.data });
+    }
+  },
+
+  async gerenciarAutomacaoPreco(req, res) {
+    try {
+      const { itemId, contaId, userId, rule_id, min_price, max_price, action } = req.body;
+      if (!itemId || !contaId || !userId || !action) return res.status(400).json({ erro: 'Campos obrigatórios ausentes' });
+
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada' });
+
+      let token = conta.accessToken;
+      try {
+        const r = await mlService.refreshToken(conta.refreshToken);
+        if (r?.access_token) {
+          token = r.access_token;
+          await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: r.refresh_token || conta.refreshToken } }).catch(() => {});
+        }
+      } catch {}
+
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      const url = `https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`;
+
+      if (action === 'delete') {
+        await axios.delete(url, { headers, timeout: 15000 });
+        return res.json({ ok: true });
+      }
+
+      if (!rule_id || !min_price) return res.status(400).json({ erro: 'rule_id e min_price são obrigatórios' });
+      const payload = { rule_id, min_price: Number(min_price) };
+      if (max_price) payload.max_price = Number(max_price);
+
+      const result = action === 'update'
+        ? await axios.put(url, payload, { headers, timeout: 15000 })
+        : await axios.post(url, payload, { headers, timeout: 15000 });
+
+      res.json(result.data);
+    } catch (err) {
+      console.error('[gerenciarAutomacaoPreco]', err.message);
+      res.status(err.response?.status || 500).json({ erro: 'Erro ao gerenciar automação', detalhes: err.response?.data });
+    }
+  },
+
 };

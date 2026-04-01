@@ -3255,7 +3255,7 @@ const handleFetchBySku = async () => {
                   }}
                 />
               </th>
-              <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Img</th>
+              <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase w-16">Img</th>
               <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Conta / ID</th>
               <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase">Título / SKU</th>
               <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase">Status</th>
@@ -3302,8 +3302,8 @@ const handleFetchBySku = async () => {
                     />
                   </td>
                   {/* Thumb: imagem do primeiro ad */}
-                  <td className="px-3 py-3">
-                    <img src={group.ads[0]?.thumbnail} alt="" className="w-10 h-10 object-cover rounded shadow-sm border border-gray-200" />
+                  <td className="px-2 py-3 w-16 text-center">
+                    <img src={group.ads[0]?.thumbnail} alt="" className="w-12 h-12 object-contain rounded shadow-sm border border-gray-200 mx-auto bg-white" />
                   </td>
                   {/* SKU */}
                   <td className="px-3 py-3 text-sm" colSpan="2">
@@ -3432,8 +3432,8 @@ const handleFetchBySku = async () => {
                         }}
                       />
                     </td>
-                    <td className="px-3 py-2">
-                      <img src={ad.thumbnail} alt="thumb" className="w-10 h-10 object-cover rounded shadow-sm border border-gray-200" />
+                    <td className="px-2 py-2 w-16 text-center">
+                      <img src={ad.thumbnail} alt="thumb" className="w-12 h-12 object-contain rounded shadow-sm border border-gray-200 mx-auto bg-white" />
                     </td>
                     <td className="px-3 py-2 text-sm">
                       <div className="font-bold text-gray-800">{ad.conta?.nickname}</div>

@@ -27,6 +27,7 @@ import TelaAssinatura from './components/TelaAssinatura.jsx';
 import CorretorPrecoPlanilha from './components/CorretorPrecoPlanilha.jsx';
 import PlanejadorProductAds from './components/PlanejadorProductAds.jsx';
 import PainelRascunhos from './components/PainelRascunhos.jsx';
+import TabelaMedidas from './components/TabelaMedidas.jsx';
 
 function App() {
   const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura } = useAuth();
@@ -147,6 +148,7 @@ function App() {
       {canAccess('cadastramentoMassa') && activePage === 'cadastramentoMassa' && <CadastramentoMassa usuarioId={uid} />}
       {canAccess('fila') && activePage === 'fila' && <GerenciadorFila usuarioId={uid} />}
       {canAccess('compatibilidade') && activePage === 'compatibilidade' && <CompatibilidadeAutopecas usuarioId={uid} />}
+      {canAccess('tabelaMedidas') && activePage === 'tabelaMedidas' && <TabelaMedidas usuarioId={uid} />}
       {canAccess('centralPromocoes') && activePage === 'centralPromocoes' && <CentralPromocoes usuarioId={uid} />}
       {canAccess('monitorConcorrentes') && activePage === 'monitorConcorrentes' && <MonitorConcorrentes usuarioId={uid} />}
       {canAccess('perguntasPreVenda') && activePage === 'perguntasPreVenda' && <PerguntasPreVenda usuarioId={uid} />}

@@ -205,7 +205,6 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -241,13 +240,13 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
     try {
       const res = await fetch('/api/register', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, inviteCode }),
+        body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
       setMessage('Conta criada! Faça login.');
       switchMode('login');
-      setPassword(''); setConfirmPassword(''); setInviteCode('');
+      setPassword(''); setConfirmPassword('');
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -451,8 +450,6 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
                   placeholder="Mínimo 6 caracteres" icon="🔑" />
                 <InputField label="Confirmar senha" type="password" value={confirmPassword} onChange={setConfirmPassword}
                   placeholder="Repita a senha" icon="🔑" />
-                <InputField label="Código de convite" type="text" value={inviteCode} onChange={setInviteCode}
-                  placeholder="Código exclusivo" icon="🎟" />
                 <PrimaryButton loading={loading}>Criar minha conta</PrimaryButton>
                 <div style={{ textAlign: 'center', marginTop: 18 }}>
                   <LinkButton onClick={() => switchMode('login')}>Já tenho conta → Entrar</LinkButton>

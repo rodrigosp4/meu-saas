@@ -159,13 +159,25 @@ export const mlService = {
       });
       
       if (description) {
-        try { 
-          await axios.post(`https://api.mercadolibre.com/items/${res.data.id}/description`, 
-            { plain_text: description }, 
+        const sanitizeDescricao = (text) => {
+          if (!text) return '';
+          return text
+            .replace(/<[^>]*>/g, '')
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+            .replace(/[\uD800-\uDFFF]/g, '')
+            .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+            .replace(/[\u{20000}-\u{10FFFF}]/gu, '')
+            .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u0250-\u036F\u1E00-\u1EFF]/g, ' ')
+            .replace(/ {2,}/g, ' ')
+            .trim();
+        };
+        try {
+          await axios.post(`https://api.mercadolibre.com/items/${res.data.id}/description`,
+            { plain_text: sanitizeDescricao(description) },
             { headers: { Authorization: `Bearer ${accessToken}` } }
-          ); 
-        } catch (e) { 
-          console.error("Aviso: Falha ao inserir a descrição", e.message); 
+          );
+        } catch (e) {
+          console.error("Aviso: Falha ao inserir a descrição", e.message);
         }
       }
       return res.data;

@@ -100,6 +100,7 @@ export default function OtimizadorImagens({ usuarioId }) {
   const [urlsNovas, setUrlsNovas] = useState(['']);
   const [urlTestandoIdx, setUrlTestandoIdx] = useState(null);
   const [urlsValidas, setUrlsValidas] = useState({});
+  const [imagensRemovidas, setImagensRemovidas] = useState(new Set());
   const [modoReplace, setModoReplace] = useState('FIRST'); // FIRST | ALL
   const [aplicarTodosSku, setAplicarTodosSku] = useState(true);
   const [enviando, setEnviando] = useState(false);
@@ -230,6 +231,7 @@ export default function OtimizadorImagens({ usuarioId }) {
     setGrupoSelecionado(null);
     setUrlsNovas(['']);
     setUrlsValidas({});
+    setImagensRemovidas(new Set());
   };
 
   const selecionarGrupo = (group) => {
@@ -237,6 +239,7 @@ export default function OtimizadorImagens({ usuarioId }) {
     setGrupoSelecionado(group.ads);
     setUrlsNovas(['']);
     setUrlsValidas({});
+    setImagensRemovidas(new Set());
   };
 
   const handleUrlChange = (idx, val) => {
@@ -331,7 +334,7 @@ export default function OtimizadorImagens({ usuarioId }) {
   }, [selecionado, uploadParaImgur]);
 
   const aplicarImagens = async (autoNext = false) => {
-    if (!selecionado || urlsParaEnviar.length === 0) return;
+    if (!selecionado || (urlsParaEnviar.length === 0 && imagensRemovidas.size === 0)) return;
 
     let itemsParaAtualizar = [];
 
@@ -351,14 +354,27 @@ export default function OtimizadorImagens({ usuarioId }) {
       return;
     }
 
-    const pictures = urlsParaEnviar.slice(0, 12).map(u => ({ source: u }));
+    let pictures;
+    let modoReplaceEfetivo = modoReplace;
+    if (imagensRemovidas.size > 0) {
+      const picsAtuais = selecionado.dadosML?.pictures?.length
+        ? selecionado.dadosML.pictures
+        : selecionado.thumbnail ? [{ source: selecionado.thumbnail }] : [];
+      const picsRestantes = picsAtuais
+        .filter((_, i) => !imagensRemovidas.has(i))
+        .map(p => p.id ? { id: p.id } : { source: p.secure_url || p.url || p.source });
+      pictures = [...picsRestantes, ...urlsParaEnviar.map(u => ({ source: u }))].slice(0, 12);
+      modoReplaceEfetivo = 'ALL';
+    } else {
+      pictures = urlsParaEnviar.slice(0, 12).map(u => ({ source: u }));
+    }
     setEnviando(true);
 
     try {
       const res = await fetch('/api/ml/acoes-massa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, items: itemsParaAtualizar, acao: 'atualizar_imagens', valor: pictures, modoReplace }),
+        body: JSON.stringify({ userId: usuarioId, items: itemsParaAtualizar, acao: 'atualizar_imagens', valor: pictures, modoReplace: modoReplaceEfetivo }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
@@ -382,6 +398,7 @@ export default function OtimizadorImagens({ usuarioId }) {
         }
         setUrlsNovas(['']);
         setUrlsValidas({});
+        setImagensRemovidas(new Set());
       }
     } catch (e) {
       alert(`Erro: ${e.message}`);
@@ -648,23 +665,46 @@ export default function OtimizadorImagens({ usuarioId }) {
                 if (picsAtuais.length === 0) return null;
                 return (
                   <div>
-                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">
-                      Imagens Atuais ({picsAtuais.length})
-                    </p>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                        Imagens Atuais ({picsAtuais.length - imagensRemovidas.size}/{picsAtuais.length})
+                      </p>
+                      {imagensRemovidas.size > 0 && (
+                        <span className="text-[10px] text-red-500 font-bold">{imagensRemovidas.size} marcada(s) p/ exclusão</span>
+                      )}
+                    </div>
                     <div className="flex gap-2 overflow-x-auto pb-1">
-                      {picsAtuais.map((pic, i) => (
-                        <div key={i} className="relative flex-shrink-0 rounded overflow-hidden border border-gray-200" style={{ width: 90, height: 90 }}>
-                          <img
-                            src={pic.secure_url || pic.url || pic.source}
-                            alt={`img-${i + 1}`}
-                            className="w-full h-full object-cover"
-                            onError={e => { e.target.style.display = 'none'; }}
-                          />
-                          <span className="absolute top-1 left-1 bg-black/60 text-white text-[9px] font-bold px-1 rounded">
-                            {i + 1}
-                          </span>
-                        </div>
-                      ))}
+                      {picsAtuais.map((pic, i) => {
+                        const removida = imagensRemovidas.has(i);
+                        return (
+                          <div
+                            key={i}
+                            className={`relative flex-shrink-0 rounded overflow-hidden border-2 transition-all ${removida ? 'border-red-500 opacity-40' : 'border-gray-200'}`}
+                            style={{ width: 90, height: 90 }}
+                          >
+                            <img
+                              src={pic.secure_url || pic.url || pic.source}
+                              alt={`img-${i + 1}`}
+                              className="w-full h-full object-cover"
+                              onError={e => { e.target.style.display = 'none'; }}
+                            />
+                            <span className="absolute top-1 left-1 bg-black/60 text-white text-[9px] font-bold px-1 rounded">
+                              {i + 1}
+                            </span>
+                            <button
+                              onClick={() => setImagensRemovidas(prev => {
+                                const n = new Set(prev);
+                                if (n.has(i)) n.delete(i); else n.add(i);
+                                return n;
+                              })}
+                              className={`absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold transition-colors ${removida ? 'bg-gray-400 text-white hover:bg-gray-500' : 'bg-red-500 text-white hover:bg-red-600'}`}
+                              title={removida ? 'Cancelar exclusão' : 'Marcar para excluir'}
+                            >
+                              {removida ? '↩' : '✕'}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -800,14 +840,14 @@ export default function OtimizadorImagens({ usuarioId }) {
                 <div className="flex-1" />
                 <button
                   onClick={() => aplicarImagens(false)}
-                  disabled={enviando || urlsParaEnviar.length === 0}
+                  disabled={enviando || (urlsParaEnviar.length === 0 && imagensRemovidas.size === 0)}
                   className="px-4 py-2 text-xs font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition"
                 >
                   {enviando ? 'Enviando...' : 'Apenas Aplicar'}
                 </button>
                 <button
                   onClick={() => aplicarImagens(true)}
-                  disabled={enviando || urlsParaEnviar.length === 0}
+                  disabled={enviando || (urlsParaEnviar.length === 0 && imagensRemovidas.size === 0)}
                   className="px-4 py-2 text-xs font-black text-white rounded-lg disabled:opacity-40 transition flex items-center gap-1"
                   style={{ background: '#27ae60' }}
                 >

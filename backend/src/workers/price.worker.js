@@ -486,7 +486,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
         logDesteItem += ` | R$${precoNum.toFixed(2)}`;
         
         const dbData = { preco: precoNum };
-        if ((inflar || 0) > 0) dbData.margemPromocional = true;
+        if ((inflar || 0) > 0) { dbData.margemPromocional = true; dbData.inflarPct = inflar; }
         prisma.anuncioML.update({ where: { id: item.id }, data: dbData }).catch(() => {});
       }
 

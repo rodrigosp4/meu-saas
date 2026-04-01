@@ -431,7 +431,220 @@ function ModalTrocarSenha({ usuario, onClose }) {
   );
 }
 
+// ── Seção de Assinaturas ──────────────────────────────────────────────────────
+function SecaoAssinaturas() {
+  const [config, setConfig] = useState({ precoMensal: 299, mpAccessToken: '', mpPublicKey: '' });
+  const [assinaturas, setAssinaturas] = useState([]);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+  const [loadingAss, setLoadingAss] = useState(true);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [savedConfig, setSavedConfig] = useState(false);
+  const [erroConfig, setErroConfig] = useState('');
+
+  useEffect(() => {
+    fetch('/api/admin/config-assinatura')
+      .then(r => r.json())
+      .then(d => setConfig({ precoMensal: d.precoMensal, mpAccessToken: d.mpAccessToken || '', mpPublicKey: d.mpPublicKey || '' }))
+      .finally(() => setLoadingConfig(false));
+
+    fetch('/api/admin/assinaturas')
+      .then(r => r.json())
+      .then(d => Array.isArray(d) ? setAssinaturas(d) : setAssinaturas([]))
+      .finally(() => setLoadingAss(false));
+  }, []);
+
+  const salvarConfig = async () => {
+    setErroConfig('');
+    setSavingConfig(true);
+    const res = await fetch('/api/admin/config-assinatura', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    setSavingConfig(false);
+    if (res.ok) { setSavedConfig(true); setTimeout(() => setSavedConfig(false), 2500); }
+    else { const d = await res.json(); setErroConfig(d.erro || 'Erro ao salvar.'); }
+  };
+
+  const formatarData = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+  const formatarMoeda = (v) => v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}` : '—';
+
+  const STATUS_COLOR = { approved: '#27ae60', pending: '#e67e22', cancelled: '#e74c3c', expired: '#95a5a6' };
+  const STATUS_LABEL = { approved: 'Ativo', pending: 'Pendente', cancelled: 'Cancelado', expired: 'Expirado' };
+
+  const fieldStyle = { width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: '0.83em', color: '#495057', display: 'block', marginBottom: '4px', fontWeight: 600 };
+
+  const PLANO_LABEL = { '30d': '30 dias', '60d': '60 dias', '90d': '90 dias', '180d': '6 meses' };
+
+  // Calcula preços dos planos com base no precoMensal
+  const planos = [
+    { key: '30d',  meses: 1, desconto: 0 },
+    { key: '60d',  meses: 2, desconto: 0.05 },
+    { key: '90d',  meses: 3, desconto: 0.10 },
+    { key: '180d', meses: 6, desconto: 0.15 },
+  ].map(p => ({ ...p, valor: parseFloat((config.precoMensal * p.meses * (1 - p.desconto)).toFixed(2)) }));
+
+  return (
+    <div>
+      {/* Configuração */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', marginBottom: '24px', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0f0', backgroundColor: '#f8f9fa' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.95em', color: '#2c3e50' }}>Configuração de Assinatura</div>
+          <div style={{ fontSize: '0.8em', color: '#7f8c8d', marginTop: '2px' }}>Configure os valores e as chaves do MercadoPago.</div>
+        </div>
+        {loadingConfig ? (
+          <div style={{ padding: '30px', textAlign: 'center', color: '#999' }}>Carregando...</div>
+        ) : (
+          <div style={{ padding: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div>
+                <label style={labelStyle}>Preço Mensal (R$)</label>
+                <input type="number" value={config.precoMensal} min="1" step="0.01"
+                  onChange={e => setConfig(c => ({ ...c, precoMensal: parseFloat(e.target.value) || 0 }))}
+                  style={fieldStyle}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                <div style={{ padding: '8px 12px', background: '#f0f9f4', borderRadius: '6px', fontSize: '0.82em', color: '#2c3e50' }}>
+                  {planos.map(p => (
+                    <div key={p.key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                      <span style={{ color: '#7f8c8d' }}>{PLANO_LABEL[p.key]}</span>
+                      <strong>{formatarMoeda(p.valor)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>MercadoPago Access Token</label>
+              <input type="text" value={config.mpAccessToken}
+                onChange={e => setConfig(c => ({ ...c, mpAccessToken: e.target.value }))}
+                placeholder="APP_USR-..."
+                style={fieldStyle}
+              />
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={labelStyle}>MercadoPago Public Key</label>
+              <input type="text" value={config.mpPublicKey}
+                onChange={e => setConfig(c => ({ ...c, mpPublicKey: e.target.value }))}
+                placeholder="APP_USR-..."
+                style={fieldStyle}
+              />
+            </div>
+            {erroConfig && <div style={{ color: '#e74c3c', fontSize: '0.84em', marginBottom: '10px' }}>{erroConfig}</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' }}>
+              {savedConfig && <span style={{ fontSize: '0.84em', color: '#27ae60', fontWeight: 600 }}>✓ Configuração salva</span>}
+              <button onClick={salvarConfig} disabled={savingConfig}
+                style={{ padding: '8px 20px', border: 'none', borderRadius: '6px', cursor: 'pointer', background: '#27ae60', color: '#fff', fontWeight: 600, fontSize: '0.9em', opacity: savingConfig ? 0.7 : 1 }}>
+                {savingConfig ? 'Salvando...' : 'Salvar configuração'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Lista de assinaturas */}
+      <div style={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0f0', backgroundColor: '#f8f9fa' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.95em', color: '#2c3e50' }}>Histórico de Assinaturas</div>
+        </div>
+        {loadingAss ? (
+          <div style={{ padding: '30px', textAlign: 'center', color: '#999' }}>Carregando...</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #e9ecef' }}>
+                <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: '#495057' }}>Usuário</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Plano</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Valor</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Status</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Início</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Vence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assinaturas.map((a, i) => (
+                <tr key={a.id} style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                  <td style={{ padding: '9px 14px', color: '#2c3e50' }}>{a.user?.email || a.userId}</td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center' }}>{PLANO_LABEL[a.plano] || a.plano}</td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', fontWeight: 600 }}>{formatarMoeda(a.valor)}</td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center' }}>
+                    <span style={{ background: (STATUS_COLOR[a.status] || '#95a5a6') + '22', color: STATUS_COLOR[a.status] || '#95a5a6', padding: '2px 10px', borderRadius: '10px', fontSize: '0.82em', fontWeight: 600 }}>
+                      {STATUS_LABEL[a.status] || a.status}
+                    </span>
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', color: '#7f8c8d' }}>{formatarData(a.iniciaEm)}</td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', color: a.expiraEm && new Date(a.expiraEm) < new Date() ? '#e74c3c' : '#7f8c8d', fontWeight: a.status === 'approved' ? 600 : 400 }}>{formatarData(a.expiraEm)}</td>
+                </tr>
+              ))}
+              {assinaturas.length === 0 && (
+                <tr><td colSpan={6} style={{ padding: '32px', textAlign: 'center', color: '#bbb' }}>Nenhuma assinatura encontrada.</td></tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
+function ModalCriarUsuario({ onClose, onCriado }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [acessoLivre, setAcessoLivre] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [erro, setErro] = useState('');
+
+  const salvar = async () => {
+    setErro('');
+    if (!email) return setErro('E-mail obrigatório.');
+    if (password.length < 6) return setErro('Senha deve ter pelo menos 6 caracteres.');
+    setSaving(true);
+    const res = await fetch('/api/admin/criar-usuario', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, acessoLivre }),
+    });
+    setSaving(false);
+    if (res.ok) { const d = await res.json(); onCriado(d); onClose(); }
+    else { const d = await res.json(); setErro(d.erro || 'Erro ao criar usuário.'); }
+  };
+
+  const fieldStyle = { width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: '0.83em', color: '#495057', display: 'block', marginBottom: '4px', fontWeight: 600 };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '28px', width: '400px', maxWidth: '96vw', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+        <div style={{ fontWeight: 700, fontSize: '1.05em', marginBottom: '20px' }}>Criar novo usuário</div>
+        <div style={{ marginBottom: '12px' }}>
+          <label style={labelStyle}>E-mail</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="usuario@email.com" style={fieldStyle} />
+        </div>
+        <div style={{ marginBottom: '12px' }}>
+          <label style={labelStyle}>Senha</label>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Mínimo 6 caracteres" style={fieldStyle} />
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '20px', fontSize: '0.9em' }}>
+          <Toggle checked={acessoLivre} onChange={setAcessoLivre} />
+          <span style={{ color: '#495057' }}>Acesso livre (isento de pagamento)</span>
+        </label>
+        {erro && <div style={{ color: '#e74c3c', fontSize: '0.84em', marginBottom: '12px' }}>{erro}</div>}
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 18px', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', background: '#f8f8f8', fontSize: '0.9em' }}>
+            Cancelar
+          </button>
+          <button onClick={salvar} disabled={saving} style={{ padding: '8px 20px', border: 'none', borderRadius: '6px', cursor: 'pointer', background: '#27ae60', color: '#fff', fontWeight: 600, fontSize: '0.9em', opacity: saving ? 0.7 : 1 }}>
+            {saving ? 'Criando...' : 'Criar usuário'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPanel({ setActivePage }) {
   const { setImpersonating } = useAuth();
   const [abaMain, setAbaMain] = useState('clientes');
@@ -441,6 +654,7 @@ export default function AdminPanel({ setActivePage }) {
   const [busca, setBusca] = useState('');
   const [modalFlags, setModalFlags] = useState(null);
   const [modalSenha, setModalSenha] = useState(null);
+  const [modalCriar, setModalCriar] = useState(false);
   const [erro, setErro] = useState('');
 
   const carregar = useCallback(async () => {
@@ -483,6 +697,18 @@ export default function AdminPanel({ setActivePage }) {
       const updated = await res.json();
       setUsuarios(prev => prev.map(u => u.id === updated.id ? { ...u, featureFlags: updated.featureFlags, resourceFlags: updated.resourceFlags } : u));
       setModalFlags(null);
+    }
+  };
+
+  const toggleAcessoLivre = async (usuario) => {
+    const res = await fetch(`/api/admin/usuarios/${usuario.id}/acesso-livre`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ acessoLivre: !usuario.acessoLivre }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setUsuarios(prev => prev.map(u => u.id === updated.id ? { ...u, acessoLivre: updated.acessoLivre } : u));
     }
   };
 
@@ -552,6 +778,7 @@ export default function AdminPanel({ setActivePage }) {
       {/* Tabs principais */}
       <div style={{ display: 'flex', borderBottom: '2px solid #e9ecef', marginBottom: '20px', gap: '4px' }}>
         <button style={abaMainStyle('clientes')} onClick={() => setAbaMain('clientes')}>Clientes</button>
+        <button style={abaMainStyle('assinaturas')} onClick={() => setAbaMain('assinaturas')}>Assinaturas</button>
         <button style={abaMainStyle('padroes')} onClick={() => setAbaMain('padroes')}>Padrões por Tipo</button>
       </div>
 
@@ -567,6 +794,9 @@ export default function AdminPanel({ setActivePage }) {
                 placeholder="Buscar por e-mail..."
                 style={{ padding: '6px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', outline: 'none', width: '220px' }}
               />
+              <button onClick={() => setModalCriar(true)} style={{ padding: '6px 14px', background: '#27ae60', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.88em', fontWeight: 600 }}>
+                + Criar usuário
+              </button>
               <button onClick={carregar} style={{ padding: '6px 14px', background: '#f4f6f8', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', fontSize: '0.88em' }}>
                 Atualizar
               </button>
@@ -586,6 +816,7 @@ export default function AdminPanel({ setActivePage }) {
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Status</th>
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>ML</th>
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Sub-us.</th>
+                  <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Acesso Livre</th>
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Módulos</th>
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Recursos</th>
                   <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Ações</th>
@@ -611,6 +842,9 @@ export default function AdminPanel({ setActivePage }) {
                       </td>
                       <td style={{ padding: '10px 16px', textAlign: 'center', color: '#7f8c8d' }}>{u._count.contasMl}</td>
                       <td style={{ padding: '10px 16px', textAlign: 'center', color: '#7f8c8d' }}>{u._count.subUsuarios}</td>
+                      <td style={{ padding: '10px 16px', textAlign: 'center' }}>
+                        <Toggle checked={!!u.acessoLivre} onChange={() => toggleAcessoLivre(u)} />
+                      </td>
                       <td style={{ padding: '10px 16px', textAlign: 'center' }}>
                         <span style={{ color: ativosCount < MODULOS.length ? '#e67e22' : '#27ae60', fontSize: '0.85em', fontWeight: 600 }}>
                           {ativosCount}/{MODULOS.length}
@@ -640,13 +874,16 @@ export default function AdminPanel({ setActivePage }) {
                   );
                 })}
                 {usuariosFiltrados.length === 0 && (
-                  <tr><td colSpan={8} style={{ padding: '32px', textAlign: 'center', color: '#bbb' }}>Nenhum cliente encontrado.</td></tr>
+                  <tr><td colSpan={9} style={{ padding: '32px', textAlign: 'center', color: '#bbb' }}>Nenhum cliente encontrado.</td></tr>
                 )}
               </tbody>
             </table>
           )}
         </div>
       )}
+
+      {/* ── ABA: ASSINATURAS ── */}
+      {abaMain === 'assinaturas' && <SecaoAssinaturas />}
 
       {/* ── ABA: PADRÕES POR TIPO ── */}
       {abaMain === 'padroes' && (
@@ -672,6 +909,14 @@ export default function AdminPanel({ setActivePage }) {
         <ModalTrocarSenha
           usuario={modalSenha}
           onClose={() => setModalSenha(null)}
+        />
+      )}
+
+      {/* Modal criar usuário */}
+      {modalCriar && (
+        <ModalCriarUsuario
+          onClose={() => setModalCriar(false)}
+          onCriado={(novoUser) => setUsuarios(prev => [novoUser, ...prev])}
         />
       )}
     </div>

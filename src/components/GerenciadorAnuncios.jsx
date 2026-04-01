@@ -636,6 +636,7 @@ function ModalExcluir({ anunciosSelecionados, usuarioId, onClose, onSuccess }) {
 
 // ===== MODAL COMPATIBILIDADE — Aplicar Perfil nos Anúncios Selecionados =====
 export function ModalCompatibilidade({ anunciosSelecionados, onClose, usuarioId, onSuccess }) {
+  const { contas: contasMLCtx } = useContasML();
   const [contasML, setContasML] = useState([]);
   const [contaSelecionada, setContaSelecionada] = useState('');
   const [perfis, setPerfis] = useState([]);
@@ -1690,6 +1691,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [descontoMax, setDescontoMax] = useState('');
   const [semSkuFilter, setSemSkuFilter] = useState(false);
   const [freteGratisFilter, setFreteGratisFilter] = useState('Todos');
+  const [produtoFullFilter, setProdutoFullFilter] = useState('Todos');
   const [palavrasExcluir, setPalavrasExcluir] = useState([]);
   const [palavrasExcluirInput, setPalavrasExcluirInput] = useState('');
 
@@ -1720,6 +1722,16 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const dropdownCompatRef = useRef(null);
   const [dropdownCampanhas, setDropdownCampanhas] = useState(false);
   const dropdownCampanhasRef = useRef(null);
+  const [dropdownPreco, setDropdownPreco] = useState(false);
+  const dropdownPrecoRef = useRef(null);
+  const [dropdownStatus, setDropdownStatus] = useState(false);
+  const dropdownStatusRef = useRef(null);
+  const [dropdownFlexTurbo, setDropdownFlexTurbo] = useState(false);
+  const dropdownFlexTurboRef = useRef(null);
+  const [dropdownAlterarProduto, setDropdownAlterarProduto] = useState(false);
+  const dropdownAlterarProdutoRef = useRef(null);
+  const [dropdownEstoque, setDropdownEstoque] = useState(false);
+  const dropdownEstoqueRef = useRef(null);
   const [priceCheckResults, setPriceCheckResults] = useState({});
   const [priceCheckFilter, setPriceCheckFilter] = useState('Todos');
   const [priceDetailPopup, setPriceDetailPopup] = useState(null); // { ad, resultado }
@@ -1741,6 +1753,7 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     priceCheckFilter !== 'Todos',
     semSkuFilter,
     freteGratisFilter !== 'Todos',
+    produtoFullFilter !== 'Todos',
     palavrasExcluir.length > 0,
   ].filter(Boolean).length;
   
@@ -1776,6 +1789,41 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownCampanhas]);
 
+  useEffect(() => {
+    if (!dropdownPreco) return;
+    const handler = (e) => { if (dropdownPrecoRef.current && !dropdownPrecoRef.current.contains(e.target)) setDropdownPreco(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownPreco]);
+
+  useEffect(() => {
+    if (!dropdownStatus) return;
+    const handler = (e) => { if (dropdownStatusRef.current && !dropdownStatusRef.current.contains(e.target)) setDropdownStatus(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownStatus]);
+
+  useEffect(() => {
+    if (!dropdownFlexTurbo) return;
+    const handler = (e) => { if (dropdownFlexTurboRef.current && !dropdownFlexTurboRef.current.contains(e.target)) setDropdownFlexTurbo(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownFlexTurbo]);
+
+  useEffect(() => {
+    if (!dropdownAlterarProduto) return;
+    const handler = (e) => { if (dropdownAlterarProdutoRef.current && !dropdownAlterarProdutoRef.current.contains(e.target)) setDropdownAlterarProduto(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownAlterarProduto]);
+
+  useEffect(() => {
+    if (!dropdownEstoque) return;
+    const handler = (e) => { if (dropdownEstoqueRef.current && !dropdownEstoqueRef.current.contains(e.target)) setDropdownEstoque(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownEstoque]);
+
   const fetchAvailableTags = async () => {
     try {
       const idsPermitidos = contasML.map(c => c.id).join(',');
@@ -1809,7 +1857,7 @@ const fetchAnuncios = async () => {
         status: statusFilter, tag: tagFilter, promo: promoFilter, precoMin: precoMin,
         precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
         descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
-        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, userId: usuarioId,
+        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, produtoFull: produtoFullFilter, userId: usuarioId,
       });
 
       const res = await fetch(`/api/ml/anuncios?${params.toString()}`);
@@ -1833,7 +1881,7 @@ const fetchAnuncios = async () => {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter, freteGratisFilter]);
+  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter, freteGratisFilter, produtoFullFilter]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
@@ -1851,6 +1899,7 @@ const fetchAnuncios = async () => {
     setPriceCheckFilter('Todos');
     setSemSkuFilter(false);
     setFreteGratisFilter('Todos');
+    setProdutoFullFilter('Todos');
     setPalavrasExcluir([]);
     setPalavrasExcluirInput('');
     setCurrentPage(1);
@@ -1865,7 +1914,7 @@ const handleSelectAllFiltered = async () => {
         contasIds: queryConta, search: searchTerm, searchType: searchType, status: statusFilter,
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
         descontoMin, descontoMax, semSku: semSkuFilter,
-        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, userId: usuarioId,
+        priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, produtoFull: produtoFullFilter, userId: usuarioId,
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
@@ -2166,37 +2215,23 @@ const getSelectedItemsData = () => {
     const maxPct = parseFloat(input);
     if (isNaN(maxPct) || maxPct <= 0) return alert('Percentual inválido.');
 
-    if (!window.confirm(`Ativar todos os anúncios candidatos com desconto do vendedor até ${maxPct}%?\n\nIsso usará as promoções salvas localmente (execute a sincronização de promoções antes, se necessário).`)) return;
+    const itemIds = Array.from(selectedIds).filter(id => typeof id === 'string' && id.startsWith('MLB'));
+    if (itemIds.length === 0) return alert('Nenhum anúncio válido selecionado.');
+
+    if (!window.confirm(`Ativar candidatos com desconto até ${maxPct}% nos ${itemIds.length} anúncio(s) selecionados?\n\nAs promoções serão buscadas em tempo real da API do Mercado Livre.`)) return;
 
     setIsSyncingSelected(true);
     try {
-      const contaId = contaFilter !== 'Todas' ? contaFilter : undefined;
-      const res = await fetch('/api/orquestrador/executar', {
+      const res = await fetch('/api/promocoes/ativar-candidatos-realtime', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: usuarioId,
-          ...(contaId ? { contaId } : {}),
-          regras: [
-            {
-              nome: 'Ativar Desconto Manual',
-              tiposPermitidos: ['MARKETPLACE_CAMPAIGN', 'SELLER_CAMPAIGN', 'DEAL'],
-              maxSellerPct: maxPct,
-              tolerancia: 0,
-              ativo: true,
-            },
-          ],
-        }),
+        body: JSON.stringify({ userId: usuarioId, itemIds, maxPct }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
-      if (data.joined === 0) {
-        alert(`ℹ️ Nenhum candidato encontrado para ativar.\n\nIgnorados: ${data.skipped}`);
-      } else {
-        alert(`✅ ${data.joined} itens enviados para a fila de ativação!\n\nIgnorados: ${data.skipped}\n\nAcompanhe o progresso no Gerenciador de Fila.${data.tarefaId ? `\n\nTarefa ID: ${data.tarefaId}` : ''}`);
-      }
+      alert(`✅ Busca em tempo real iniciada!\n\nOs candidatos dentro de ${maxPct}% serão ativados em segundo plano.\n\nAcompanhe o progresso no Gerenciador de Fila.${data.tarefaId ? `\n\nTarefa ID: ${data.tarefaId}` : ''}`);
     } catch (e) {
-      alert('Erro ao ativar desconto: ' + e.message);
+      alert('Erro ao ativar campanhas: ' + e.message);
     } finally {
       setIsSyncingSelected(false);
     }
@@ -2765,6 +2800,34 @@ const handleFetchBySku = async () => {
                   </select>
                 </div>
 
+                {/* Filtro Frete Grátis */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Frete Grátis</label>
+                  <select
+                    value={freteGratisFilter}
+                    onChange={(e) => { setFreteGratisFilter(e.target.value); setCurrentPage(1); }}
+                    className="mt-1 w-full text-xs py-1.5 px-2 border border-gray-300 rounded font-semibold text-gray-700 bg-white"
+                  >
+                    <option value="Todos">Todos</option>
+                    <option value="sim">🚚 Com Frete Grátis</option>
+                    <option value="nao">Sem Frete Grátis</option>
+                  </select>
+                </div>
+
+                {/* Filtro Produto FULL */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Produto FULL</label>
+                  <select
+                    value={produtoFullFilter}
+                    onChange={(e) => { setProdutoFullFilter(e.target.value); setCurrentPage(1); }}
+                    className="mt-1 w-full text-xs py-1.5 px-2 border border-gray-300 rounded font-semibold text-gray-700 bg-white"
+                  >
+                    <option value="Todos">Todos</option>
+                    <option value="sim">⚡ É de FULL</option>
+                    <option value="nao">Não é FULL</option>
+                  </select>
+                </div>
+
                 {/* Filtro de Preço Checado */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold text-teal-600 uppercase tracking-wide">Preço Checado</label>
@@ -2943,32 +3006,34 @@ const handleFetchBySku = async () => {
                 </button>
                 )}
 
-                {/* Corrigir Preço — funcional */}
+                {/* Preço dropdown */}
                 {canUseResource('gerenciadorML.editarPreco') && (
-                <button
-                  onClick={() => {
-                    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
-                    setModalCorrigirPreco(true);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100"
-                >
-                  💲 Corrigir Preço
-                </button>
+                <div className="relative" ref={dropdownPrecoRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownPreco(v => !v); }}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 flex items-center gap-1.5"
+                  >
+                    💲 Preço
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownPreco ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownPreco && (
+                    <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[220px] py-1" onMouseLeave={() => setDropdownPreco(false)}>
+                      <button onClick={() => { setDropdownPreco(false); setModalCorrigirPreco(true); }} className="w-full text-left px-4 py-2.5 text-sm text-blue-700 hover:bg-blue-50 flex items-center gap-2">
+                        💲 <span><span className="font-semibold">Corrigir Preço</span><br/><span className="text-xs text-gray-400">Ajusta preço com base em regras</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownPreco(false); setModalVerificarPreco(true); }} className="w-full text-left px-4 py-2.5 text-sm text-teal-700 hover:bg-teal-50 flex items-center gap-2">
+                        🔍 <span><span className="font-semibold">Verificar Preço</span><br/><span className="text-xs text-gray-400">Verifica em segundo plano</span></span>
+                      </button>
+                      <div className="border-t border-gray-100 my-1" />
+                      <button onClick={() => { setDropdownPreco(false); handleEnviarAtacadoMassa(); }} disabled={isEnviandoAtacadoMassa} className="w-full text-left px-4 py-2.5 text-sm text-teal-700 hover:bg-teal-50 flex items-center gap-2 disabled:opacity-50">
+                        💰 <span><span className="font-semibold">Enviar Atacado</span><br/><span className="text-xs text-gray-400">Envia para lista de atacado</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 )}
 
-                {/* Verificar Preço — novo */}
-                {canUseResource('gerenciadorML.editarPreco') && (
-                <button
-                  onClick={() => {
-                    if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
-                    setModalVerificarPreco(true);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100"
-                >
-                  🔍 Verificar Preço
-                </button>
-                )}
-
+                {/* Campanhas dropdown */}
                 <div className="relative" ref={dropdownCampanhasRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCampanhas(v => !v); }}
@@ -3006,88 +3071,101 @@ const handleFetchBySku = async () => {
                   )}
                 </div>
 
-              {canUseResource('gerenciadorML.pausar') && (
-                <button
-                  onClick={() => handleAcaoMassa('ativar')}
-                  disabled={isSyncingSelected}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-green-700 bg-green-50 border-green-200 hover:bg-green-100 disabled:opacity-50"
-                >
-                  ▶ Ativar
-                </button>
-              )}
-
+                {/* Status dropdown */}
                 {canUseResource('gerenciadorML.pausar') && (
-                <button
-                  onClick={() => handleAcaoMassa('pausar')}
-                  disabled={isSyncingSelected}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-yellow-700 bg-yellow-50 border-yellow-200 hover:bg-yellow-100 disabled:opacity-50"
-                >
-                  ⏸ Pausar
-                </button>
+                <div className="relative" ref={dropdownStatusRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownStatus(v => !v); }}
+                    disabled={isSyncingSelected}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-green-700 bg-green-50 border-green-200 hover:bg-green-100 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    ▶ Status
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownStatus ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownStatus && (
+                    <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[200px] py-1" onMouseLeave={() => setDropdownStatus(false)}>
+                      <button onClick={() => { setDropdownStatus(false); handleAcaoMassa('ativar'); }} className="w-full text-left px-4 py-2.5 text-sm text-green-700 hover:bg-green-50 flex items-center gap-2">
+                        ▶ <span><span className="font-semibold">Ativar</span><br/><span className="text-xs text-gray-400">Ativa os anúncios selecionados</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownStatus(false); handleAcaoMassa('pausar'); }} className="w-full text-left px-4 py-2.5 text-sm text-yellow-700 hover:bg-yellow-50 flex items-center gap-2">
+                        ⏸ <span><span className="font-semibold">Pausar</span><br/><span className="text-xs text-gray-400">Pausa os anúncios selecionados</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 )}
 
-                <button
-                  onClick={() => handleAcaoMassa('estoque')}
-                  disabled={isSyncingSelected}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 disabled:opacity-50"
-                >
-                  📦 Alterar Estoque
-                </button>
+                {/* Flex / Turbo dropdown */}
+                <div className="relative" ref={dropdownFlexTurboRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownFlexTurbo(v => !v); }}
+                    disabled={isSyncingSelected}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    ⚡ Flex / Turbo
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownFlexTurbo ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownFlexTurbo && (
+                    <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[230px] py-1" onMouseLeave={() => setDropdownFlexTurbo(false)}>
+                      <button onClick={() => { setDropdownFlexTurbo(false); handleAcaoMassa('flex'); }} className="w-full text-left px-4 py-2.5 text-sm text-indigo-700 hover:bg-indigo-50 flex items-center gap-2">
+                        ⚡ <span><span className="font-semibold">Ativar Flex</span><br/><span className="text-xs text-gray-400">Endereço precisa estar habilitado</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownFlexTurbo(false); handleAcaoMassa('remover_flex'); }} className="w-full text-left px-4 py-2.5 text-sm text-red-700 hover:bg-red-50 flex items-center gap-2">
+                        ❌ <span><span className="font-semibold">Desativar Flex</span><br/><span className="text-xs text-gray-400">Remove o Flex dos selecionados</span></span>
+                      </button>
+                      <div className="border-t border-gray-100 my-1" />
+                      <button onClick={() => { setDropdownFlexTurbo(false); handleAcaoMassa('turbo'); }} className="w-full text-left px-4 py-2.5 text-sm text-rose-700 hover:bg-rose-50 flex items-center gap-2">
+                        🚀 <span><span className="font-semibold">Ativar Turbo</span><br/><span className="text-xs text-gray-400">Requer Flex habilitado</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-                <button
-                  onClick={() => handleAcaoMassa('flex')}
-                  disabled={isSyncingSelected}
-                  title="Seu endereço precisa estar habilitado para Envios Flex"
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50"
-                >
-                  ⚡ Ativar Flex
-                </button>
+                {/* Alterar Produto dropdown */}
+                <div className="relative" ref={dropdownAlterarProdutoRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownAlterarProduto(v => !v); }}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-sky-700 bg-sky-50 border-sky-200 hover:bg-sky-100 flex items-center gap-1.5"
+                  >
+                    ✏️ Alterar Produto
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownAlterarProduto ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownAlterarProduto && (
+                    <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[210px] py-1" onMouseLeave={() => setDropdownAlterarProduto(false)}>
+                      <button onClick={() => { setDropdownAlterarProduto(false); setModalEditarTitulo(true); }} className="w-full text-left px-4 py-2.5 text-sm text-sky-700 hover:bg-sky-50 flex items-center gap-2">
+                        ✏️ <span><span className="font-semibold">Editar Título</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownAlterarProduto(false); setModalEditarDescricao(true); }} className="w-full text-left px-4 py-2.5 text-sm text-emerald-700 hover:bg-emerald-50 flex items-center gap-2">
+                        📝 <span><span className="font-semibold">Editar Descrição</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownAlterarProduto(false); setModalAlterarSku(true); }} className="w-full text-left px-4 py-2.5 text-sm text-indigo-700 hover:bg-indigo-50 flex items-center gap-2">
+                        🏷️ <span><span className="font-semibold">Alterar SKU</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-                {/* 👇 NOVO BOTÃO ADICIONADO AQUI 👇 */}
-                <button
-                  onClick={() => handleAcaoMassa('remover_flex')}
-                  disabled={isSyncingSelected}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-red-700 bg-red-50 border-red-200 hover:bg-red-100 disabled:opacity-50"
-                >
-                  ❌ Desativar Flex
-                </button>
-
-                <button
-                  onClick={() => handleAcaoMassa('turbo')}
-                  disabled={isSyncingSelected}
-                  title="O Turbo é ativado automaticamente pelo ML caso sua reputação e embalagem permitam (Requer Flex Habilitado)."
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100 disabled:opacity-50"
-                >
-                  🚀 Ativar Turbo
-                </button>
-
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalPrazoFabricacao(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-violet-700 bg-violet-50 border-violet-200 hover:bg-violet-100"
-                >
-                  🕐 Prazo de Fabricação
-                </button>
-
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalEditarTitulo(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-sky-700 bg-sky-50 border-sky-200 hover:bg-sky-100"
-                >
-                  ✏️ Editar Título
-                </button>
-
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalEditarDescricao(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
-                >
-                  📝 Editar Descrição
-                </button>
-
-                <button
-                  onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setModalAlterarSku(true); }}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100"
-                >
-                  🏷️ Alterar SKU
-                </button>
+                {/* Estoque dropdown */}
+                <div className="relative" ref={dropdownEstoqueRef}>
+                  <button
+                    onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownEstoque(v => !v); }}
+                    disabled={isSyncingSelected}
+                    className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    📦 Estoque
+                    <svg className={`w-3.5 h-3.5 transition-transform ${dropdownEstoque ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                  {dropdownEstoque && (
+                    <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[220px] py-1" onMouseLeave={() => setDropdownEstoque(false)}>
+                      <button onClick={() => { setDropdownEstoque(false); handleAcaoMassa('estoque'); }} className="w-full text-left px-4 py-2.5 text-sm text-orange-700 hover:bg-orange-50 flex items-center gap-2">
+                        📦 <span><span className="font-semibold">Alterar Estoque</span><br/><span className="text-xs text-gray-400">Define a quantidade em estoque</span></span>
+                      </button>
+                      <button onClick={() => { setDropdownEstoque(false); setModalPrazoFabricacao(true); }} className="w-full text-left px-4 py-2.5 text-sm text-violet-700 hover:bg-violet-50 flex items-center gap-2">
+                        🕐 <span><span className="font-semibold">Prazo de Fabricação</span><br/><span className="text-xs text-gray-400">Define dias para fabricar</span></span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {canUseResource('gerenciadorML.excluir') && (
                 <button
@@ -3098,6 +3176,7 @@ const handleFetchBySku = async () => {
                 </button>
                 )}
 
+                {/* Compatibilidade dropdown */}
                 <div className="relative" ref={dropdownCompatRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCompat(v => !v); }}
@@ -3133,16 +3212,6 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
-
-                <button
-                  onClick={handleEnviarAtacadoMassa}
-                  disabled={isEnviandoAtacadoMassa}
-                  className="px-4 py-2 text-sm font-semibold border rounded-md transition-colors text-teal-700 bg-teal-50 border-teal-200 hover:bg-teal-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                >
-                  {isEnviandoAtacadoMassa ? (
-                    <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Enviando...</>
-                  ) : '💰 Enviar Atacado'}
-                </button>
               </div>
             </div>
           </div>
@@ -3372,7 +3441,15 @@ const handleFetchBySku = async () => {
                     </td>
                     <td className="px-3 py-2 text-sm max-w-xs">
                       <div className="font-semibold text-gray-900 truncate" title={ad.titulo}>{ad.titulo}</div>
-                      <div className="text-[11px] font-mono text-gray-500 mt-0.5">SKU: {ad.sku || 'S/ SKU'}</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <div className="text-[11px] font-mono text-gray-500">SKU: {ad.sku || 'S/ SKU'}</div>
+                        {ad.dadosML?.shipping?.logistic_type === 'fulfillment' && (
+                          <span className="italic text-[10px] uppercase font-black text-green-700 bg-green-100 px-1 py-0.5 rounded leading-none flex items-center gap-0.5">
+                            <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clipRule="evenodd" /></svg>
+                            FULL
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-center">
                       <span className={`px-2 py-0.5 inline-flex text-[11px] font-bold rounded-full border

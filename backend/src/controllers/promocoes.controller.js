@@ -844,12 +844,159 @@ export const promocoesController = {
     }
   },
 
+  // ─── POST /api/promocoes/ativar-candidatos-realtime ────────────────────────
+  // Busca promoções em tempo real da API do ML para os itens selecionados,
+  // sem depender do cache do orquestrador. Ativa candidatos dentro do maxPct.
+  async ativarCandidatosRealtime(req, res) {
+    try {
+      const { userId, itemIds, maxPct } = req.body;
+      if (!userId || !Array.isArray(itemIds) || itemIds.length === 0) {
+        return res.status(400).json({ erro: 'userId e itemIds são obrigatórios' });
+      }
+      const limiteMax = parseFloat(maxPct) || 100;
+
+      const contasML = await prisma.contaML.findMany({ where: { userId } });
+      const anuncios = await prisma.anuncioML.findMany({
+        where: { id: { in: itemIds }, contaId: { in: contasML.map(c => c.id) } },
+        select: { id: true, contaId: true },
+      });
+      if (anuncios.length === 0) return res.status(404).json({ erro: 'Nenhum anúncio encontrado' });
+
+      const tarefa = await prisma.tarefaFila.create({
+        data: { userId, tipo: 'PROMO_ATIVAR', status: 'PENDENTE', detalhes: `Buscando promoções em tempo real para ${anuncios.length} anúncio(s)...` },
+      });
+      res.json({ ok: true, tarefaId: tarefa.id });
+
+      (async () => {
+        try {
+          const tokenMap = {};
+          async function getToken(cId) {
+            if (!tokenMap[cId]) {
+              const c = contasML.find(x => x.id === cId);
+              tokenMap[cId] = c ? await refreshContaToken(c) : null;
+            }
+            return tokenMap[cId];
+          }
+
+          const TIPOS_COM_PRECO_RT = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING', 'PRICE_DISCOUNT']);
+          const TIPOS_COM_OFFER_ID_RT = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
+          const TIPOS_SEM_PROMO_ID_RT = new Set(['DOD', 'LIGHTNING', 'PRICE_DISCOUNT']);
+
+          const itensFila = [];
+          const skipped = [];
+
+          for (const anuncio of anuncios) {
+            const tk = await getToken(anuncio.contaId);
+            if (!tk) { skipped.push({ itemId: anuncio.id, motivo: 'sem_token' }); continue; }
+
+            try {
+              const r = await axios.get(
+                `https://api.mercadolibre.com/seller-promotions/items/${anuncio.id}?app_version=v2`,
+                { headers: { Authorization: `Bearer ${tk}` }, timeout: 10000 }
+              );
+              const promos = Array.isArray(r.data) ? r.data : (r.data ? [r.data] : []);
+
+              for (const promo of promos) {
+                const promoId = promo.id || promo.promotion_id;
+                const promoTipo = promo.type || promo.promotion_type;
+                const itemStatus = promo.status || promo.item_status;
+
+                // Pula promos deletadas ou com status de promoção inválido
+                if (promo.promotion_status === 'deleted' || promo.promotion_status === 'finished') continue;
+
+                // Só processa candidatos e ativos (para atualizar preço)
+                if (!['candidate', 'started', 'pending'].includes(itemStatus)) continue;
+
+                // Calcula % de desconto do vendedor
+                const sp = promo.seller_percentage ?? null;
+                let pctEfetivo = sp;
+                if (pctEfetivo === null && promo.suggested_discounted_price != null && promo.original_price > 0) {
+                  pctEfetivo = (1 - promo.suggested_discounted_price / promo.original_price) * 100;
+                }
+                if (pctEfetivo !== null && pctEfetivo > limiteMax) {
+                  skipped.push({ itemId: anuncio.id, promoId, motivo: 'acima_limite', pct: pctEfetivo });
+                  continue;
+                }
+
+                const filaItem = {
+                  itemId: anuncio.id,
+                  contaId: anuncio.contaId,
+                  promoTipo,
+                  promoId: TIPOS_SEM_PROMO_ID_RT.has(promoTipo) ? null : promoId,
+                  isUpdate: itemStatus === 'started' || itemStatus === 'pending',
+                };
+
+                if (promo.offer_id && TIPOS_COM_OFFER_ID_RT.has(promoTipo)) {
+                  filaItem.offerId = promo.offer_id;
+                }
+
+                if (TIPOS_COM_PRECO_RT.has(promoTipo)) {
+                  let dealPrice = null;
+                  if (promo.original_price > 0) {
+                    // Calcula o preço com base no % informado pelo usuário
+                    const targetPrice = Math.round(promo.original_price * (1 - limiteMax / 100) * 100) / 100;
+                    const minP = promo.min_discounted_price || 0;
+                    const maxP = promo.max_discounted_price || Infinity;
+                    dealPrice = Math.max(minP, Math.min(maxP, targetPrice));
+                  } else {
+                    dealPrice = promo.suggested_discounted_price ?? promo.max_discounted_price ?? null;
+                  }
+                  if (!dealPrice || isNaN(dealPrice)) {
+                    skipped.push({ itemId: anuncio.id, promoId, motivo: 'sem_preco' });
+                    continue;
+                  }
+                  filaItem.dealPrice = Number(dealPrice);
+                }
+
+                itensFila.push(filaItem);
+              }
+            } catch (e) {
+              console.error(`[ativarCandidatosRealtime] item ${anuncio.id}:`, e.message);
+              skipped.push({ itemId: anuncio.id, motivo: e.message });
+            }
+            await delay(200);
+          }
+
+          if (itensFila.length === 0) {
+            await prisma.tarefaFila.update({
+              where: { id: tarefa.id },
+              data: { status: 'CONCLUIDO', detalhes: `Nenhum candidato encontrado dentro do limite de ${limiteMax}%. Skipped: ${skipped.length}` },
+            });
+            return;
+          }
+
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: { detalhes: `Enfileirando ${itensFila.length} ativação(ões) em tempo real...` },
+          });
+
+          await promoQueue.add('processar-massa', {
+            tarefaId: tarefa.id,
+            userId,
+            itens: itensFila,
+            acao: 'ATIVAR',
+          }, { removeOnComplete: true, removeOnFail: true });
+
+        } catch (e) {
+          console.error('[ativarCandidatosRealtime]', e.message);
+          await prisma.tarefaFila.update({
+            where: { id: tarefa.id },
+            data: { status: 'FALHA', detalhes: `Erro: ${e.message}` },
+          }).catch(() => {});
+        }
+      })();
+
+    } catch (err) {
+      res.status(500).json({ erro: err.message });
+    }
+  },
+
   // ─── Monitor de Promoções ──────────────────────────────────────────────────
   async getMonitorConfig(req, res) {
     try {
       const { userId } = req.query;
       const config = await prisma.monitorPromoConfig.findUnique({ where: { userId } });
-      res.json(config || { ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [] });
+      res.json(config || { ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [], usarDescontoDinamico: false });
     } catch (err) {
       res.status(500).json({ erro: err.message });
     }
@@ -857,11 +1004,11 @@ export const promocoesController = {
 
   async saveMonitorConfig(req, res) {
     try {
-      const { userId, ativo, maxSellerPct, autoAtivar, tiposIgnorar } = req.body;
+      const { userId, ativo, maxSellerPct, autoAtivar, tiposIgnorar, usarDescontoDinamico } = req.body;
       const config = await prisma.monitorPromoConfig.upsert({
         where: { userId },
-        create: { userId, ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [] },
-        update: { ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [] },
+        create: { userId, ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [], usarDescontoDinamico: usarDescontoDinamico ?? false },
+        update: { ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [], usarDescontoDinamico: usarDescontoDinamico ?? false },
       });
       res.json({ ok: true, config });
     } catch (err) {

@@ -27,6 +27,9 @@ router.post('/api/promocoes/massa-fila', promocoesController.ativarRemoverMassaF
 // Exclusão em massa de campanhas (todas ou acima de X%)
 router.post('/api/promocoes/excluir-campanhas-massa', promocoesController.excluirCampanhasMassa);
 
+// Ativar candidatos em tempo real (sem depender do cache do orquestrador)
+router.post('/api/promocoes/ativar-candidatos-realtime', promocoesController.ativarCandidatosRealtime);
+
 
 // Orquestrador
 router.get('/api/orquestrador/regras', promocoesController.getRegras);

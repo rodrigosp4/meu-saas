@@ -1017,7 +1017,7 @@ function TabCriarCampanha({ usuarioId, contas }) {
 
 // ─── Tab: Monitor de Promoções ────────────────────────────────────────────────
 function TabMonitor({ usuarioId }) {
-  const [config, setConfig] = useState({ ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [] });
+  const [config, setConfig] = useState({ ativo: true, maxSellerPct: 20, autoAtivar: false, tiposIgnorar: [], usarDescontoDinamico: false });
   const [alertas, setAlertas] = useState([]);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [loadingAlertas, setLoadingAlertas] = useState(true);
@@ -1029,7 +1029,7 @@ function TabMonitor({ usuarioId }) {
   useEffect(() => {
     fetch(`/api/monitor-promo/config?userId=${usuarioId}`)
       .then(r => r.json())
-      .then(d => setConfig({ ativo: d.ativo ?? true, maxSellerPct: d.maxSellerPct ?? 20, autoAtivar: d.autoAtivar ?? false, tiposIgnorar: d.tiposIgnorar ?? [] }))
+      .then(d => setConfig({ ativo: d.ativo ?? true, maxSellerPct: d.maxSellerPct ?? 20, autoAtivar: d.autoAtivar ?? false, tiposIgnorar: d.tiposIgnorar ?? [], usarDescontoDinamico: d.usarDescontoDinamico ?? false }))
       .catch(() => {})
       .finally(() => setLoadingConfig(false));
   }, [usuarioId]);
@@ -1114,8 +1114,26 @@ function TabMonitor({ usuarioId }) {
           </label>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Toggle Desconto Dinâmico */}
+        <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl">
+          <div
+            onClick={() => setConfig(prev => ({ ...prev, usarDescontoDinamico: !prev.usarDescontoDinamico }))}
+            className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer flex-shrink-0 ${config.usarDescontoDinamico ? 'bg-orange-500' : 'bg-gray-300'}`}
+          >
+            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${config.usarDescontoDinamico ? 'left-5' : 'left-0.5'}`} />
+          </div>
           <div>
+            <p className="text-sm font-semibold text-gray-700">Desconto Dinâmico</p>
+            <p className="text-[11px] text-gray-500">
+              {config.usarDescontoDinamico
+                ? 'Cada anúncio usa o % que foi inflado ao ser publicado/corrigido. O limite fixo abaixo é ignorado.'
+                : 'Usa o % fixo abaixo como limite para todos os anúncios.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={config.usarDescontoDinamico ? 'opacity-40 pointer-events-none' : ''}>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
               % Máximo do Vendedor
             </label>
@@ -1128,7 +1146,9 @@ function TabMonitor({ usuarioId }) {
               />
               <span className="text-sm text-gray-500">%</span>
             </div>
-            <p className="text-[11px] text-gray-400 mt-1">Alertar apenas promoções com sua contribuição ≤ este valor</p>
+            <p className="text-[11px] text-gray-400 mt-1">
+              {config.usarDescontoDinamico ? 'Ignorado no modo dinâmico' : 'Alertar apenas promoções com sua contribuição ≤ este valor'}
+            </p>
           </div>
 
           <div>
@@ -1186,6 +1206,7 @@ function TabMonitor({ usuarioId }) {
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
         <strong>Como funciona:</strong> O agendador noturno (2h da manhã) verifica todas as promoções disponíveis para suas contas.
         Quando encontra promoções com % do vendedor dentro do limite configurado, gera um alerta aqui.
+        {config.usarDescontoDinamico && <span> No <strong>modo dinâmico</strong>, cada anúncio é comparado ao % que foi inflado quando o preço foi enviado — itens sem inflação registrada são ignorados.</span>}
         {config.autoAtivar
           ? ' Com auto-aceitar ativo, os itens candidatos serão ativados automaticamente.'
           : ' Você pode aceitar ou ignorar cada promoção manualmente abaixo.'}

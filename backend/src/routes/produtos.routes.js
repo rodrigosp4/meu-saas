@@ -271,6 +271,78 @@ router.post('/api/produtos/precos-base', async (req, res) => {
 });
 
 
+// ─── Importação via planilha (CSV/XLS/XLSX) ────────────────────────────────
+router.post('/api/produtos/importar-planilha', async (req, res) => {
+  try {
+    const { userId, produtos: produtosDaPlanilha } = req.body;
+    if (!userId) return res.status(400).json({ erro: 'userId obrigatório' });
+    if (!Array.isArray(produtosDaPlanilha) || produtosDaPlanilha.length === 0) {
+      return res.status(400).json({ erro: 'Nenhum produto enviado.' });
+    }
+
+    let criados = 0;
+    let atualizados = 0;
+    const erros = [];
+
+    for (const p of produtosDaPlanilha) {
+      if (!p.sku) continue;
+      try {
+        const dadosTiny = {
+          id: p.idTiny || null,
+          codigo: p.sku,
+          nome: p.nome,
+          preco: p.preco || 0,
+          preco_promocional: p.precoPromocional || 0,
+          preco_custo: p.precoCusto || 0,
+          tipoVariacao: p.tipoProduto === 'V' ? 'PAI' : null,
+          variacoes: [],
+          anexos: (p.imagens || []).map(url => ({ url })),
+          estoque_atual: p.estoque || 0,
+          fonte: 'planilha',
+        };
+
+        const existente = await prisma.produto.findUnique({
+          where: { userId_sku: { userId, sku: p.sku } },
+          select: { id: true },
+        });
+
+        if (existente) {
+          await prisma.produto.update({
+            where: { userId_sku: { userId, sku: p.sku } },
+            data: {
+              nome: p.nome,
+              preco: p.preco || 0,
+              estoque: p.estoque || 0,
+              dadosTiny,
+            },
+          });
+          atualizados++;
+        } else {
+          await prisma.produto.create({
+            data: {
+              userId,
+              sku: p.sku,
+              nome: p.nome,
+              preco: p.preco || 0,
+              estoque: p.estoque || 0,
+              statusML: 'Não Publicado',
+              dadosTiny,
+            },
+          });
+          criados++;
+        }
+      } catch (err) {
+        erros.push({ sku: p.sku, erro: err.message });
+      }
+    }
+
+    res.json({ ok: true, criados, atualizados, erros });
+  } catch (error) {
+    console.error('Erro ao importar planilha:', error);
+    res.status(500).json({ erro: 'Erro interno ao importar planilha.' });
+  }
+});
+
 router.post('/api/produtos/sync', async (req, res) => {
   try {
     const { mode, sku, userId, ids } = req.body;
@@ -296,11 +368,11 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
   const { id, userId } = req.body;
   if (!id) return res.status(400).json({ erro: 'ID obrigatório.' });
 
-  const uid = userId || req.userId;
-  const token = await getTinyAccessToken(uid);
-  if (!token) return res.status(401).json({ erro: 'Conta Tiny não conectada. Conecte em Configurações.' });
-
   try {
+    const uid = userId || req.userId;
+    const token = await getTinyAccessToken(uid);
+    if (!token) return res.status(401).json({ erro: 'Conta Tiny não conectada. Conecte em Configurações.' });
+
     const client = createTinyClient(token);
     const det = await obterProduto(client, id);
     const est = await obterEstoque(client, id).catch(() => null);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 // ── Hook de responsividade ─────────────────────────────────────────────────
 function useIsMobile(breakpoint = 640) {
@@ -116,7 +116,7 @@ const STEPS = [
 ];
 
 // ── Componentes ────────────────────────────────────────────────────────────
-function NavBar({ onLoginClick }) {
+function NavBar({ onLoginClick, onAssinarClick }) {
   const [scrolled, setScrolled] = useState(false);
   const isMobile = useIsMobile();
   useEffect(() => {
@@ -124,6 +124,10 @@ function NavBar({ onLoginClick }) {
     window.addEventListener('scroll', fn);
     return () => window.removeEventListener('scroll', fn);
   }, []);
+
+  const navLinkStyle = {
+    color: 'rgba(255,255,255,0.65)', textDecoration: 'none', fontSize: '0.9em', transition: 'color 0.2s',
+  };
 
   return (
     <nav style={{
@@ -144,26 +148,37 @@ function NavBar({ onLoginClick }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12 }}>
         {!isMobile && (
           <>
-            <a href="#features" style={{
-              color: 'rgba(255,255,255,0.65)', textDecoration: 'none', fontSize: '0.9em',
-              transition: 'color 0.2s',
-            }}
+            <a href="#features" style={navLinkStyle}
               onMouseEnter={e => e.target.style.color = '#F5C518'}
               onMouseLeave={e => e.target.style.color = 'rgba(255,255,255,0.65)'}
-            >
-              Funcionalidades
-            </a>
-            <a href="#how-it-works" style={{
-              color: 'rgba(255,255,255,0.65)', textDecoration: 'none', fontSize: '0.9em',
-              transition: 'color 0.2s',
-            }}
+            >Funcionalidades</a>
+            <a href="#how-it-works" style={navLinkStyle}
               onMouseEnter={e => e.target.style.color = '#F5C518'}
               onMouseLeave={e => e.target.style.color = 'rgba(255,255,255,0.65)'}
-            >
-              Como funciona
-            </a>
+            >Como funciona</a>
+            <a href="#pricing" style={navLinkStyle}
+              onMouseEnter={e => e.target.style.color = '#F5C518'}
+              onMouseLeave={e => e.target.style.color = 'rgba(255,255,255,0.65)'}
+            >Planos</a>
           </>
         )}
+        {/* Botão Assinar */}
+        <button
+          onClick={onAssinarClick}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(241,196,15,0.55)', borderRadius: 8,
+            padding: isMobile ? '7px 14px' : '8px 18px',
+            color: '#F5C518', fontWeight: 700,
+            fontSize: isMobile ? '0.82em' : '0.88em',
+            cursor: 'pointer', transition: 'all 0.2s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(241,196,15,0.1)'; e.currentTarget.style.borderColor = '#F5C518'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(241,196,15,0.55)'; }}
+        >
+          Assinar
+        </button>
+        {/* Botão Entrar */}
         <button
           onClick={onLoginClick}
           style={{
@@ -580,6 +595,230 @@ function HowItWorksSection() {
   );
 }
 
+const PLANO_VANTAGENS = {
+  '30d': [
+    '✅ Acesso completo a todas as ferramentas',
+    '✅ Gerenciador de anúncios ilimitado',
+    '✅ Monitor de concorrentes',
+    '✅ Respostas automáticas com IA',
+    '✅ Sincronização automática 24/7',
+    '✅ Suporte por e-mail',
+  ],
+  '60d': [
+    '✅ Tudo do plano mensal',
+    '✅ 5% de desconto no valor total',
+    '✅ Relatórios avançados',
+    '✅ Replicador de anúncios multi-conta',
+    '✅ Central de promoções completa',
+    '✅ Suporte prioritário',
+  ],
+  '90d': [
+    '✅ Tudo do plano bimestral',
+    '✅ 10% de desconto no valor total',
+    '✅ Cadastramento em massa via planilha',
+    '✅ Corretor de preços por planilha',
+    '✅ Otimizador de imagens',
+    '✅ Acesso antecipado a novas funcionalidades',
+  ],
+  '180d': [
+    '✅ Tudo do plano trimestral',
+    '✅ 15% de desconto — maior economia',
+    '✅ Planejador de Product Ads',
+    '✅ API de integração para desenvolvedores',
+    '✅ Compatibilidade autopeças avançada',
+    '✅ Suporte VIP',
+  ],
+};
+
+const PLANO_META = {
+  '30d':  { titulo: '30 Dias',  subtitulo: 'Mensal',         cor: '#3498db', popular: false },
+  '60d':  { titulo: '60 Dias',  subtitulo: '5% de desconto', cor: '#27ae60', popular: false },
+  '90d':  { titulo: '90 Dias',  subtitulo: '10% de desconto', cor: '#8e44ad', popular: true },
+  '180d': { titulo: '6 Meses', subtitulo: '15% de desconto', cor: '#e67e22', popular: false },
+};
+
+function PricingSection({ onAssinarClick }) {
+  const [planos, setPlanos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
+
+  useEffect(() => {
+    fetch('/api/assinatura/planos')
+      .then(r => r.json())
+      .then(d => setPlanos(d.planos || []))
+      .catch(() => {
+        // fallback com valores padrão
+        const base = 299;
+        setPlanos([
+          { key: '30d',  label: '30 dias',              dias: 30,  desconto: 0,    valor: 299,     precoMensal: base },
+          { key: '60d',  label: '60 dias (5% off)',      dias: 60,  desconto: 0.05, valor: 568.10,  precoMensal: base },
+          { key: '90d',  label: '90 dias (10% off)',     dias: 90,  desconto: 0.10, valor: 807.30,  precoMensal: base },
+          { key: '180d', label: '6 meses (15% off)',     dias: 180, desconto: 0.15, valor: 1524.90, precoMensal: base },
+        ]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const formatarMoeda = (v) => `R$ ${Number(v).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
+
+  return (
+    <section id="pricing" style={{
+      background: 'linear-gradient(180deg, #0a1628 0%, #070e1c 100%)',
+      padding: isMobile ? '64px 16px' : '100px 24px',
+      position: 'relative',
+    }}>
+      {/* Linha decorativa */}
+      <div style={{
+        position: 'absolute', top: 0, left: '10%', right: '10%', height: 1,
+        background: 'linear-gradient(90deg, transparent, rgba(241,196,15,0.3), transparent)',
+      }} />
+
+      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: isMobile ? 40 : 60 }}>
+          <div style={{
+            display: 'inline-block',
+            background: 'rgba(241,196,15,0.08)', border: '1px solid rgba(241,196,15,0.2)',
+            borderRadius: 20, padding: '5px 16px', marginBottom: 16,
+          }}>
+            <span style={{ fontSize: '0.78em', color: '#F5C518', fontWeight: 700, letterSpacing: '0.12em' }}>PLANOS E PREÇOS</span>
+          </div>
+          <h2 style={{ margin: '0 0 16px', fontSize: 'clamp(1.8em, 3vw, 2.6em)', fontWeight: 900, color: '#fff' }}>
+            Escolha o plano{' '}
+            <span style={{
+              background: 'linear-gradient(135deg, #F5C518, #e6aa00)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            }}>ideal para você</span>
+          </h2>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.45)', fontSize: '1em', maxWidth: 500, margin: '0 auto' }}>
+            Quanto mais longo o plano, maior a economia. Cancele a qualquer momento.
+          </p>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', padding: '40px' }}>Carregando planos...</div>
+        ) : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'repeat(4, 1fr)',
+            gap: isMobile ? 16 : 20,
+            alignItems: 'stretch',
+          }}>
+            {planos.map((plano) => {
+              const meta = PLANO_META[plano.key] || { titulo: plano.key, subtitulo: '', cor: '#3498db', popular: false };
+              const vantagens = PLANO_VANTAGENS[plano.key] || [];
+              const meses = plano.key === '180d' ? 6 : plano.dias / 30;
+              const precoMes = plano.valor / meses;
+
+              return (
+                <div key={plano.key} style={{
+                  position: 'relative',
+                  background: meta.popular
+                    ? `linear-gradient(180deg, ${meta.cor}18 0%, rgba(255,255,255,0.04) 100%)`
+                    : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${meta.popular ? meta.cor + '66' : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: 18,
+                  padding: isMobile ? '24px 20px' : '32px 24px',
+                  display: 'flex', flexDirection: 'column',
+                  boxShadow: meta.popular ? `0 0 40px ${meta.cor}22` : 'none',
+                }}>
+                  {/* Badge popular */}
+                  {meta.popular && (
+                    <div style={{
+                      position: 'absolute', top: -13, left: '50%', transform: 'translateX(-50%)',
+                      background: `linear-gradient(135deg, ${meta.cor}, ${meta.cor}cc)`,
+                      color: '#fff', fontSize: '0.72em', fontWeight: 700,
+                      padding: '4px 16px', borderRadius: 20, whiteSpace: 'nowrap',
+                    }}>
+                      ⭐ MAIS POPULAR
+                    </div>
+                  )}
+
+                  {/* Desconto badge */}
+                  {plano.desconto > 0 && (
+                    <div style={{
+                      display: 'inline-flex', alignSelf: 'flex-start',
+                      background: meta.cor + '22', color: meta.cor,
+                      fontSize: '0.72em', fontWeight: 700, padding: '3px 10px',
+                      borderRadius: 12, marginBottom: 12,
+                      border: `1px solid ${meta.cor}44`,
+                    }}>
+                      {Math.round(plano.desconto * 100)}% OFF
+                    </div>
+                  )}
+
+                  {/* Nome do plano */}
+                  <div style={{ color: meta.cor, fontWeight: 800, fontSize: '1.25em', marginBottom: 4 }}>
+                    {meta.titulo}
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.82em', marginBottom: 20 }}>
+                    {meta.subtitulo}
+                  </div>
+
+                  {/* Preço */}
+                  <div style={{ marginBottom: 6 }}>
+                    <span style={{ color: '#fff', fontWeight: 900, fontSize: 'clamp(1.8em, 3vw, 2.2em)' }}>
+                      {formatarMoeda(plano.valor)}
+                    </span>
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.78em', marginBottom: 24 }}>
+                    ≈ {formatarMoeda(precoMes)}/mês
+                  </div>
+
+                  {/* Vantagens */}
+                  <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 28px', flex: 1 }}>
+                    {vantagens.map((v, i) => (
+                      <li key={i} style={{
+                        color: 'rgba(255,255,255,0.7)', fontSize: '0.84em', lineHeight: 1.5,
+                        marginBottom: 8, paddingLeft: 0,
+                      }}>
+                        {v}
+                      </li>
+                    ))}
+                  </ul>
+
+                  {/* Botão assinar */}
+                  <button
+                    onClick={onAssinarClick}
+                    style={{
+                      width: '100%', padding: '13px 0',
+                      background: meta.popular
+                        ? `linear-gradient(135deg, ${meta.cor}, ${meta.cor}cc)`
+                        : 'transparent',
+                      border: `2px solid ${meta.cor}`,
+                      borderRadius: 10,
+                      color: meta.popular ? '#fff' : meta.cor,
+                      fontWeight: 700, fontSize: '0.95em',
+                      cursor: 'pointer', transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = `linear-gradient(135deg, ${meta.cor}, ${meta.cor}cc)`;
+                      e.currentTarget.style.color = '#fff';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = meta.popular ? `linear-gradient(135deg, ${meta.cor}, ${meta.cor}cc)` : 'transparent';
+                      e.currentTarget.style.color = meta.popular ? '#fff' : meta.cor;
+                      e.currentTarget.style.transform = 'none';
+                    }}
+                  >
+                    Assinar agora →
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Nota rodapé */}
+        <p style={{ textAlign: 'center', marginTop: 32, color: 'rgba(255,255,255,0.25)', fontSize: '0.8em' }}>
+          Pagamento seguro via MercadoPago · Acesso liberado automaticamente após confirmação
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function CTASection({ onLoginClick }) {
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
@@ -647,11 +886,8 @@ function CTASection({ onLoginClick }) {
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px) scale(1.03)'; e.currentTarget.style.boxShadow = '0 14px 40px rgba(241,196,15,0.55)'; }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(241,196,15,0.4)'; }}
         >
-          🚀 Começar agora — é grátis
+          🚀 Começar agora
         </button>
-        <p style={{ marginTop: 14, fontSize: '0.8em', color: 'rgba(255,255,255,0.3)' }}>
-          Precisa de convite? Entre em contato com nosso suporte.
-        </p>
       </div>
     </section>
   );
@@ -684,15 +920,22 @@ function Footer() {
 
 // ── Componente principal ───────────────────────────────────────────────────
 export default function LandingPage({ onLoginClick }) {
+  const irParaPlanos = useCallback(() => {
+    const el = document.getElementById('pricing');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+    else onLoginClick();
+  }, [onLoginClick]);
+
   return (
     <div style={{
       fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       color: '#fff', minHeight: '100vh',
     }}>
-      <NavBar onLoginClick={onLoginClick} />
+      <NavBar onLoginClick={onLoginClick} onAssinarClick={irParaPlanos} />
       <HeroSection onLoginClick={onLoginClick} />
       <FeaturesSection />
       <HowItWorksSection />
+      <PricingSection onAssinarClick={onLoginClick} />
       <CTASection onLoginClick={onLoginClick} />
       <Footer />
     </div>

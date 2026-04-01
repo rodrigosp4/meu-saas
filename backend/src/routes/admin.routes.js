@@ -39,6 +39,7 @@ router.get('/api/admin/usuarios', requireSuperAdmin, async (req, res) => {
         email: true,
         role: true,
         ativo: true,
+        acessoLivre: true,
         featureFlags: true,
         resourceFlags: true,
         createdAt: true,
@@ -274,6 +275,102 @@ router.post('/api/admin/agendamentos/executar', requireSuperAdmin, async (req, r
     const { jobName = 'varredura-diaria' } = req.body;
     const job = await cronQueue.add(jobName, {}, { attempts: 1 });
     res.json({ ok: true, jobId: job.id, message: `Job "${jobName}" enfileirado com sucesso.` });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── Configuração de Assinatura ────────────────────────────────────────────────
+
+// POST /api/admin/criar-usuario
+router.post('/api/admin/criar-usuario', requireSuperAdmin, async (req, res) => {
+  try {
+    const { email, password, acessoLivre = false } = req.body;
+    if (!email || !password || password.length < 6) {
+      return res.status(400).json({ erro: 'E-mail e senha (mínimo 6 caracteres) são obrigatórios.' });
+    }
+    const exists = await prisma.user.findUnique({ where: { email } });
+    if (exists) return res.status(409).json({ erro: 'E-mail já cadastrado.' });
+
+    const configGlobal = await prisma.configGlobal.findUnique({ where: { id: 'global' } });
+    const defaultFeatureFlags = configGlobal?.defaultFeatureFlags && Object.keys(configGlobal.defaultFeatureFlags).length ? configGlobal.defaultFeatureFlags : null;
+    const defaultResourceFlags = configGlobal?.defaultResourceFlags && Object.keys(configGlobal.defaultResourceFlags).length ? configGlobal.defaultResourceFlags : null;
+
+    const hash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: { email, senha: hash, acessoLivre, featureFlags: defaultFeatureFlags, resourceFlags: defaultResourceFlags },
+      select: { id: true, email: true, role: true, ativo: true, acessoLivre: true, featureFlags: true, resourceFlags: true, createdAt: true, _count: { select: { subUsuarios: true, contasMl: true } } },
+    });
+    res.status(201).json(user);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// GET /api/admin/config-assinatura
+router.get('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) => {
+  try {
+    const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+    res.json({
+      precoMensal: config?.precoMensal ?? 299,
+      mpAccessToken: config?.mpAccessToken ?? '',
+      mpPublicKey: config?.mpPublicKey ?? '',
+    });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/config-assinatura
+router.put('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) => {
+  try {
+    const { precoMensal, mpAccessToken, mpPublicKey } = req.body;
+    const data = {};
+    if (precoMensal !== undefined) {
+      const preco = parseFloat(precoMensal);
+      if (isNaN(preco) || preco <= 0) return res.status(400).json({ erro: 'Preço inválido.' });
+      data.precoMensal = preco;
+    }
+    if (mpAccessToken !== undefined) data.mpAccessToken = mpAccessToken;
+    if (mpPublicKey !== undefined) data.mpPublicKey = mpPublicKey;
+
+    const config = await prisma.configAssinatura.upsert({
+      where: { id: 'global' },
+      update: data,
+      create: { id: 'global', precoMensal: data.precoMensal ?? 299, ...data },
+    });
+    res.json({ precoMensal: config.precoMensal, mpAccessToken: config.mpAccessToken, mpPublicKey: config.mpPublicKey });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/usuarios/:id/acesso-livre
+router.put('/api/admin/usuarios/:id/acesso-livre', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { acessoLivre } = req.body;
+    if (typeof acessoLivre !== 'boolean') return res.status(400).json({ erro: 'acessoLivre deve ser boolean.' });
+    const user = await prisma.user.update({
+      where: { id },
+      data: { acessoLivre },
+      select: { id: true, email: true, acessoLivre: true },
+    });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// GET /api/admin/assinaturas  — lista todas assinaturas
+router.get('/api/admin/assinaturas', requireSuperAdmin, async (req, res) => {
+  try {
+    const assinaturas = await prisma.assinatura.findMany({
+      include: { user: { select: { id: true, email: true, acessoLivre: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json(assinaturas);
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }

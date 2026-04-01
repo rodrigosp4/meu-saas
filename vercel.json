@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://dev-api.meliunlocker.cc/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

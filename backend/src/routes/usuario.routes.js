@@ -35,13 +35,10 @@ function createMailTransporter() {
   });
 }
 
-// 1. REGISTRAR (com convite)
+// 1. REGISTRAR
 router.post('/api/register', async (req, res) => {
-  const { email, password, inviteCode } = req.body;
+  const { email, password } = req.body;
 
-  if (inviteCode !== INVITE_CODE) {
-    return res.status(403).json({ erro: 'Código de convite inválido.' });
-  }
   if (!email || !password || password.length < 6) {
     return res.status(400).json({ erro: 'E-mail e senha (mínimo 6 caracteres) são obrigatórios.' });
   }

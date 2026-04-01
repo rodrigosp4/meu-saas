@@ -50,31 +50,39 @@ export async function refreshTinyToken(userId, refreshToken, clientId, clientSec
     clientId = user?.tinyClientId;
     clientSecret = user?.tinyClientSecret;
   }
-  if (!clientId || !clientSecret) throw new Error('Credenciais Tiny não configuradas para este usuário.');
+  if (!clientId || !clientSecret) {
+    console.warn(`Credenciais Tiny não configuradas para o usuário ${userId}.`);
+    return null;
+  }
 
-  const res = await axios.post(
-    TOKEN_URL,
-    new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-    }),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
-  );
+  try {
+    const res = await axios.post(
+      TOKEN_URL,
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      }),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
+    );
 
-  const { access_token, refresh_token, expires_in } = res.data;
+    const { access_token, refresh_token, expires_in } = res.data;
 
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      tinyAccessToken: access_token,
-      tinyRefreshToken: refresh_token,
-      tinyTokenExpiresAt: BigInt(Date.now() + expires_in * 1000),
-    },
-  });
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        tinyAccessToken: access_token,
+        tinyRefreshToken: refresh_token,
+        tinyTokenExpiresAt: BigInt(Date.now() + expires_in * 1000),
+      },
+    });
 
-  return access_token;
+    return access_token;
+  } catch (error) {
+    console.error(`Falha na renovação do token Tiny para usuário ${userId}:`, error.response?.data || error.message);
+    return null;
+  }
 }
 
 // GET /produtos — lista com filtros opcionais (codigo, nome, situacao, dataAlteracao, limit, offset)

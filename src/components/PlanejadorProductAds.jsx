@@ -37,7 +37,8 @@ function gerarPrompt(ads) {
   // Tabela de anúncios
   const linhasTabela = ads.map(ad => {
     const conv = convRate(ad);
-    return `| ${ad.id} | ${ad.titulo.substring(0, 55)}${ad.titulo.length > 55 ? '…' : ''} | ${ad.sku || '—'} | ${ad.conta?.nickname || '—'} | ${tipoML(ad)} | ${emCatalogo(ad) ? 'Sim' : 'Não'} | ${dominio(ad)} | ${fmtBRL(ad.preco)} | ${ad.estoque} | ${ad.vendas} | ${ad.visitas} | ${conv != null ? conv + '%' : '—'} |`;
+    const faturamento = (ad.preco || 0) * (ad.vendas || 0);
+    return `| ${ad.id} | ${ad.titulo.substring(0, 55)}${ad.titulo.length > 55 ? '…' : ''} | ${ad.sku || '—'} | ${ad.conta?.nickname || '—'} | ${tipoML(ad)} | ${emCatalogo(ad) ? 'Sim' : 'Não'} | ${dominio(ad)} | ${fmtBRL(ad.preco)} | ${ad.estoque} | ${ad.vendas} | ${fmtBRL(faturamento)} | ${ad.visitas} | ${conv != null ? conv + '%' : '—'} |`;
   }).join('\n');
 
   // Grupos por domínio para o prompt
@@ -54,6 +55,7 @@ function gerarPrompt(ads) {
   const contas = [...new Set(ads.map(a => a.conta?.nickname).filter(Boolean))].join(', ') || 'não informado';
   const totalVendas = ads.reduce((s, a) => s + a.vendas, 0);
   const totalVisitas = ads.reduce((s, a) => s + a.visitas, 0);
+  const totalFaturamento = ads.reduce((s, a) => s + (a.preco || 0) * (a.vendas || 0), 0);
   const semVendas = ads.filter(a => a.vendas === 0).length;
   const semEstoque = ads.filter(a => a.estoque === 0).length;
   const premium = ads.filter(a => tipoML(a) === 'Premium').length;
@@ -70,7 +72,8 @@ function gerarPrompt(ads) {
 ## VISÃO GERAL DA CARTEIRA
 
 - Total de anúncios selecionados: ${ads.length}
-- Vendas totais (acumulado): ${totalVendas}
+- Vendas totais (acumulado): ${totalVendas} unidades
+- Faturamento total estimado (acumulado): ${fmtBRL(totalFaturamento)}
 - Visitas totais (acumulado): ${totalVisitas}
 - Conversão média: ${totalVisitas > 0 ? ((totalVendas / totalVisitas) * 100).toFixed(2) : '0'}%
 - Anúncios sem nenhuma venda: ${semVendas}
@@ -88,8 +91,8 @@ ${resumoDominios}
 
 ## TABELA DE ANÚNCIOS (${ads.length} itens)
 
-| MLB ID | Título | SKU | Conta | Tipo | Catálogo | Domínio/Categoria | Preço | Estoque | Vendas | Visitas | Conv% |
-|--------|--------|-----|-------|------|----------|-------------------|-------|---------|--------|---------|-------|
+| MLB ID | Título | SKU | Conta | Tipo | Catálogo | Domínio/Categoria | Preço | Estoque | Vendas | Faturamento | Visitas | Conv% |
+|--------|--------|-----|-------|------|----------|-------------------|-------|---------|--------|-------------|---------|-------|
 ${linhasTabela}
 
 ---
@@ -119,6 +122,26 @@ ${linhasTabela}
    - Bestsellers: estratégia PROFITABILITY, ROAS alvo entre 20 e 35
    - Produtos com estoque 0: NÃO incluir em campanhas
    - Produtos com visitas altas e conversão < 0,5%: investigar preço/fotos antes de anunciar
+
+8. **Tamanho das campanhas personalizadas**:
+   - Cada campanha personalizada deve ter entre **15 e 30 anúncios**
+   - Se necessário, divida grupos maiores em sub-campanhas de 15–30 itens
+
+9. **Budget diário — como calcular**:
+   - O budget deve ser proporcional ao **faturamento real do produto** (coluna Faturamento = Preço × Vendas)
+   - Um produto com faturamento baixo (ex: R$ 50 acumulado) NÃO justifica budget diário alto
+   - Referência orientativa: budget diário de 1% a 3% do faturamento acumulado do grupo, com mínimo de R$ 5 e máximo de R$ 100 por campanha (a não ser que o faturamento do grupo claramente justifique mais)
+   - NUNCA sugira budget diário maior que o faturamento diário médio estimado do grupo de anúncios
+
+---
+
+## BOAS PRÁTICAS OFICIAIS DO MERCADO LIVRE PARA PRODUCT ADS
+
+1. **Quantidade de anúncios por campanha**: Campanhas com **15 a 30 anúncios** tendem a ter melhores resultados. Respeite esse intervalo ao montar cada campanha personalizada.
+
+2. **Agrupe por preço e margem semelhantes**: Reúna anúncios com preço e perfil de margem parecidos na mesma campanha. Isso permite definir um ROAS Objetivo coerente com o retorno esperado e o objetivo da campanha.
+
+3. **Datas especiais**: Em períodos promocionais, priorize os produtos que historicamente vendem mais. Pode-se criar novas campanhas específicas para esses itens e aumentar o orçamento + ajustar o ROAS Objetivo para tornar a campanha mais competitiva.
 
 ---
 

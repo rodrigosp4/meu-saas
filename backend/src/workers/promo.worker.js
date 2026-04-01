@@ -12,9 +12,9 @@ const connection = {
   ...(process.env.NODE_ENV === 'production' ? { tls: {} } : {})
 };
 
-const TIPOS_SEM_PROMOTION_ID = new Set(['DOD', 'LIGHTNING']);
+const TIPOS_SEM_PROMOTION_ID = new Set(['DOD', 'LIGHTNING', 'PRICE_DISCOUNT']);
 const TIPOS_COM_OFFER_ID = new Set(['MARKETPLACE_CAMPAIGN', 'SMART', 'PRICE_MATCHING', 'PRICE_MATCHING_MELI_ALL', 'BANK', 'PRE_NEGOTIATED']);
-const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING']);
+const TIPOS_COM_PRECO = new Set(['DEAL', 'SELLER_CAMPAIGN', 'DOD', 'LIGHTNING', 'PRICE_DISCOUNT']);
 
 export const promoWorker = new Worker('promo-queue', async (job) => {
   const { tarefaId, userId, itens, acao } = job.data;
@@ -76,8 +76,29 @@ export const promoWorker = new Worker('promo-queue', async (job) => {
 
         if (item.promoTipo === 'LIGHTNING' && item.stock) body.stock = Number(item.stock);
 
-        await axios.post(`https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`, body, { headers });
-        logDesteItem += ' -> Ativado com sucesso.';
+        if (item.promoTipo === 'PRICE_DISCOUNT') {
+          const pad = n => String(n).padStart(2, '0');
+          const now = new Date();
+          const fin = new Date(now); fin.setDate(fin.getDate() + 7);
+          body.start_date = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T00:00:00`;
+          body.finish_date = `${fin.getFullYear()}-${pad(fin.getMonth()+1)}-${pad(fin.getDate())}T23:59:59`;
+        }
+
+        if (item.isUpdate && item.promoTipo === 'PRICE_DISCOUNT') {
+          // PRICE_DISCOUNT ativo não pode ser modificado diretamente: apaga e recria
+          const delParams = new URLSearchParams({ promotion_type: 'PRICE_DISCOUNT', app_version: 'v2' });
+          await axios.delete(`https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?${delParams}`, { headers });
+          await new Promise(r => setTimeout(r, 500));
+          await axios.post(`https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`, body, { headers });
+          logDesteItem += ' -> Atualizado com sucesso (delete+post).';
+        } else if (item.isUpdate) {
+          // SELLER_CAMPAIGN, DEAL, etc: PUT para atualizar preço
+          await axios.put(`https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`, body, { headers });
+          logDesteItem += ' -> Atualizado com sucesso.';
+        } else {
+          await axios.post(`https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`, body, { headers });
+          logDesteItem += ' -> Ativado com sucesso.';
+        }
       }
 
       sucessos++;

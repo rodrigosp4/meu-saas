@@ -9,6 +9,8 @@ const PUBLIC_ROUTES = [
   { method: 'GET',  path: '/callback' },
   { method: 'GET',  path: '/api/tiny/callback' },
   { method: 'GET',  path: '/api/tiny/connect' },
+  { method: 'POST', path: '/api/assinatura/webhook' },
+  { method: 'GET',  path: '/api/assinatura/planos' },
 ];
 
 export function authMiddleware(req, res, next) {

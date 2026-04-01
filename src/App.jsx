@@ -23,12 +23,13 @@ import ClienteAPI from './components/ClienteAPI.jsx';
 import DimensoesEmbalagem from './components/DimensoesEmbalagem.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import AgendadorTarefas from './components/AgendadorTarefas.jsx';
+import TelaAssinatura from './components/TelaAssinatura.jsx';
 import CorretorPrecoPlanilha from './components/CorretorPrecoPlanilha.jsx';
 import PlanejadorProductAds from './components/PlanejadorProductAds.jsx';
 import PainelRascunhos from './components/PainelRascunhos.jsx';
 
 function App() {
-  const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role } = useAuth();
+  const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura } = useAuth();
 
   const [activePage, setActivePage] = useState(() => {
     const redirectPage = localStorage.getItem('redirect_to_page');
@@ -80,6 +81,24 @@ function App() {
   // Suporte logado mas sem impersonação: mostra seletor de cliente
   if (role === 'SUPPORT' && !impersonating) {
     return <SuporteClienteSelector />;
+  }
+
+  // Gate de assinatura — aguarda verificação, depois bloqueia se sem assinatura
+  // SUPER_ADMIN e impersonação ficam isentos
+  if (role !== 'SUPER_ADMIN' && !impersonating) {
+    if (!assinaturaVerificada) {
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #1a1a2e, #0f3460)' }}>
+          <div style={{ textAlign: 'center', color: '#fff' }}>
+            <div style={{ width: '40px', height: '40px', border: '4px solid rgba(255,255,255,0.2)', borderTop: '4px solid #fff', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }} />
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        </div>
+      );
+    }
+    if (!assinaturaAtiva) {
+      return <TelaAssinatura onAssinaturaAtivada={recarregarAssinatura} />;
+    }
   }
 
   // Para banners e sair da conta de impersonação

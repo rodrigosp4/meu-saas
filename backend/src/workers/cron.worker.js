@@ -35,25 +35,51 @@ async function verificarMonitorPromocoes(userId) {
 
   let novasAlertas = 0;
 
+  const getItemPct = (i) => {
+    if (i.seller_percentage != null) return i.seller_percentage;
+    if (i.sellerPct != null) return i.sellerPct;
+    if (i.suggested_discounted_price != null && i.original_price > 0) {
+      return (1 - i.suggested_discounted_price / i.original_price) * 100;
+    }
+    return null;
+  };
+
   for (const promo of promos) {
     const itens = Array.isArray(promo.itens) ? promo.itens : [];
     const candidatos = itens.filter(i => i.status === 'candidate');
     if (candidatos.length === 0) continue;
 
-    // Calcula % médio do vendedor nos candidatos
-    // SELLER_CAMPAIGN (FLEXIBLE_PERCENTAGE) não retorna seller_percentage — calcula a partir do suggested_discounted_price
-    const percs = candidatos.map(i => {
-      if (i.seller_percentage != null) return i.seller_percentage;
-      if (i.sellerPct != null) return i.sellerPct;
-      if (i.suggested_discounted_price != null && i.original_price > 0) {
-        return (1 - i.suggested_discounted_price / i.original_price) * 100;
-      }
-      return null;
-    }).filter(p => p != null);
-    if (percs.length === 0) continue;
-    const avgPct = percs.reduce((a, b) => a + b, 0) / percs.length;
+    let candidatosElegiveis = candidatos;
+    let avgPct;
 
-    if (avgPct > cfg.maxSellerPct) continue;
+    if (cfg.usarDescontoDinamico) {
+      // Modo dinâmico: cada item tem seu próprio limite baseado no inflarPct salvo no anuncio
+      const itemIds = candidatos.map(i => i.id).filter(Boolean);
+      const anuncios = await prisma.anuncioML.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, inflarPct: true },
+      });
+      const inflarMap = Object.fromEntries(anuncios.map(a => [a.id, a.inflarPct || 0]));
+
+      candidatosElegiveis = candidatos.filter(i => {
+        const pct = getItemPct(i);
+        if (pct == null) return false;
+        const limite = inflarMap[i.id] || 0;
+        return limite > 0 && pct <= limite;
+      });
+
+      if (candidatosElegiveis.length === 0) continue;
+
+      const percs = candidatosElegiveis.map(i => getItemPct(i)).filter(p => p != null);
+      avgPct = percs.reduce((a, b) => a + b, 0) / percs.length;
+    } else {
+      // Modo fixo: usa maxSellerPct global
+      // SELLER_CAMPAIGN (FLEXIBLE_PERCENTAGE) não retorna seller_percentage — calcula a partir do suggested_discounted_price
+      const percs = candidatos.map(i => getItemPct(i)).filter(p => p != null);
+      if (percs.length === 0) continue;
+      avgPct = percs.reduce((a, b) => a + b, 0) / percs.length;
+      if (avgPct > cfg.maxSellerPct) continue;
+    }
 
     // Cria alerta se ainda não existir
     try {
@@ -74,7 +100,7 @@ async function verificarMonitorPromocoes(userId) {
       // já existe, ignora
     }
 
-    // Se autoAtivar, aciona via API (já existe lógica de ativar no controller)
+    // Se autoAtivar, aciona via API — no modo dinâmico ativa apenas os itens elegíveis
     if (cfg.autoAtivar) {
       const conta = await prisma.contaML.findFirst({ where: { id: promo.contaId } });
       if (conta) {
@@ -84,7 +110,7 @@ async function verificarMonitorPromocoes(userId) {
           if (refreshed?.access_token) {
             await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token } }).catch(() => {});
           }
-          for (const item of candidatos) {
+          for (const item of candidatosElegiveis) {
             try {
               const body = { promotion_id: promo.id, promotion_type: promo.tipo };
               if (item.offer_id) body.offer_id = item.offer_id;

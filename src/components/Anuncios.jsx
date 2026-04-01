@@ -1,5 +1,74 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { useContasML } from '../contexts/ContasMLContext';
+
+// ── Parsers de planilha (CSV/XLS/XLSX) ─────────────────────────────────────
+function parseCsvLine(line) {
+  const result = [];
+  let inQuotes = false;
+  let current = '';
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (c === ';' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseCSVPlanilha(text) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const headers = parseCsvLine(lines[0]);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const vals = parseCsvLine(lines[i]);
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = vals[idx] ?? ''; });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function extrairProdutosDaPlanilha(rows) {
+  const produtos = [];
+  let ignoradosV = 0, ignoradosSemSku = 0;
+  const parseNum = v => typeof v === 'number' ? v : parseFloat(String(v || '0').replace(',', '.')) || 0;
+  const parseInt2 = v => typeof v === 'number' ? Math.round(v) : parseInt(String(v || '0').replace(',', '.')) || 0;
+
+  for (const row of rows) {
+    const sku = (row['Código (SKU)'] || '').trim();
+    const tipo = (row['Tipo do produto'] || '').trim().toUpperCase();
+    if (tipo === 'V') { ignoradosV++; continue; }
+    if (!sku) { ignoradosSemSku++; continue; }
+
+    const imagens = ['URL imagem 1','URL imagem 2','URL imagem 3','URL imagem 4','URL imagem 5','URL imagem 6']
+      .map(k => (row[k] || '').trim()).filter(Boolean);
+
+    produtos.push({
+      idTiny: (row['ID'] || '').trim() || null,
+      sku,
+      nome: (row['Descrição'] || '').replace(/<[^>]*>/g, '').trim(),
+      preco: parseNum(row['Preço']),
+      precoCusto: parseNum(row['Preço de custo']),
+      precoPromocional: parseNum(row['Preço promocional']),
+      estoque: parseInt2(row['Estoque']),
+      situacao: (row['Situação'] || '').trim(),
+      tipoProduto: tipo,
+      codigoPai: (row['Código do pai'] || '').trim(),
+      imagens,
+    });
+  }
+  return { produtos, ignoradosV, ignoradosSemSku };
+}
 
 export default function Anuncios({ onAnunciar, usuarioId }) {
   const { tinyToken, tinyConectado } = useContasML();
@@ -21,6 +90,15 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
   // ✅ NOVOS ESTADOS PARA SELEÇÃO EM MASSA
   const [selectedTinyIds, setSelectedTinyIds] = useState(new Set());
   const[isSelectingAll, setIsSelectingAll] = useState(false);
+
+  // Importação por planilha
+  const planilhaRef = useRef(null);
+  const [planilhaAberta, setPlanilhaAberta] = useState(false);
+  const [planilhaFileName, setPlanilhaFileName] = useState('');
+  const [planilhaProdutos, setPlanilhaProdutos] = useState([]);
+  const [planilhaStats, setPlanilhaStats] = useState(null);
+  const [planilhaImportando, setPlanilhaImportando] = useState(false);
+  const [planilhaResultado, setPlanilhaResultado] = useState(null);
 
   const itemsPerPage = 50;
 
@@ -162,6 +240,71 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
     }
   };
 
+  const processarArquivoPlanilha = useCallback((file) => {
+    if (!file || !file.name.match(/\.(csv|xls|xlsx)$/i)) {
+      alert('Selecione um arquivo .csv, .xls ou .xlsx exportado do Tiny ERP');
+      return;
+    }
+    setPlanilhaFileName(file.name);
+    setPlanilhaResultado(null);
+    const isExcel = file.name.match(/\.xlsx?$/i);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let rows;
+        if (isExcel) {
+          const wb = XLSX.read(e.target.result, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        } else {
+          rows = parseCSVPlanilha(e.target.result);
+        }
+        if (rows.length === 0) {
+          alert('Arquivo vazio ou sem dados na primeira aba.');
+          return;
+        }
+        const { produtos: p, ignoradosV, ignoradosSemSku } = extrairProdutosDaPlanilha(rows);
+        if (p.length === 0) {
+          const colunas = Object.keys(rows[0]).join(', ');
+          alert(`Nenhum produto encontrado.\n\nColunas detectadas:\n${colunas}\n\nEsperado: "Código (SKU)", "Descrição", "Preço" etc.\n\nCertifique-se de exportar via Produtos → Exportar no Tiny ERP.`);
+          setPlanilhaFileName('');
+          return;
+        }
+        setPlanilhaProdutos(p);
+        setPlanilhaStats({ total: rows.length, ignoradosV, ignoradosSemSku, totalProdutos: p.length });
+      } catch (err) {
+        alert(`Erro ao ler o arquivo: ${err.message}`);
+        setPlanilhaFileName('');
+      }
+    };
+    if (isExcel) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file, 'UTF-8');
+  }, []);
+
+  const importarPlanilha = async () => {
+    if (!planilhaProdutos.length) return;
+    setPlanilhaImportando(true);
+    setPlanilhaResultado(null);
+    try {
+      const res = await fetch('/api/produtos/importar-planilha', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, produtos: planilhaProdutos }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Falha ao importar');
+      setPlanilhaResultado(data);
+      setPlanilhaProdutos([]);
+      setPlanilhaStats(null);
+      setPlanilhaFileName('');
+      fetchProdutos();
+    } catch (err) {
+      alert('Erro ao importar: ' + err.message);
+    } finally {
+      setPlanilhaImportando(false);
+    }
+  };
+
   const getVariacoesInfo = (produto) => {
     const variacoes = produto.dadosTiny?.variacoes;
     if (!variacoes) return { isPai: false, qtd: 0 };
@@ -256,6 +399,79 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         >
           {syncProgress !== null ? 'Sincronizando...' : selectedTinyIds.size > 0 ? `Sincronizar ${selectedTinyIds.size} Selecionado(s)` : '🔄 Sincronizar com Tiny'}
         </button>
+      </div>
+
+      {/* ── Importar via Planilha ─────────────────────────────────────────── */}
+      <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #bde0fb' }}>
+        <button
+          onClick={() => { setPlanilhaAberta(v => !v); setPlanilhaResultado(null); }}
+          className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
+          style={{ backgroundColor: '#e8f4fd', color: '#1a6fa3' }}
+        >
+          <span>📄 Importar produtos via Planilha (CSV / XLS / XLSX)</span>
+          <svg className={`w-4 h-4 transform transition-transform ${planilhaAberta ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+
+        {planilhaAberta && (
+          <div className="p-4 bg-white" style={{ borderTop: '1px solid #bde0fb' }}>
+            <p className="text-xs mb-3" style={{ color: '#6b7280' }}>
+              Exporte sua lista de produtos no Tiny ERP (Produtos → Exportar) e importe aqui. Os produtos serão criados ou atualizados no banco local.
+            </p>
+
+            {/* Drop zone */}
+            <div
+              onClick={() => planilhaRef.current?.click()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) processarArquivoPlanilha(e.dataTransfer.files[0]); }}
+              className="flex flex-col items-center justify-center gap-2 p-6 rounded-lg cursor-pointer transition-colors"
+              style={{ border: '2px dashed #93c5fd', backgroundColor: '#f0f9ff' }}
+            >
+              <svg className="w-8 h-8" style={{ color: '#3b82f6' }} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              <span className="text-sm font-medium" style={{ color: '#2563eb' }}>
+                {planilhaFileName || 'Clique ou arraste um arquivo aqui'}
+              </span>
+              <span className="text-xs" style={{ color: '#6b7280' }}>.csv, .xls ou .xlsx</span>
+              <input
+                ref={planilhaRef}
+                type="file"
+                accept=".csv,.xls,.xlsx"
+                className="hidden"
+                onChange={e => { if (e.target.files[0]) { processarArquivoPlanilha(e.target.files[0]); e.target.value = ''; } }}
+              />
+            </div>
+
+            {/* Stats e botão de importar */}
+            {planilhaStats && (
+              <div className="mt-3 p-3 rounded-md flex items-center justify-between gap-4" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                <div className="text-sm" style={{ color: '#166534' }}>
+                  <strong>{planilhaStats.totalProdutos}</strong> produto(s) prontos para importar
+                  {planilhaStats.ignoradosV > 0 && <span className="ml-2 text-xs" style={{ color: '#6b7280' }}>({planilhaStats.ignoradosV} pais de variação ignorados)</span>}
+                  {planilhaStats.ignoradosSemSku > 0 && <span className="ml-2 text-xs" style={{ color: '#6b7280' }}>({planilhaStats.ignoradosSemSku} sem SKU ignorados)</span>}
+                </div>
+                <button
+                  onClick={importarPlanilha}
+                  disabled={planilhaImportando}
+                  className="px-4 py-2 text-white text-sm font-semibold rounded shadow-sm transition disabled:opacity-50 whitespace-nowrap"
+                  style={{ backgroundColor: '#16a34a' }}
+                  onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = '#15803d'; }}
+                  onMouseOut={e => { e.target.style.backgroundColor = '#16a34a'; }}
+                >
+                  {planilhaImportando ? 'Importando...' : `Importar ${planilhaStats.totalProdutos} produtos`}
+                </button>
+              </div>
+            )}
+
+            {/* Resultado */}
+            {planilhaResultado && (
+              <div className="mt-3 p-3 rounded-md text-sm" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534' }}>
+                ✅ Importação concluída: <strong>{planilhaResultado.criados}</strong> criado(s), <strong>{planilhaResultado.atualizados}</strong> atualizado(s)
+                {planilhaResultado.erros?.length > 0 && (
+                  <span className="ml-2" style={{ color: '#b91c1c' }}>({planilhaResultado.erros.length} erro(s))</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-4 p-4 rounded-lg shadow-sm" style={{ backgroundColor: '#ffffff', border: '1px solid #e0e0e0' }}>

@@ -527,6 +527,15 @@ export const mlWorker = new Worker('sync-ml', async (job) => {
         // Mantém apenas os IDs que NÃO estão no banco de dados
         ids = ids.filter(id => !setExistentes.has(id));
         console.log(`  🔍 Filtro 'Apenas Novos': A conta tinha ${qtdOriginal} IDs. Ignorando ${setExistentes.size} já existentes. Novos a baixar: ${ids.length}`);
+      } else if (!importarApenasNovos && ids.length > 0) {
+        // ✅ MARCA ANÚNCIOS FINALIZADOS/EXCLUÍDOS COMO CLOSED
+        const upRes = await prisma.anuncioML.updateMany({
+          where: { contaId: String(c.contaId), id: { notIn: ids }, status: { notIn: ['closed', 'inactive'] } },
+          data: { status: 'closed' }
+        });
+        if (upRes.count > 0) {
+          console.log(`  🗑️  ${upRes.count} anúncios antigos marcados como "closed" na conta ${c.contaId}.`);
+        }
       }
 
       contasComIds.push({ contaId: c.contaId, accessToken: freshToken, ids });
@@ -600,6 +609,15 @@ export const mlWorker = new Worker('sync-ml', async (job) => {
     const qtdOriginal = allIds.length;
     allIds = allIds.filter(id => !setExistentes.has(id));
     console.log(`  🔍 Filtro 'Apenas Novos': Total ${qtdOriginal} IDs. Ignorando ${setExistentes.size} já existentes. Novos a baixar: ${allIds.length}`);
+  } else if (!importarApenasNovos && allIds.length > 0) {
+    // ✅ MARCA ANÚNCIOS FINALIZADOS/EXCLUÍDOS COMO CLOSED
+    const upRes = await prisma.anuncioML.updateMany({
+      where: { contaId: String(contaId), id: { notIn: allIds }, status: { notIn: ['closed', 'inactive'] } },
+      data: { status: 'closed' }
+    });
+    if (upRes.count > 0) {
+      console.log(`  🗑️  ${upRes.count} anúncios antigos marcados como "closed" na conta.`);
+    }
   }
 
   if (allIds.length === 0) {

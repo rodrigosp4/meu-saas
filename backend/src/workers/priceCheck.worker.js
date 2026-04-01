@@ -442,7 +442,7 @@ export const priceCheckWorker = new Worker('price-check-v2', async (job) => {
         };
 
         if (inflar > 0 && (status === 'perfeito' || status === 'perfeito_promo')) {
-          await prisma.anuncioML.updateMany({ where: { id: ad.id }, data: { margemPromocional: true } });
+          await prisma.anuncioML.updateMany({ where: { id: ad.id }, data: { margemPromocional: true, inflarPct: inflar } });
         }
         
       } else {

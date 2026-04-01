@@ -24,8 +24,8 @@ router.get('/api/tiny/connect', async (req, res) => {
   }
 
   const params = new URLSearchParams({
-    client_id: user.tinyClientId,
-    redirect_uri: config.tinyRedirectUri,
+    client_id: user.tinyClientId.trim(),
+    redirect_uri: config.tinyRedirectUri.trim(),
     scope: 'openid',
     response_type: 'code',
     state: userId,
@@ -61,9 +61,9 @@ router.get('/api/tiny/callback', async (req, res) => {
       TOKEN_URL,
       new URLSearchParams({
         grant_type: 'authorization_code',
-        client_id: user.tinyClientId,
-        client_secret: user.tinyClientSecret,
-        redirect_uri: config.tinyRedirectUri,
+        client_id: user.tinyClientId.trim(),
+        client_secret: user.tinyClientSecret.trim(),
+        redirect_uri: config.tinyRedirectUri.trim(),
         code,
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }

@@ -169,11 +169,27 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
             logAcao += `Título alterado para: "${novoTitulo}" (Via ${metodoUsado}).`;
 
           } else if (acao === 'editar_descricao') {
+              const sanitizeDescricao = (text) => {
+                if (!text) return '';
+                // Remove emojis e símbolos Unicode fora do range Basic Multilingual Plane (surrogate pairs)
+                // Remove caracteres de controle exceto \n, \r, \t
+                // Remove tags HTML
+                return text
+                  .replace(/<[^>]*>/g, '')                          // remove HTML tags
+                  .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // controle inválidos
+                  .replace(/[\uD800-\uDFFF]/g, '')                   // surrogate pairs soltos
+                  .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')            // emojis e símbolos especiais
+                  .replace(/[\u{20000}-\u{10FFFF}]/gu, '')           // CJK ext e outros acima do BMP
+                  .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u0250-\u036F\u1E00-\u1EFF]/g, ' ') // mantém latin + latin ext, substitui resto por espaço
+                  .replace(/ {2,}/g, ' ')                            // colapsa múltiplos espaços
+                  .trim();
+              };
+              const descricaoSanitizada = sanitizeDescricao(valor);
               try {
-                await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}/description?api_version=2`, { plain_text: valor }, { headers });
+                await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}/description?api_version=2`, { plain_text: descricaoSanitizada }, { headers });
               } catch (e) {
                 if (e.response?.status === 404 || e.response?.data?.error === 'not_found') {
-                  await safeAxios.post(`https://api.mercadolibre.com/items/${item.id}/description`, { plain_text: valor }, { headers });
+                  await safeAxios.post(`https://api.mercadolibre.com/items/${item.id}/description`, { plain_text: descricaoSanitizada }, { headers });
                 } else throw e;
               }
               logAcao += `Descrição atualizada.`;

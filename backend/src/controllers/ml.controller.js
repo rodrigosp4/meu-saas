@@ -722,7 +722,7 @@ async syncAds(req, res) {
         descontoMin = '', descontoMax = '',
         semSku = 'false',
         sortBy = 'padrao',
-        priceCheckStatus = 'Todos', freteGratis = 'Todos', userId = '',
+        priceCheckStatus = 'Todos', freteGratis = 'Todos', produtoFull = 'Todos', userId = '',
         page = 1, limit = 50
       } = req.query;
       const skip = (Number(page) - 1) * Number(limit);
@@ -871,6 +871,14 @@ async syncAds(req, res) {
         anuncios = anuncios.filter(ad => {
           const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
           return freteGratis === 'sim' ? freeShipping : !freeShipping;
+        });
+        total = anuncios.length;
+      }
+
+      if (produtoFull !== 'Todos') {
+        anuncios = anuncios.filter(ad => {
+          const isFull = ad.dadosML?.shipping?.logistic_type === 'fulfillment';
+          return produtoFull === 'sim' ? isFull : !isFull;
         });
         total = anuncios.length;
       }
@@ -1042,7 +1050,7 @@ async syncAds(req, res) {
         contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
         semSku = 'false',
-        priceCheckStatus = 'Todos', freteGratis = 'Todos', userId = '',
+        priceCheckStatus = 'Todos', freteGratis = 'Todos', produtoFull = 'Todos', userId = '',
       } = req.query;
 
       const where = {};
@@ -1116,6 +1124,13 @@ async syncAds(req, res) {
         anunciosFiltrados = anuncios.filter(ad => {
           const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
           return freteGratis === 'sim' ? freeShipping : !freeShipping;
+        });
+      }
+
+      if (produtoFull !== 'Todos') {
+        anunciosFiltrados = anunciosFiltrados.filter(ad => {
+          const isFull = ad.dadosML?.shipping?.logistic_type === 'fulfillment';
+          return produtoFull === 'sim' ? isFull : !isFull;
         });
       }
 

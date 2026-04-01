@@ -22,6 +22,9 @@ const PERMISSIONS_BY_ROLE = {
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  const [assinaturaAtiva, setAssinaturaAtiva] = useState(false);
+  const [assinaturaVerificada, setAssinaturaVerificada] = useState(false);
+
   const [auth, setAuth] = useState(() => {
     try {
       const salvo = localStorage.getItem('saas_auth');
@@ -134,6 +137,26 @@ export function AuthProvider({ children }) {
     return true;
   }, [auth, impersonating, canAccess]);
 
+  // Verifica status de assinatura quando usuário loga
+  useEffect(() => {
+    if (!auth?.token || auth?.user?.role === 'SUPER_ADMIN') {
+      setAssinaturaAtiva(auth?.user?.role === 'SUPER_ADMIN');
+      setAssinaturaVerificada(true);
+      return;
+    }
+    setAssinaturaVerificada(false);
+    fetch('/api/assinatura/status')
+      .then(r => r.json())
+      .then(data => {
+        setAssinaturaAtiva(!!data.ativo);
+        setAssinaturaVerificada(true);
+      })
+      .catch(() => {
+        setAssinaturaAtiva(false);
+        setAssinaturaVerificada(true);
+      });
+  }, [auth?.token]);
+
   const login = useCallback((userData, token) => {
     const authData = { user: userData, token };
     setAuth(authData);
@@ -145,6 +168,8 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     setAuth(null);
     setImpersonatingState(null);
+    setAssinaturaAtiva(false);
+    setAssinaturaVerificada(false);
     localStorage.removeItem('saas_auth');
     localStorage.removeItem('saas_usuario');
     localStorage.removeItem('saas_impersonating');
@@ -182,6 +207,15 @@ export function AuthProvider({ children }) {
         canUseResource,
         isLoggedIn: !!auth,
         role: auth?.user?.role || null,
+        assinaturaAtiva,
+        assinaturaVerificada,
+        recarregarAssinatura: () => {
+          setAssinaturaVerificada(false);
+          fetch('/api/assinatura/status')
+            .then(r => r.json())
+            .then(data => { setAssinaturaAtiva(!!data.ativo); setAssinaturaVerificada(true); })
+            .catch(() => { setAssinaturaAtiva(false); setAssinaturaVerificada(true); });
+        },
         PERMISSIONS_BY_ROLE,
       }}
     >

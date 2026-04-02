@@ -49,6 +49,8 @@ export default function PosVenda({ usuarioId }) {
   const [actionGuide, setActionGuide] = useState(null);
   const [modoActionGuide, setModoActionGuide] = useState(false);
   const [optionSelecionada, setOptionSelecionada] = useState('');
+  const [hoveredConvIdx, setHoveredConvIdx] = useState(null);
+  const [toastDesfazer, setToastDesfazer] = useState(null);
   const chatRef = useRef(null);
 
   // ───── Carregar contas ML ─────
@@ -120,6 +122,58 @@ export default function PosVenda({ usuarioId }) {
     setOptionSelecionada('');
   }
 
+// Dispara a requisição real para o backend
+  async function efetivarMarcaLida(packId, contaId, count) {
+    try {
+      await fetch(`/api/pos-venda/marcar-lida/${packId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contaId, count }),
+      });
+    } catch {}
+  }
+
+  // Ação ao clicar no botão verde (Apenas esconde e inicia o timer)
+  function marcarComoLida(e, conv) {
+    e.stopPropagation();
+    const packId = extrairPackId(conv.resource);
+
+    // Se houver um "desfazer" anterior pendente, efetiva ele antes de iniciar um novo
+    if (toastDesfazer) {
+      clearTimeout(toastDesfazer.timerId);
+      efetivarMarcaLida(toastDesfazer.conv.packId, toastDesfazer.conv.contaId, toastDesfazer.conv.count);
+    }
+
+    // Remove da tela imediatamente
+    setConversas(prev => prev.filter(c => !(extrairPackId(c.resource) === packId && c.contaId === conv.contaId)));
+    
+    // Limpa a tela direita se for a conversa que estava aberta
+    if (conversaSelecionada?.contaId === conv.contaId && extrairPackId(conversaSelecionada?.resource) === packId) {
+      limparDireito();
+    }
+
+    // Inicia um timer de 5 segundos para mandar pro banco de dados e pro ML
+    const timerId = setTimeout(() => {
+      efetivarMarcaLida(packId, conv.contaId, conv.count);
+      setToastDesfazer(null);
+    }, 20000);
+
+    // Mostra o Toast na tela
+    setToastDesfazer({
+      conv: { packId, contaId: conv.contaId, count: conv.count, originalData: conv },
+      timerId
+    });
+  }
+
+  // Cancela a ação de leitura e devolve a mensagem pra lista
+  function desfazerLida() {
+    if (!toastDesfazer) return;
+    clearTimeout(toastDesfazer.timerId); // Cancela o envio pra API
+    // Volta a conversa para a tela
+    setConversas(prev => [toastDesfazer.conv.originalData, ...prev]);
+    setToastDesfazer(null);
+  }
+
   // ───── Abrir uma conversa a partir de packId + contaId ─────
   async function abrirConversa(packId, contaId, nicknameHint) {
     const conv = { resource: `/packs/${packId}/sellers/${contaId}`, contaId, nickname: nicknameHint };
@@ -169,19 +223,40 @@ export default function PosVenda({ usuarioId }) {
     await abrirConversa(id, contaSelecionada, conta?.nickname || '');
   }
 
-  // ───── Enviar mensagem ─────
+// ───── Enviar mensagem ─────
   async function enviarMensagem() {
     if (!texto.trim() || enviando || !conversaSelecionada) return;
     if (texto.trim().length > 350) { setMsgStatus('Máximo 350 caracteres.'); return; }
+    
+    // --- LÓGICA PARA IDENTIFICAR O DESTINATÁRIO CORRETO (RECEIVER ID) ---
+    // Procura no histórico de mensagens a última que não foi enviada por você (o vendedor).
+    const mensagemDoComprador = mensagens.find(
+      (m) => String(m.from?.user_id) !== String(conversaSelecionada.contaId)
+    );
+    
+    // Se achou, usamos o ID de quem enviou. Se não, tentamos pegar o ID do comprador no pedido. 
+    // Como fallback extremo para novas conversas Full sem mensagem anterior, usamos o ID do agente.
+    const MLB_AGENT_ID = '3037675074';
+    const receiverId = mensagemDoComprador 
+      ? mensagemDoComprador.from.user_id 
+      : (pedido?.comprador?.id || MLB_AGENT_ID);
+    // --------------------------------------------------------------------
+
     setEnviando(true);
     setMsgStatus('');
     const packId = extrairPackId(conversaSelecionada.resource);
+    
     try {
       const r = await fetch(`/api/pos-venda/mensagens/${packId}/enviar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contaId: conversaSelecionada.contaId, texto: texto.trim() }),
+        body: JSON.stringify({ 
+          contaId: conversaSelecionada.contaId, 
+          texto: texto.trim(),
+          receiverId: String(receiverId) // <-- Passando o receiverId pro backend
+        }),
       });
+      
       const d = await r.json();
       if (!r.ok) {
         setMsgStatus(`Erro: ${d.erro || 'falha ao enviar'}`);
@@ -323,6 +398,7 @@ export default function PosVenda({ usuarioId }) {
               {conversas.map((conv, i) => {
                 const packId = extrairPackId(conv.resource);
                 const isSelected = conversaSelecionada?.contaId === conv.contaId && extrairPackId(conversaSelecionada?.resource) === packId;
+                const isHovered = hoveredConvIdx === i;
                 return (
                   <div
                     key={i}
@@ -330,16 +406,29 @@ export default function PosVenda({ usuarioId }) {
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0',
-                      backgroundColor: isSelected ? '#1565c0' : 'transparent',
+                      backgroundColor: isSelected ? '#1565c0' : isHovered ? '#f0f4ff' : 'transparent',
                       color: isSelected ? '#fff' : '#333',
                     }}
-                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.backgroundColor = '#f0f4ff'; }}
-                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                    onMouseEnter={() => setHoveredConvIdx(i)}
+                    onMouseLeave={() => setHoveredConvIdx(null)}
                   >
-                    <div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: '0.88em' }}>#{packId}</div>
                       <div style={{ fontSize: '0.76em', color: isSelected ? '#cce' : '#888', marginTop: '1px' }}>{conv.nickname}</div>
                     </div>
+                      {(isHovered || isSelected) && (
+                        <button
+                          onClick={e => marcarComoLida(e, conv)} // <-- Alterado aqui
+                          title="Marcar como lida"
+                          style={{
+                            marginRight: '6px', padding: '2px 7px', fontSize: '0.78em', fontWeight: 700,
+                            backgroundColor: '#27ae60', color: '#fff', border: 'none', borderRadius: '4px',
+                            cursor: 'pointer', flexShrink: 0,
+                          }}
+                        >
+                          ✓ Lida
+                        </button>
+                      )}
                     <span style={{
                       backgroundColor: isSelected ? 'rgba(255,255,255,0.25)' : '#e74c3c',
                       color: '#fff', borderRadius: '10px', padding: '1px 8px', fontSize: '0.82em', fontWeight: 700, flexShrink: 0
@@ -593,6 +682,27 @@ export default function PosVenda({ usuarioId }) {
           </div>
         )}
       </div>
+{/* ═══════════ TOAST DE DESFAZER AQUI ═══════════ */}
+      {toastDesfazer && (
+        <div style={{
+          position: 'fixed', 
+          bottom: '24px', 
+          left: '50%',                           // Centraliza horizontalmente
+          transform: 'translateX(-50%)',         // Ajuste fino para ficar exatamente no meio
+          zIndex: 99999,                         // Aumentei o zIndex por segurança
+          backgroundColor: '#323232', color: '#fff', padding: '14px 20px',
+          borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '20px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)', fontSize: '0.9em'
+        }}>
+          <span>Conversa marcada como lida.</span>
+          <button 
+            onClick={desfazerLida} 
+            style={{ backgroundColor: 'transparent', border: 'none', color: '#4dabf7', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}
+          >
+            DESFAZER
+          </button>
+        </div>
+      )}  
     </div>
   );
 }

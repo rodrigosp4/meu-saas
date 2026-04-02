@@ -83,7 +83,22 @@ export const mensagensController = {
         }
       }
 
-      res.json({ conversas: todasConversas });
+      // Filtrar conversas manualmente marcadas como lidas (a menos que tenham novas mensagens)
+      const silenciadas = await prisma.conversaLida.findMany({
+        where: { userId },
+        select: { contaId: true, packId: true, countAtTime: true },
+      });
+      const silenciadasMap = new Map(silenciadas.map(s => [`${s.contaId}:${s.packId}`, s.countAtTime]));
+
+      const conversasFiltradas = todasConversas.filter(conv => {
+        const packId = conv.resource?.match(/packs\/(\d+)/)?.[1] || '';
+        const key = `${conv.contaId}:${packId}`;
+        const countAtTime = silenciadasMap.get(key);
+        if (countAtTime === undefined) return true; // não silenciada
+        return conv.count > countAtTime; // nova mensagem chegou após marcar como lida
+      });
+
+      res.json({ conversas: conversasFiltradas });
     } catch (error) {
       res.status(500).json({ erro: error.message });
     }
@@ -127,16 +142,16 @@ export const mensagensController = {
     }
   },
 
-  // POST /api/pos-venda/mensagens/:packId/enviar
-  // Body: { contaId, texto, attachments? }
+// POST /api/pos-venda/mensagens/:packId/enviar
   async enviarMensagem(req, res) {
     try {
       const userId = req.userId;
       const { packId } = req.params;
-      const { contaId, texto, attachments } = req.body;
+      const { contaId, texto, attachments, receiverId } = req.body; // <-- receba o receiverId
 
       if (!texto?.trim()) return res.status(400).json({ erro: 'Texto da mensagem é obrigatório' });
       if (texto.trim().length > 350) return res.status(400).json({ erro: 'Mensagem excede 350 caracteres' });
+      if (!receiverId) return res.status(400).json({ erro: 'ID do destinatário (receiverId) é obrigatório' }); // <-- valide
 
       const contas = await getContasDoUsuario(userId);
       const conta = contaId
@@ -150,7 +165,7 @@ export const mensagensController = {
 
       const body = {
         from: { user_id: sellerId },
-        to: { user_id: MLB_AGENT_ID },   // Nova arquitetura: enviar para o Agente MLB
+        to: { user_id: receiverId }, // <-- Use o ID dinâmico passado pelo Front
         text: texto.trim(),
       };
 
@@ -307,6 +322,28 @@ export const mensagensController = {
       const mlStatus = error.response?.status;
       const status = (mlStatus === 401 || mlStatus === 403) ? 502 : (mlStatus || 500);
       res.status(status).json({ erro: error.response?.data?.message || error.message, detalhes: error.response?.data });
+    }
+  },
+
+  // POST /api/pos-venda/marcar-lida/:packId
+  // Body: { contaId, count }
+  async marcarComoLida(req, res) {
+    try {
+      const userId = req.userId;
+      const { packId } = req.params;
+      const { contaId, count } = req.body;
+
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
+
+      await prisma.conversaLida.upsert({
+        where: { userId_contaId_packId: { userId, contaId, packId } },
+        create: { userId, contaId, packId, countAtTime: count ?? 0 },
+        update: { countAtTime: count ?? 0, marcadaEm: new Date() },
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
     }
   },
 

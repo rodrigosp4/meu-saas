@@ -65,6 +65,7 @@ model User {
   acessoLivre          Boolean                 @default(false)
   assinaturas          Assinatura[]
   notificacaoCache     NotificacaoCache?
+  conversasLidas       ConversaLida[]
 }
 
 model Assinatura {
@@ -375,6 +376,20 @@ model PromoAlerta {
 
   @@unique([userId, promoId])
   @@index([userId, aceita])
+}
+
+// ── Conversas marcadas como lidas manualmente ────────────────────────────────
+model ConversaLida {
+  id          String   @id @default(uuid())
+  userId      String
+  contaId     String
+  packId      String
+  countAtTime Int      // contagem de não lidas no momento da marcação
+  marcadaEm   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contaId, packId])
+  @@index([userId])
 }
 
 // ── Cache de Notificações ─────────────────────────────────────────────────────

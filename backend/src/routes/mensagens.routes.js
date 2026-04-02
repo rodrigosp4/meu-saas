@@ -10,6 +10,7 @@ router.get('/api/pos-venda/mensagens/:packId',                   mensagensContro
 router.post('/api/pos-venda/mensagens/:packId/enviar',           mensagensController.enviarMensagem);
 router.get('/api/pos-venda/action-guide/:packId',                mensagensController.getActionGuide);
 router.post('/api/pos-venda/action-guide/:packId/option',        mensagensController.enviarActionGuide);
+router.post('/api/pos-venda/marcar-lida/:packId',                mensagensController.marcarComoLida);
 router.get('/api/pos-venda/pedido/:packId',                      mensagensController.getPedido);
 
 export default router;

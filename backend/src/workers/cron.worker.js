@@ -37,6 +37,13 @@ async function atualizarCacheNotificacoes(userId) {
     select: { id: true, nickname: true, accessToken: true, refreshToken: true },
   });
 
+  // Busca conversas silenciadas para excluí-las da contagem
+  const silenciadas = await prisma.conversaLida.findMany({
+    where: { userId },
+    select: { contaId: true, packId: true, countAtTime: true },
+  });
+  const silenciadasMap = new Map(silenciadas.map(s => [`${s.contaId}:${s.packId}`, s.countAtTime]));
+
   let totalMsgNaoLidas = 0;
   for (const conta of contas) {
     try {
@@ -46,7 +53,15 @@ async function atualizarCacheNotificacoes(userId) {
         { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
       );
       const results = resp.data?.results || [];
-      totalMsgNaoLidas += results.reduce((sum, r) => sum + (r.count || 0), 0);
+      for (const r of results) {
+        const packId = r.resource?.match(/packs\/(\d+)/)?.[1] || '';
+        const key = `${conta.id}:${packId}`;
+        const countAtTime = silenciadasMap.get(key);
+        // Inclui só se não está silenciada ou se chegou nova mensagem
+        if (countAtTime === undefined || r.count > countAtTime) {
+          totalMsgNaoLidas += r.count || 0;
+        }
+      }
       await delay(300);
     } catch (e) {
       if (e.response?.status === 429) await delay(2000);

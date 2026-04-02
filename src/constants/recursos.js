@@ -1,6 +1,6 @@
 // Lista de módulos (telas) — mesma usada no AdminPanel e AuthContext
 export const MODULOS = [
-  { id: 'produtosErp',          label: 'Produtos do ERP' },
+  { id: 'produtosErp',          label: 'Cadastro Individual' },
   { id: 'cadastramentoMassa',   label: 'Cadastro em Massa (IA)' },
   { id: 'gerenciadorML',        label: 'Gerenciador ML' },
   { id: 'replicadorAnuncio',    label: 'Replicador de Anúncio' },

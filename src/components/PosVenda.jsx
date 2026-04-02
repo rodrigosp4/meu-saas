@@ -31,7 +31,7 @@ function formatarData(iso) {
 
 export default function PosVenda({ usuarioId }) {
   const [contas, setContas] = useState([]);
-  const [contaSelecionada, setContaSelecionada] = useState('');
+  const [contaSelecionada, setContaSelecionada] = useState(''); // '' = todas as contas
   const [aba, setAba] = useState('nao-lidas'); // 'nao-lidas' | 'recentes' | 'buscar'
   const [apenasComMensagens, setApenasComMensagens] = useState(false);
   const [conversas, setConversas] = useState([]);     // para aba nao-lidas
@@ -58,7 +58,7 @@ export default function PosVenda({ usuarioId }) {
       .then(d => {
         const lista = d.contas || [];
         setContas(lista);
-        if (lista.length > 0) setContaSelecionada(lista[0].id);
+        // Mantém 'Todas as contas' como padrão (contaSelecionada = '')
       })
       .catch(() => {});
   }, []);
@@ -98,10 +98,10 @@ export default function PosVenda({ usuarioId }) {
 
   // ───── Disparar busca ao mudar aba ou conta ─────
   useEffect(() => {
-    if (!contaSelecionada) return;
+    if (contas.length === 0) return; // aguarda contas carregarem
     if (aba === 'nao-lidas') buscarNaoLidas();
     else if (aba === 'recentes') buscarRecentes();
-  }, [aba, contaSelecionada]);
+  }, [aba, contaSelecionada, contas.length]);
 
   // ───── Scroll para o final do chat ─────
   useEffect(() => {
@@ -163,7 +163,8 @@ export default function PosVenda({ usuarioId }) {
   // ───── Busca manual por pack/pedido ─────
   async function executarBusca() {
     const id = buscaInput.trim();
-    if (!id || !contaSelecionada) return;
+    if (!id) return;
+    if (!contaSelecionada) { setMsgStatus('Selecione uma conta específica para buscar.'); return; }
     const conta = contas.find(c => c.id === contaSelecionada);
     await abrirConversa(id, contaSelecionada, conta?.nickname || '');
   }
@@ -268,8 +269,9 @@ export default function PosVenda({ usuarioId }) {
               onChange={e => setContaSelecionada(e.target.value)}
               style={{ fontSize: '0.82em', padding: '4px 8px', border: '1px solid #ccc', borderRadius: '4px', flex: 1, minWidth: 0 }}
             >
+              <option value="">Todas as contas</option>
               {contas.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
-              {contas.length === 0 && <option value="">Nenhuma conta ML</option>}
+              {contas.length === 0 && <option disabled value="">Nenhuma conta ML</option>}
             </select>
             <button
               onClick={() => { if (aba === 'nao-lidas') buscarNaoLidas(); else if (aba === 'recentes') buscarRecentes(); }}
@@ -477,7 +479,11 @@ export default function PosVenda({ usuarioId }) {
                 ) : mensagens.length === 0 ? (
                   <div style={{ textAlign: 'center', color: '#aaa', fontSize: '0.85em', padding: '20px' }}>Nenhuma mensagem nesta conversa.</div>
                 ) : (
-                  mensagens.map((msg, i) => {
+                  [...mensagens].sort((a, b) => {
+                    const da = new Date(a.message_date?.created || a.message_date?.received || 0);
+                    const db = new Date(b.message_date?.created || b.message_date?.received || 0);
+                    return da - db;
+                  }).map((msg, i) => {
                     const fromId = String(msg.from?.user_id);
                     const deLado = fromId === conversaSelecionada.contaId ? 'direita' : 'esquerda';
                     const modStatus = msg.message_moderation?.status;

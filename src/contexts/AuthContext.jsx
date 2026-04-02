@@ -69,16 +69,30 @@ export function AuthProvider({ children }) {
         };
       }
       const response = await originalFetch(url, options);
-      // Auto-logout em caso de token inválido/expirado (exceto rotas públicas)
-      if (response.status === 401 && typeof url === 'string' && url.startsWith('/api') &&
-          !url.includes('/api/login') && !url.includes('/api/register') &&
-          !url.includes('/api/forgot-password') && !url.includes('/api/reset-password')) {
-        // Limpa tudo e volta pro login
-        setAuth(null);
-        setImpersonatingState(null);
-        localStorage.removeItem('saas_auth');
-        localStorage.removeItem('saas_usuario');
-        localStorage.removeItem('saas_impersonating');
+      if (typeof url === 'string' && url.startsWith('/api')) {
+        // Token Tiny expirado — avisa sem deslogar
+        if (response.status === 503) {
+          const clone = response.clone();
+          clone.json().then(data => {
+            if (data?.tinyTokenInvalid) {
+              const key = 'tiny_token_alert_shown';
+              if (!sessionStorage.getItem(key)) {
+                sessionStorage.setItem(key, '1');
+                alert('Sua conexão com o Tiny ERP expirou. Vá em Configurações para reconectar.');
+              }
+            }
+          }).catch(() => {});
+        }
+        // Auto-logout em caso de token SaaS inválido/expirado (exceto rotas públicas)
+        if (response.status === 401 &&
+            !url.includes('/api/login') && !url.includes('/api/register') &&
+            !url.includes('/api/forgot-password') && !url.includes('/api/reset-password')) {
+          setAuth(null);
+          setImpersonatingState(null);
+          localStorage.removeItem('saas_auth');
+          localStorage.removeItem('saas_usuario');
+          localStorage.removeItem('saas_impersonating');
+        }
       }
       return response;
     };

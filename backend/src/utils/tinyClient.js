@@ -80,7 +80,15 @@ export async function refreshTinyToken(userId, refreshToken, clientId, clientSec
 
     return access_token;
   } catch (error) {
-    console.error(`Falha na renovação do token Tiny para usuário ${userId}:`, error.response?.data || error.message);
+    const errData = error.response?.data;
+    console.error(`Falha na renovação do token Tiny para usuário ${userId}:`, errData || error.message);
+    // Se o refresh token expirou/foi revogado, limpa os tokens no banco
+    if (errData?.error === 'invalid_grant') {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { tinyAccessToken: null, tinyRefreshToken: null, tinyTokenExpiresAt: null },
+      }).catch(() => {});
+    }
     return null;
   }
 }

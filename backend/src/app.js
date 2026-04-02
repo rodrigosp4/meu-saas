@@ -17,6 +17,7 @@ import mensagensRoutes from './routes/mensagens.routes.js';
 import tinyAuthRoutes from './routes/tiny.auth.routes.js';
 import assinaturaRoutes from './routes/assinatura.routes.js';
 import tabelaMedidasRoutes from './routes/tabela-medidas.routes.js';
+import notificacoesRoutes from './routes/notificacoes.routes.js';
 import { authMiddleware } from './middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +49,7 @@ app.use(mensagensRoutes);
 app.use(tinyAuthRoutes);
 app.use(assinaturaRoutes);
 app.use(tabelaMedidasRoutes);
+app.use(notificacoesRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

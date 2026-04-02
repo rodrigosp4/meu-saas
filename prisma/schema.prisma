@@ -64,6 +64,7 @@ model User {
   // Assinatura
   acessoLivre          Boolean                 @default(false)
   assinaturas          Assinatura[]
+  notificacaoCache     NotificacaoCache?
 }
 
 model Assinatura {
@@ -374,4 +375,13 @@ model PromoAlerta {
 
   @@unique([userId, promoId])
   @@index([userId, aceita])
+}
+
+// ── Cache de Notificações ─────────────────────────────────────────────────────
+model NotificacaoCache {
+  userId             String   @id
+  msgNaoLidas        Int      @default(0)
+  perguntasPendentes Int      @default(0)
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

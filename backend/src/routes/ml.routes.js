@@ -23,6 +23,7 @@ router.post('/api/ml/publish', mlController.publish);
 router.post('/api/ml/sync-ads', mlController.syncAds);
 router.post('/api/ml/sync-all-ads', mlController.syncAllAds);
 router.get('/api/ml/sync-ads-status/:id', mlController.getSyncStatus);
+router.delete('/api/ml/sync-ads/:id', mlController.cancelSync);
 router.get('/api/ml/anuncios', mlController.getAds);
 
 // ✅ NOVO: Endpoint para listar tags únicas dos anúncios

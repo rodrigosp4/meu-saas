@@ -39,12 +39,50 @@ const CAMPOS_FICHA = [
   { id: 'WARRANTY',    label: 'Garantia',                 placeholder: 'Ex: 12 meses' },
 ];
 
-function ModalFichaTecnica({ anuncio, onClose }) {
-  const [valores, setValores] = useState({});
+function ModalFichaTecnica({ anuncio, usuarioId, onClose }) {
+  const [valores, setValores] = useState(() => {
+    const v = {};
+    const attrList = anuncio?.dadosML?.attributes || [];
+    for (const a of attrList) {
+      const val = a.value_name || (a.value_struct?.number ? String(a.value_struct.number) : '');
+      if (val) v[a.id] = val;
+    }
+    return v;
+  });
+  const [enviando, setEnviando] = useState(false);
 
   if (!anuncio) return null;
 
   const handleChange = (id, val) => setValores(prev => ({ ...prev, [id]: val }));
+
+  const handleSalvar = async () => {
+    const atributosParaEnviar = CAMPOS_FICHA
+      .filter(c => String(valores[c.id] || '').trim())
+      .map(c => ({ id: c.id, value_name: String(valores[c.id]).trim() }));
+
+    if (!atributosParaEnviar.length) return alert('Preencha pelo menos um campo.');
+    setEnviando(true);
+    try {
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: usuarioId,
+          items: [{ id: anuncio.id, contaId: anuncio.contaId }],
+          acao: 'atualizar_atributos',
+          valor: atributosParaEnviar,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.erro || data?.message || 'Erro ao salvar');
+      alert(`✅ ${atributosParaEnviar.length} atributo(s) enfileirado(s)!\nAcompanhe na aba "Gerenciador de Fila".`);
+      onClose();
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setEnviando(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -94,26 +132,23 @@ function ModalFichaTecnica({ anuncio, onClose }) {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3">
-          <span className="text-xs text-gray-400 italic">* Integração com API em breve</span>
-          <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
-            >
-              Cancelar
-            </button>
-            <button
-              disabled
-              title="Integração com ML em desenvolvimento"
-              className="px-5 py-2 text-sm font-black text-white bg-amber-500 rounded-lg opacity-60 cursor-not-allowed flex items-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Salvar na ML (em breve)
-            </button>
-          </div>
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSalvar}
+            disabled={enviando}
+            className="px-5 py-2 text-sm font-black text-white bg-amber-500 rounded-lg hover:bg-amber-600 disabled:opacity-50 transition flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            {enviando ? 'Enviando...' : 'Salvar na ML'}
+          </button>
         </div>
       </div>
     </div>
@@ -2281,6 +2316,16 @@ const getSelectedItemsData = () => {
     }
   };
 
+  const cancelarSincronizacaoML = async () => {
+    if (!activeJobId) return;
+    try {
+      await fetch(`/api/ml/sync-ads/${activeJobId}`, { method: 'DELETE' });
+    } catch (_) {}
+    setActiveJobId(null);
+    localStorage.removeItem('ml_sync_job_id');
+    setSyncProgress(null);
+  };
+
 // ✅ 3. MODIFIQUE A FUNÇÃO DE INICIAR A SINCRONIZAÇÃO
   const iniciarSincronizacaoML = async () => {
     if (!contaParaSincronizar) return alert("Selecione uma conta para puxar os anúncios.");
@@ -2535,8 +2580,20 @@ const handleFetchBySku = async () => {
           <p className="text-sm text-gray-500 mb-2">{total} anúncios sincronizados no banco local.</p>
           
           {syncProgress !== null && (
-            <div className="w-64 mt-2">
-               <div className="flex justify-between mb-1"><span className="text-xs font-bold text-green-700">Lendo API do ML...</span><span className="text-xs font-bold text-green-700">{syncProgress}%</span></div>
+            <div className="w-72 mt-2">
+               <div className="flex justify-between mb-1">
+                 <span className="text-xs font-bold text-green-700">Lendo API do ML...</span>
+                 <div className="flex items-center gap-2">
+                   <span className="text-xs font-bold text-green-700">{syncProgress}%</span>
+                   <button
+                     onClick={cancelarSincronizacaoML}
+                     className="text-xs font-bold text-red-600 hover:text-red-800 underline leading-none"
+                     title="Cancelar varredura"
+                   >
+                     Cancelar
+                   </button>
+                 </div>
+               </div>
                <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-green-500 h-2 rounded-full transition-all duration-500" style={{ width: `${syncProgress}%` }}></div></div>
             </div>
           )}
@@ -3694,7 +3751,7 @@ const handleFetchBySku = async () => {
       </div>
     </div>
 
-    <ModalFichaTecnica anuncio={fichaTecnicaModal} onClose={() => setFichaTecnicaModal(null)} />
+    <ModalFichaTecnica anuncio={fichaTecnicaModal} usuarioId={usuarioId} onClose={() => setFichaTecnicaModal(null)} />
 
     {modalCorrigirPreco && (
       <ModalCorrigirPreco

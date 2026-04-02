@@ -14,6 +14,59 @@ const connection = {
 
 const ML_BASE = 'https://api.mercadolibre.com';
 
+// ===== HELPER: token por conta (para notificações) =====
+async function getTokenParaConta(conta) {
+  try {
+    const refreshed = await mlService.refreshToken(conta.refreshToken);
+    const token = refreshed?.access_token || conta.accessToken;
+    if (refreshed?.access_token) {
+      await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token } }).catch(() => {});
+    }
+    return token;
+  } catch {
+    return conta.accessToken;
+  }
+}
+
+// ===== VERIFICAR MENSAGENS NÃO LIDAS + PERGUNTAS PENDENTES =====
+async function atualizarCacheNotificacoes(userId) {
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const contas = await prisma.contaML.findMany({
+    where: { userId },
+    select: { id: true, nickname: true, accessToken: true, refreshToken: true },
+  });
+
+  let totalMsgNaoLidas = 0;
+  for (const conta of contas) {
+    try {
+      const token = await getTokenParaConta(conta);
+      const resp = await axios.get(
+        `${ML_BASE}/messages/unread?role=seller&tag=post_sale`,
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+      );
+      const results = resp.data?.results || [];
+      totalMsgNaoLidas += results.reduce((sum, r) => sum + (r.count || 0), 0);
+      await delay(300);
+    } catch (e) {
+      if (e.response?.status === 429) await delay(2000);
+    }
+  }
+
+  const perguntasPendentes = await prisma.perguntaML.count({
+    where: {
+      conta: { userId },
+      status: 'UNANSWERED',
+    },
+  });
+
+  await prisma.notificacaoCache.upsert({
+    where: { userId },
+    create: { userId, msgNaoLidas: totalMsgNaoLidas, perguntasPendentes },
+    update: { msgNaoLidas: totalMsgNaoLidas, perguntasPendentes },
+  });
+}
+
 // ===== MONITOR DE PROMOÇÕES =====
 async function verificarMonitorPromocoes(userId) {
   const cfg = await prisma.monitorPromoConfig.findUnique({ where: { userId } });
@@ -243,6 +296,16 @@ async function registrarAgendamento() {
     }
   );
   console.log('📅 Agendamento registrado: atualizar concorrentes a cada 6h');
+
+  await cronQueue.add(
+    'verificar-notificacoes',
+    {},
+    {
+      jobId: 'verificar-notificacoes-cron',
+      repeat: { cron: '0 * * * *', tz: 'America/Sao_Paulo' }, // a cada 1 hora
+    }
+  );
+  console.log('📅 Agendamento registrado: verificar notificações a cada 1h');
 }
 
 registrarAgendamento().catch(err =>
@@ -251,6 +314,21 @@ registrarAgendamento().catch(err =>
 
 // ===== WORKER: processa os jobs agendados =====
 export const cronWorker = new Worker('cron-agenda', async (job) => {
+
+  // ── Verificar mensagens não lidas e perguntas pendentes ───────────────────
+  if (job.name === 'verificar-notificacoes') {
+    console.log('⏰ [Cron] Verificando notificações (mensagens + perguntas)...');
+    const usuarios = await prisma.user.findMany({ select: { id: true } });
+    for (const user of usuarios) {
+      try {
+        await atualizarCacheNotificacoes(user.id);
+      } catch (e) {
+        console.error(`[Cron-Notif] Erro para userId=${user.id}:`, e.message);
+      }
+    }
+    console.log(`✅ [Cron-Notif] Cache atualizado para ${usuarios.length} usuário(s).`);
+    return { usuarios: usuarios.length };
+  }
 
   // ── Atualização automática de preços de concorrentes ──────────────────────
   if (job.name === 'atualizar-concorrentes') {

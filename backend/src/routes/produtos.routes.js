@@ -364,6 +364,17 @@ router.get('/api/produtos/sync-status/:id', async (req, res) => {
   }
 });
 
+router.delete('/api/produtos/sync-status/:id', async (req, res) => {
+  try {
+    const job = await syncQueue.getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job não encontrado' });
+    await job.remove();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ erro: "Falha ao cancelar Job." });
+  }
+});
+
 router.post('/api/tiny-produto-detalhes', async (req, res) => {
   const { id, userId } = req.body;
   if (!id) return res.status(400).json({ erro: 'ID obrigatório.' });
@@ -371,7 +382,7 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
   try {
     const uid = userId || req.userId;
     const token = await getTinyAccessToken(uid);
-    if (!token) return res.status(401).json({ erro: 'Conta Tiny não conectada. Conecte em Configurações.' });
+    if (!token) return res.status(503).json({ erro: 'Token Tiny expirado ou inválido. Reconecte em Configurações.', tinyTokenInvalid: true });
 
     const client = createTinyClient(token);
     const det = await obterProduto(client, id);

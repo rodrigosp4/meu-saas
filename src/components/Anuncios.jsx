@@ -167,6 +167,16 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
     fetchProdutos();
   }, [currentPage, searchTerm, statusFilter]);
   
+  const cancelarSincronizacaoERP = async () => {
+    if (!activeJobId) return;
+    try {
+      await fetch(`/api/produtos/sync-status/${activeJobId}`, { method: 'DELETE' });
+    } catch (_) {}
+    setActiveJobId(null);
+    localStorage.removeItem('tiny_sync_job_id');
+    setSyncProgress(null);
+  };
+
   // ✅ MODIFICADO: para aceitar 'ids' e limpar seleção
   const iniciarSincronizacao = async (mode = 'all', sku = '', ids =[]) => {
     if (!tinyToken && !tinyConectado) {
@@ -365,9 +375,19 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                   <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
                     {syncProgress === "Fila" ? "Aguardando na fila..." : "Sincronizando com o Tiny..."}
                   </span>
-                  <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
-                    {syncProgress === "Fila" ? "..." : `${syncProgress}%`}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
+                      {syncProgress === "Fila" ? "..." : `${syncProgress}%`}
+                    </span>
+                    <button
+                      onClick={cancelarSincronizacaoERP}
+                      className="text-xs font-bold underline leading-none"
+                      style={{ color: '#c0392b' }}
+                      title="Cancelar varredura"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
                 </div>
                 <div className="w-full rounded-full h-2" style={{ backgroundColor: '#e0e0e0' }}>
                   <div className="h-2 rounded-full transition-all duration-500" 

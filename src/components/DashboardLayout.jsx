@@ -189,7 +189,7 @@ const pageTitles = {
   adminPanel: 'Painel Super Admin',
   agendadorTarefas: 'Agendador de Tarefas',
   home: 'Início',
-  produtosErp: 'Produtos do ERP',
+  produtosErp: 'Cadastro Individual',
   cadastramentoMassa: 'Cadastramento em Massa com IA',
   gerenciadorML: 'Gerenciador ML',
   criarAnuncio: 'Criar Anúncio',
@@ -220,6 +220,32 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const isSuperAdmin = role === 'SUPER_ADMIN' && !impersonating;
   const { drafts } = useDraftManager(usuarioId);
+
+  // ── Notificações ──────────────────────────────────────────────────────────
+  const [notif, setNotif] = useState({ msgNaoLidas: 0, perguntasPendentes: 0 });
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+
+  useEffect(() => {
+    const fetchNotif = async () => {
+      try {
+        const r = await fetch('/api/notificacoes/contagem');
+        if (r.ok) setNotif(await r.json());
+      } catch {}
+    };
+    fetchNotif();
+    const interval = setInterval(fetchNotif, 5 * 60 * 1000); // a cada 5 min
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fecha dropdown de notificações ao clicar fora
+  useEffect(() => {
+    if (!showNotifDropdown) return;
+    const fn = (e) => {
+      if (!e.target.closest('[data-notif-dropdown]')) setShowNotifDropdown(false);
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [showNotifDropdown]);
 
   // No desktop: sidebar colapsa quando não está em hover
   const collapsed = !isMobile && !sidebarHovered;
@@ -253,7 +279,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     { id: 'adminPanel',          label: 'Painel Admin',           icon: icons.shield },
     { id: 'agendadorTarefas',    label: 'Agendador de Tarefas',   icon: icons.clock },
     { id: 'home',                label: 'Início',                 icon: icons.home },
-    { id: 'produtosErp',         label: 'Produtos do ERP',        icon: icons.box },
+    { id: 'produtosErp',         label: 'Cadastro Individual',    icon: icons.box },
     { id: 'cadastramentoMassa',  label: 'Cadastro em Massa (IA)', icon: icons.mass },
     { id: 'gerenciadorML',       label: 'Gerenciador ML',         icon: icons.list },
     { id: 'replicadorAnuncio',   label: 'Replicador de Anúncio',  icon: icons.copy },
@@ -610,18 +636,119 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
               </h1>
             </div>
 
-            {/* Versão — oculta em telas muito pequenas */}
-            {!isMobile && (
-              <div style={{
-                fontSize: '0.85em', color: '#555',
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-              }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 20V10M12 20V4M6 20v-6" />
-                </svg>
-                MELIUNLOCKER v1.0
+            {/* Notificações + Versão */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+
+              {/* Sino de notificações */}
+              <div data-notif-dropdown style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setShowNotifDropdown(v => !v)}
+                  title="Notificações"
+                  style={{
+                    position: 'relative', background: 'none', border: 'none',
+                    cursor: 'pointer', padding: '6px', borderRadius: 6,
+                    display: 'flex', alignItems: 'center', color: '#555',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#f0f0f0'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  </svg>
+                  {(notif.msgNaoLidas + notif.perguntasPendentes) > 0 && (
+                    <span style={{
+                      position: 'absolute', top: 2, right: 2,
+                      backgroundColor: '#e74c3c', color: '#fff',
+                      borderRadius: '50%', width: 16, height: 16,
+                      fontSize: '0.65em', fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      lineHeight: 1,
+                    }}>
+                      {Math.min(notif.msgNaoLidas + notif.perguntasPendentes, 99)}
+                    </span>
+                  )}
+                </button>
+
+                {showNotifDropdown && (
+                  <div style={{
+                    position: 'absolute', right: 0, top: 'calc(100% + 6px)',
+                    backgroundColor: '#fff', border: '1px solid #e0e0e0',
+                    borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                    minWidth: 260, zIndex: 2000, overflow: 'hidden',
+                  }}>
+                    <div style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', fontSize: '0.78em', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Notificações
+                    </div>
+
+                    {notif.msgNaoLidas === 0 && notif.perguntasPendentes === 0 ? (
+                      <div style={{ padding: '14px', fontSize: '0.85em', color: '#aaa', textAlign: 'center' }}>
+                        Nenhuma notificação pendente
+                      </div>
+                    ) : (
+                      <>
+                        {notif.msgNaoLidas > 0 && (
+                          <button
+                            onClick={() => { setActivePage('posVenda'); setShowNotifDropdown(false); }}
+                            style={{
+                              width: '100%', textAlign: 'left', padding: '11px 14px',
+                              background: 'none', border: 'none', borderBottom: '1px solid #f5f5f5',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+                              transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#f8f9ff'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                          >
+                            <span style={{ fontSize: '1.1em' }}>💬</span>
+                            <div>
+                              <div style={{ fontSize: '0.85em', fontWeight: 600, color: '#2c3e50' }}>
+                                {notif.msgNaoLidas} mensagem{notif.msgNaoLidas !== 1 ? 's' : ''} não lida{notif.msgNaoLidas !== 1 ? 's' : ''}
+                              </div>
+                              <div style={{ fontSize: '0.75em', color: '#888' }}>Clique para abrir Pós-Venda</div>
+                            </div>
+                          </button>
+                        )}
+                        {notif.perguntasPendentes > 0 && (
+                          <button
+                            onClick={() => { setActivePage('perguntasPreVenda'); setShowNotifDropdown(false); }}
+                            style={{
+                              width: '100%', textAlign: 'left', padding: '11px 14px',
+                              background: 'none', border: 'none',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+                              transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#f8f9ff'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                          >
+                            <span style={{ fontSize: '1.1em' }}>❓</span>
+                            <div>
+                              <div style={{ fontSize: '0.85em', fontWeight: 600, color: '#2c3e50' }}>
+                                {notif.perguntasPendentes} pergunta{notif.perguntasPendentes !== 1 ? 's' : ''} pendente{notif.perguntasPendentes !== 1 ? 's' : ''}
+                              </div>
+                              <div style={{ fontSize: '0.75em', color: '#888' }}>Clique para abrir Perguntas</div>
+                            </div>
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Versão — oculta em telas muito pequenas */}
+              {!isMobile && (
+                <div style={{
+                  fontSize: '0.85em', color: '#555',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 20V10M12 20V4M6 20v-6" />
+                  </svg>
+                  MELIUNLOCKER v1.0
+                </div>
+              )}
+            </div>
           </header>
 
           {/* Conteúdo principal */}

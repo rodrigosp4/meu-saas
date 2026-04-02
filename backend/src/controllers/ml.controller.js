@@ -711,6 +711,15 @@ async syncAds(req, res) {
     } catch (e) { res.status(500).json({ erro: e.message }); }
   },
 
+  async cancelSync(req, res) {
+    try {
+      const job = await mlSyncQueue.getJob(req.params.id);
+      if (!job) return res.status(404).json({ error: 'Job não encontrado' });
+      await job.remove();
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ erro: e.message }); }
+  },
+
 // ============================================================================
   // ✅ ATUALIZADO: getAds agora suporta filtros de Promoção, Preço e Prazo
   // ============================================================================

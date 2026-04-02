@@ -2286,6 +2286,12 @@ async syncPerguntasIniciais(req, res) {
         }
       } catch {}
 
+      // Desativa automação de preço antes de atualizar (bloqueio ML desde 18/03/2026)
+      try {
+        await axios.get(`https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 });
+        await axios.delete(`https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 });
+      } catch (e) { /* 404 = sem automação, ok */ }
+
       // Busca o ID do preço padrão atual
       const precosRes = await axios.get(`https://api.mercadolibre.com/items/${itemId}/prices`, {
         headers: { Authorization: `Bearer ${accessToken}`, 'show-all-prices': 'true' }
@@ -2332,103 +2338,192 @@ async syncPerguntasIniciais(req, res) {
     try {
       const { userId, contaId, offset = 0, limit = 20 } = req.query;
 
-      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
-      if (!conta) return res.status(404).json({ erro: 'Conta não encontrada' });
+      // ── 1. Determina contas a consultar ──────────────────────────────────
+      const todasContas = contaId === 'all' || !contaId;
+      let contas = [];
+      if (todasContas) {
+        contas = await prisma.contaML.findMany({ where: { userId } });
+      } else {
+        const c = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+        if (!c) return res.status(404).json({ erro: 'Conta não encontrada' });
+        contas = [c];
+      }
+      if (contas.length === 0) return res.json({ items: [], total: 0 });
 
-      let token = conta.accessToken;
-      try {
-        const r = await mlService.refreshToken(conta.refreshToken);
-        if (r?.access_token) {
-          token = r.access_token;
-          await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: r.refresh_token || conta.refreshToken } }).catch(() => {});
+      // ── 2. Renova tokens e monta mapa contaId → { token, headers, nickname } ──
+      const contaMap = {};
+      await Promise.all(contas.map(async (conta) => {
+        let token = conta.accessToken;
+        try {
+          const r = await mlService.refreshToken(conta.refreshToken);
+          if (r?.access_token) {
+            token = r.access_token;
+            await prisma.contaML.update({ where: { id: conta.id }, data: { accessToken: token, refreshToken: r.refresh_token || conta.refreshToken } }).catch(() => {});
+          }
+        } catch {}
+        contaMap[conta.id] = { token, headers: { Authorization: `Bearer ${token}` }, nickname: conta.nickname };
+      }));
+
+      // ── 3. Busca IDs com sugestão + IDs com automação — todas as contas em paralelo ──
+      const allEntriesByAccount = await Promise.allSettled(contas.map(async (conta) => {
+        const headers = contaMap[conta.id].headers;
+        let suggestionIds = [];
+        try {
+          const r = await axios.get(`https://api.mercadolibre.com/suggestions/user/${conta.id}/items`, { headers, timeout: 15000 });
+          suggestionIds = r.data.items || [];
+        } catch {}
+
+        const automatedIds = new Set();
+        try {
+          let ao = 0;
+          while (true) {
+            const r = await axios.get(`https://api.mercadolibre.com/pricing-automation/users/${conta.id}/items?limit=100&offset=${ao}`, { headers, timeout: 10000 });
+            const pg = r.data.items || [];
+            pg.forEach(id => automatedIds.add(id));
+            ao += pg.length;
+            if (ao >= (r.data.paging?.total || 0) || pg.length === 0) break;
+          }
+        } catch {}
+
+        return { contaId: conta.id, suggestionIds, automatedIds };
+      }));
+
+      // Achata em lista global: { itemId, contaId, automatedIds }
+      // Garante que o mesmo itemId não apareça duplicado (mesma conta)
+      const seenItems = new Set();
+      const allItems = []; // { itemId, contaId, isAutomated }
+      for (const result of allEntriesByAccount) {
+        if (result.status !== 'fulfilled') continue;
+        const { contaId: cid, suggestionIds, automatedIds } = result.value;
+        for (const itemId of suggestionIds) {
+          const key = `${cid}:${itemId}`;
+          if (seenItems.has(key)) continue;
+          seenItems.add(key);
+          allItems.push({ itemId, contaId: cid, isAutomated: automatedIds.has(itemId) });
         }
-      } catch {}
-      const headers = { Authorization: `Bearer ${token}` };
-
-      // 1. Busca IDs com sugestão de preço
-      let allSuggestionIds = [];
-      try {
-        const sugRes = await axios.get(
-          `https://api.mercadolibre.com/suggestions/user/${conta.id}/items`,
-          { headers, timeout: 15000 }
-        );
-        allSuggestionIds = sugRes.data.items || [];
-      } catch (e) {
-        if (e.response?.status === 404) return res.json({ items: [], total: 0 });
-        return res.status(500).json({ erro: 'Erro ao buscar sugestões de preço', detalhes: e.response?.data });
       }
 
-      // 2. Busca IDs com automação ativa
-      const automatedIds = new Set();
-      try {
-        let autoOffset = 0;
-        while (true) {
-          const autoRes = await axios.get(
-            `https://api.mercadolibre.com/pricing-automation/users/${conta.id}/items?limit=100&offset=${autoOffset}`,
-            { headers, timeout: 10000 }
-          );
-          const pageItems = autoRes.data.items || [];
-          pageItems.forEach(id => automatedIds.add(id));
-          autoOffset += pageItems.length;
-          if (autoOffset >= (autoRes.data.paging?.total || 0) || pageItems.length === 0) break;
-        }
-      } catch {}
+      const total = allItems.length;
+      const pageEntries = allItems.slice(Number(offset), Number(offset) + Number(limit));
+      if (pageEntries.length === 0) return res.json({ items: [], total, offset: Number(offset), limit: Number(limit) });
 
-      // 3. Paginação
-      const pageIds = allSuggestionIds.slice(Number(offset), Number(offset) + Number(limit));
-      if (pageIds.length === 0) return res.json({ items: [], total: allSuggestionIds.length, offset: Number(offset), limit: Number(limit) });
+      const pageIds = pageEntries.map(e => e.itemId);
+      const pageContaMap = Object.fromEntries(pageEntries.map(e => [e.itemId, e.contaId]));
+      const pageAutomatedSet = new Set(pageEntries.filter(e => e.isAutomated).map(e => e.itemId));
 
-      // 4. Enriquece com título/thumbnail do banco ou da API do ML
+      // ── 4. Carrega dados dos itens do banco (título, preço, SKU, estoque) ──
       const dbAds = await prisma.anuncioML.findMany({
         where: { id: { in: pageIds } },
-        select: { id: true, dadosML: true, preco: true }
+        select: { id: true, dadosML: true, preco: true, contaId: true }
       });
       const itemInfo = {};
       for (const ad of dbAds) {
-        itemInfo[ad.id] = { title: ad.dadosML?.title || ad.id, price: ad.preco || ad.dadosML?.price || 0, thumbnail: ad.dadosML?.thumbnail };
+        const attrs = ad.dadosML?.attributes || [];
+        const skuAttr = attrs.find(a => a.id === 'SELLER_SKU');
+        const sku = (skuAttr?.value_name && skuAttr.value_name !== '-1') ? skuAttr.value_name : (ad.dadosML?.seller_custom_field || null);
+        itemInfo[ad.id] = {
+          title: ad.dadosML?.title || ad.id,
+          price: ad.preco || ad.dadosML?.price || 0,
+          thumbnail: ad.dadosML?.thumbnail,
+          sku,
+          availableQuantity: ad.dadosML?.available_quantity ?? null,
+        };
       }
+
+      // Itens não encontrados no banco: busca na API do ML em lote
       const missingIds = pageIds.filter(id => !itemInfo[id]);
       if (missingIds.length > 0) {
-        try {
-          const chunks = [];
-          for (let i = 0; i < missingIds.length; i += 20) chunks.push(missingIds.slice(i, i + 20));
-          for (const chunk of chunks) {
-            const r = await axios.get(
-              `https://api.mercadolibre.com/items?ids=${chunk.join(',')}&attributes=id,title,price,thumbnail`,
-              { headers, timeout: 15000 }
-            );
+        const chunks = [];
+        for (let i = 0; i < missingIds.length; i += 20) chunks.push(missingIds.slice(i, i + 20));
+        for (const chunk of chunks) {
+          const cid = pageContaMap[chunk[0]];
+          const headers = contaMap[cid]?.headers || {};
+          try {
+            const r = await axios.get(`https://api.mercadolibre.com/items?ids=${chunk.join(',')}&attributes=id,title,price,thumbnail,available_quantity,seller_custom_field,attributes`, { headers, timeout: 15000 });
             for (const entry of (r.data || [])) {
               if (entry.code === 200 && entry.body) {
-                itemInfo[entry.body.id] = { title: entry.body.title, price: entry.body.price, thumbnail: entry.body.thumbnail };
+                const b = entry.body;
+                const attrs = b.attributes || [];
+                const skuAttr = attrs.find(a => a.id === 'SELLER_SKU');
+                const sku = (skuAttr?.value_name && skuAttr.value_name !== '-1') ? skuAttr.value_name : (b.seller_custom_field || null);
+                itemInfo[b.id] = { title: b.title, price: b.price, thumbnail: b.thumbnail, sku, availableQuantity: b.available_quantity ?? null };
               }
             }
-          }
-        } catch {}
+          } catch {}
+        }
       }
 
-      // 5. Busca detalhes de sugestão em paralelo
+      // ── 5. Mapa SKU → todos os itens do usuário (para detectar própria conta) ──
+      // Busca todos os anúncios do usuário com SKU para cross-check
+      const allUserAds = await prisma.anuncioML.findMany({
+        where: { conta: { userId }, status: 'active' },
+        select: { id: true, preco: true, contaId: true, dadosML: true }
+      }).catch(() => []);
+
+      const skuToUserItems = {}; // sku → [{ itemId, contaId, nickname, price }]
+      for (const ad of allUserAds) {
+        const attrs = ad.dadosML?.attributes || [];
+        const skuAttr = attrs.find(a => a.id === 'SELLER_SKU');
+        const sku = (skuAttr?.value_name && skuAttr.value_name !== '-1') ? skuAttr.value_name : (ad.dadosML?.seller_custom_field || null);
+        if (!sku) continue;
+        if (!skuToUserItems[sku]) skuToUserItems[sku] = [];
+        skuToUserItems[sku].push({
+          itemId: ad.id,
+          contaId: ad.contaId,
+          nickname: contaMap[ad.contaId]?.nickname || ad.contaId,
+          price: ad.preco || ad.dadosML?.price || 0,
+        });
+      }
+
+      // ── 6. Busca detalhes de sugestão em paralelo ────────────────────────
       const suggestionResults = await Promise.allSettled(
-        pageIds.map(id => axios.get(`https://api.mercadolibre.com/suggestions/items/${id}/details`, { headers, timeout: 10000 }))
+        pageEntries.map(({ itemId, contaId: cid }) =>
+          axios.get(`https://api.mercadolibre.com/suggestions/items/${itemId}/details`, { headers: contaMap[cid].headers, timeout: 10000 })
+        )
       );
 
-      // 6. Busca detalhes de automação para itens automatizados nesta página
-      const automatedInPage = pageIds.filter(id => automatedIds.has(id));
+      // ── 7. Busca automações ativas nesta página ──────────────────────────
+      const automatedInPage = pageEntries.filter(e => e.isAutomated);
       const automationResults = await Promise.allSettled(
-        automatedInPage.map(id => axios.get(`https://api.mercadolibre.com/pricing-automation/items/${id}/automation`, { headers, timeout: 10000 }))
+        automatedInPage.map(({ itemId, contaId: cid }) =>
+          axios.get(`https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`, { headers: contaMap[cid].headers, timeout: 10000 })
+        )
       );
       const automationMap = {};
-      automatedInPage.forEach((id, i) => {
-        if (automationResults[i].status === 'fulfilled') automationMap[id] = automationResults[i].value.data;
+      automatedInPage.forEach(({ itemId }, i) => {
+        if (automationResults[i].status === 'fulfilled') automationMap[itemId] = automationResults[i].value.data;
       });
 
-      // 7. Monta resultado final
-      const items = pageIds.map((id, i) => {
+      // ── 8. Monta resultado final ─────────────────────────────────────────
+      const items = pageEntries.map(({ itemId, contaId: cid }, i) => {
         const sug = suggestionResults[i].status === 'fulfilled' ? suggestionResults[i].value.data : null;
+        const info = itemInfo[itemId] || {};
+        const sku = info.sku || null;
+
+        // Detecta se a competição é com uma conta própria:
+        // Se existe outro item meu com o mesmo SKU vendendo mais barato,
+        // o ML está pedindo que eu compita comigo mesmo.
+        let ownAccountCompetition = null;
+        const currentPriceForItem = sug?.current_price?.amount || info.price || 0;
+        if (sku && skuToUserItems[sku]) {
+          const others = skuToUserItems[sku].filter(x => x.itemId !== itemId && x.price > 0);
+          const cheaper = others
+            .filter(x => x.price < currentPriceForItem)
+            .sort((a, b) => a.price - b.price)[0];
+          if (cheaper) {
+            ownAccountCompetition = { itemId: cheaper.itemId, contaId: cheaper.contaId, nickname: cheaper.nickname, price: cheaper.price };
+          }
+        }
+
         return {
-          id,
-          title: itemInfo[id]?.title || id,
-          thumbnail: itemInfo[id]?.thumbnail,
-          currentPrice: sug?.current_price?.amount || itemInfo[id]?.price || 0,
+          id: itemId,
+          contaId: cid,
+          contaNickname: contaMap[cid]?.nickname || cid,
+          title: info.title || itemId,
+          thumbnail: info.thumbnail,
+          sku,
+          availableQuantity: info.availableQuantity,
+          currentPrice: sug?.current_price?.amount || info.price || 0,
           suggestedPrice: sug?.suggested_price?.amount,
           lowestPrice: sug?.lowest_price?.amount,
           internalPrice: sug?.internal_price?.amount,
@@ -2437,13 +2532,15 @@ async syncPerguntasIniciais(req, res) {
           costs: sug?.costs,
           applicableSuggestion: sug?.applicable_suggestion,
           promotionDetail: sug?.promotion_detail,
+          competitorGraph: sug?.metadata?.graph || [],
           currencyId: sug?.currency_id || 'BRL',
-          hasAutomation: automatedIds.has(id),
-          automation: automationMap[id] || null,
+          hasAutomation: pageAutomatedSet.has(itemId),
+          automation: automationMap[itemId] || null,
+          ownAccountCompetition,
         };
       });
 
-      res.json({ items, total: allSuggestionIds.length, offset: Number(offset), limit: Number(limit) });
+      res.json({ items, total, offset: Number(offset), limit: Number(limit) });
     } catch (err) {
       console.error('[getConcorrenciaPreco]', err.message);
       res.status(500).json({ erro: 'Erro ao buscar oportunidades de preço', detalhes: err.response?.data });

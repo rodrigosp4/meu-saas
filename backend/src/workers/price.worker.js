@@ -151,6 +151,25 @@ async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal, tole
   }
 }
 
+// Desativa automação de preço (ML bloqueia PUT /items/:id com price se automação estiver ativa)
+async function desativarAutomacaoSeAtiva(itemId, accessToken) {
+  try {
+    await axios.get(
+      `https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 }
+    );
+    // GET retornou 200 → automação existe → deletar
+    await axios.delete(
+      `https://api.mercadolibre.com/pricing-automation/items/${itemId}/automation`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 }
+    );
+    return 'AutoDesativ:OK';
+  } catch (e) {
+    if (e.response?.status === 404) return null; // sem automação, ok
+    return `AutoDesativ:Err(${e.response?.status || e.message})`; // não bloqueia o fluxo
+  }
+}
+
 async function enviarPrecosAtacado(itemId, accessToken, precoAlvo, faixas) {
   try {
     let keepNodes = [];
@@ -481,6 +500,10 @@ export const priceWorker = new Worker('update-price', async (job) => {
       if (precoJaIdeal) {
         logDesteItem += ` | R$${precoNum.toFixed(2)}`;
       } else {
+        // Desativa automação de preço antes de atualizar (bloqueio ML desde 18/03/2026)
+        const autoLog = await desativarAutomacaoSeAtiva(item.id, conta.accessToken);
+        if (autoLog) logDesteItem += ` | ${autoLog}`;
+
         const updateBody = variations.length > 0 ? { variations: variations.map(v => ({ id: v.id, price: precoNum })) } : { price: precoNum };
         await axios.put(`https://api.mercadolibre.com/items/${item.id}`, updateBody, { headers: { Authorization: `Bearer ${conta.accessToken}` } });
         logDesteItem += ` | R$${precoNum.toFixed(2)}`;

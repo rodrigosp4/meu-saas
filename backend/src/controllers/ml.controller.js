@@ -1609,6 +1609,20 @@ async getPerguntas(req, res) {
       (a, b) => new Date(b.date_created) - new Date(a.date_created)
     );
 
+    // Atualiza cache de notificação com contagem real do DB após fetch ao vivo
+    if (userId && status === 'UNANSWERED') {
+      try {
+        const perguntasPendentes = await prisma.perguntaML.count({
+          where: { conta: { userId }, status: 'UNANSWERED' }
+        });
+        await prisma.notificacaoCache.upsert({
+          where: { userId },
+          create: { userId, msgNaoLidas: 0, perguntasPendentes },
+          update: { perguntasPendentes }
+        });
+      } catch (_) {}
+    }
+
     res.json({
       perguntas: todasAsPerguntas,
       total: todasAsPerguntas.length

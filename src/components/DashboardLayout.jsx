@@ -234,7 +234,11 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     };
     fetchNotif();
     const interval = setInterval(fetchNotif, 5 * 60 * 1000); // a cada 5 min
-    return () => clearInterval(interval);
+    window.addEventListener('refresh-notificacoes', fetchNotif);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('refresh-notificacoes', fetchNotif);
+    };
   }, []);
 
   // Fecha dropdown de notificações ao clicar fora

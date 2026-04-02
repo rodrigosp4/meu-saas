@@ -373,6 +373,8 @@ const fetchConversaItem = async (pergunta) => {
       setPerguntas(lista);
       setTotal(lista.length);
       setBuscou(true); // Marca que o fetch foi concluído
+      // Sinaliza para o DashboardLayout atualizar o contador de notificações
+      window.dispatchEvent(new CustomEvent('refresh-notificacoes'));
     } catch (e) {
       setMsgStatus('Erro ao carregar perguntas.');
     } finally {

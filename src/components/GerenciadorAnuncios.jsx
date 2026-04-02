@@ -1204,7 +1204,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     }
     // Validação: modo tiny sem SKUs
     if (modo === 'tiny' && skusUnicos.length === 0) {
-      alert('⚠️ O modo "Preço da Tiny" requer anúncios com SKU vinculado.');
+      alert('⚠️ O modo "Preço do ERP" requer anúncios com SKU vinculado.');
       return;
     }
     // Validação: modo regra sem SKU e sem preço base manual
@@ -1313,7 +1313,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
             <p className="text-xs font-bold text-gray-500 uppercase mb-2">Modo de Precificação</p>
             <div className="flex gap-2">
               <button onClick={() => setModo('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'manual' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço Manual</button>
-              <button onClick={() => setModo('tiny')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'tiny' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço da Tiny</button>
+              <button onClick={() => setModo('tiny')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'tiny' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço do ERP</button>
               <button onClick={() => setModo('regra')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'regra' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Por Regra</button>
             </div>
           </div>
@@ -1334,7 +1334,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
           {modo === 'tiny' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Tipo de Preço da Tiny</label>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Tipo de Preço do ERP</label>
                 <div className="flex gap-2">
                   <button onClick={() => setTipoPrecoTiny('venda')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${tipoPrecoTiny === 'venda' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço de Venda</button>
                   <button onClick={() => setTipoPrecoTiny('promocional')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${tipoPrecoTiny === 'promocional' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço Promocional</button>
@@ -1352,7 +1352,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
                 return base ? (
                   <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200 flex items-center justify-between">
                     <div>
-                      <p className="text-[10px] text-emerald-700 font-semibold">Preço da Tiny ({tipoPrecoTiny === 'venda' ? 'Venda' : 'Promocional'})</p>
+                      <p className="text-[10px] text-emerald-700 font-semibold">Preço do ERP ({tipoPrecoTiny === 'venda' ? 'Venda' : 'Promocional'})</p>
                       <p className="text-sm font-black text-emerald-800">R$ {base.toFixed(2)}</p>
                     </div>
                     {precoFinal && (
@@ -1564,7 +1564,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
         )}
         {modo === 'tiny' && skusUnicos.length === 0 && (
           <div className="px-6 pb-0 pt-2">
-            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">⚠️ Nenhum anúncio tem SKU vinculado. O modo "Preço da Tiny" requer SKU cadastrado.</p>
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">⚠️ Nenhum anúncio tem SKU vinculado. O modo "Preço do ERP" requer SKU cadastrado.</p>
           </div>
         )}
         {modo === 'regra' && skusUnicos.length === 0 && !precoBaseManual && (
@@ -1796,7 +1796,9 @@ export default function GerenciadorAnuncios({ usuarioId }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchType, setSearchType] = useState('todos');
   const [statusFilter, setStatusFilter] = useState('Todos');
-  const [contaFilter, setContaFilter] = useState('Todas');
+  const [contaFilter, setContaFilter] = useState([]);
+  const [dropdownContaFilter, setDropdownContaFilter] = useState(false);
+  const dropdownContaFilterRef = useRef(null);
   const [tagFilter, setTagFilter] = useState('Todas');
   const [availableTags, setAvailableTags] = useState([]);
   const [semTagCount, setSemTagCount] = useState(0);
@@ -1944,12 +1946,19 @@ export default function GerenciadorAnuncios({ usuarioId }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownEstoque]);
 
+  useEffect(() => {
+    if (!dropdownContaFilter) return;
+    const handler = (e) => { if (dropdownContaFilterRef.current && !dropdownContaFilterRef.current.contains(e.target)) setDropdownContaFilter(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownContaFilter]);
+
   const fetchAvailableTags = async () => {
     try {
       const idsPermitidos = contasML.map(c => c.id).join(',');
       if (!idsPermitidos) return;
       
-      let queryContas = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
+      let queryContas = contaFilter.length === 0 ? idsPermitidos : contaFilter.join(',');
       const res = await fetch(`/api/ml/anuncios/tags?contasIds=${queryContas}`);
       const data = await res.json();
       setAvailableTags(data.tags || []);
@@ -1966,7 +1975,7 @@ const fetchAnuncios = async () => {
       const idsPermitidos = contasML.map(c => c.id).join(',');
       if (!idsPermitidos) return setIsLoading(false);
 
-      let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
+      let queryConta = contaFilter.length === 0 ? idsPermitidos : contaFilter.join(',');
 
       const params = new URLSearchParams({
         contasIds: queryConta,
@@ -2029,7 +2038,7 @@ const handleSelectAllFiltered = async () => {
     setIsSelectingAll(true);
     try {
       const idsPermitidos = contasML.map(c => c.id).join(',');
-      let queryConta = contaFilter === 'Todas' ? idsPermitidos : contaFilter;
+      let queryConta = contaFilter.length === 0 ? idsPermitidos : contaFilter.join(',');
       const params = new URLSearchParams({
         contasIds: queryConta, search: searchTerm, searchType: searchType, status: statusFilter,
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
@@ -2140,14 +2149,14 @@ const handleEnviarAtacadoRapido = async (ad) => {
 
 const handleSyncSelected = async () => {
     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
-    if (!window.confirm(`Sincronizar ${selectedIds.size} anúncio(s) com a API do ML?`)) return;
+    if (!window.confirm(`Sincronizar ${selectedParentCount} anúncio(s) com a API do ML?`)) return;
     setIsSyncingSelected(true);
 
     try {
       const res = await fetch('/api/ml/sync-selected-ads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemIds: Array.from(selectedIds), userId: usuarioId }),
+        body: JSON.stringify({ itemIds: Array.from(selectedIds).map(String).filter(id => id.startsWith('MLB')), userId: usuarioId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
@@ -2175,7 +2184,7 @@ const handleSyncSelected = async () => {
         }, 2000);
       });
 
-      alert(`✅ ${selectedIds.size} anúncio(s) sincronizado(s).`);
+      alert(`✅ ${selectedParentCount} anúncio(s) sincronizado(s).`);
       fetchAnuncios();
     } catch (e) {
       alert(`Erro ao sincronizar: ${e.message}`);
@@ -2302,7 +2311,7 @@ const getSelectedItemsData = () => {
         'remover_flex': 'DESATIVAR o Envios Flex em',
         'turbo': 'ativar ENVIOS TURBO em'
       }[acao];
-      if (!window.confirm(`Tem certeza que deseja ${nomeAcao} ${selectedIds.size} anúncio(s)?\n\nIsso será processado em segundo plano.`)) return;
+      if (!window.confirm(`Tem certeza que deseja ${nomeAcao} ${selectedParentCount} anúncio(s)?\n\nIsso será processado em segundo plano.`)) return;
     }
 
     setIsSyncingSelected(true);
@@ -2320,7 +2329,7 @@ const getSelectedItemsData = () => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
 
-      alert(`🚀 Ação enviada para a fila com sucesso!\n\nAs alterações em ${selectedIds.size} anúncio(s) serão processadas em segundo plano.\n\nAcompanhe o status e veja os LOGS DE ERRO na aba "Gerenciador de Fila".`);
+      alert(`🚀 Ação enviada para a fila com sucesso!\n\nAs alterações em ${selectedParentCount} anúncio(s) serão processadas em segundo plano.\n\nAcompanhe o status e veja os LOGS DE ERRO na aba "Gerenciador de Fila".`);
       setSelectedIds(new Set());
     } catch (e) {
       alert(`Erro ao enviar para fila: ${e.message}`);
@@ -2359,13 +2368,13 @@ const getSelectedItemsData = () => {
 
   const handleExcluirTodasCampanhas = async () => {
     if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.');
-    if (!window.confirm(`Excluir TODAS as campanhas ativas dos ${selectedIds.size} anúncio(s) selecionado(s)?\n\nIsso removerá todas as promoções started/pending encontradas no banco local.`)) return;
+    if (!window.confirm(`Excluir TODAS as campanhas ativas dos ${selectedParentCount} anúncio(s) selecionado(s)?\n\nIsso removerá todas as promoções started/pending encontradas no banco local.`)) return;
     setIsSyncingSelected(true);
     try {
       const res = await fetch('/api/promocoes/excluir-campanhas-massa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds], maxPct: null }),
+        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds].map(String), maxPct: null }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
@@ -2383,13 +2392,13 @@ const getSelectedItemsData = () => {
     if (input === null) return;
     const maxPct = parseFloat(input);
     if (isNaN(maxPct) || maxPct <= 0) return alert('Percentual inválido.');
-    if (!window.confirm(`Excluir campanhas acima de ${maxPct}% dos ${selectedIds.size} anúncio(s) selecionado(s)?\n\nCampanhas com desconto do vendedor ≤ ${maxPct}% serão mantidas.`)) return;
+    if (!window.confirm(`Excluir campanhas acima de ${maxPct}% dos ${selectedParentCount} anúncio(s) selecionado(s)?\n\nCampanhas com desconto do vendedor ≤ ${maxPct}% serão mantidas.`)) return;
     setIsSyncingSelected(true);
     try {
       const res = await fetch('/api/promocoes/excluir-campanhas-massa', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds], maxPct }),
+        body: JSON.stringify({ userId: usuarioId, itemIds: [...selectedIds].map(String), maxPct }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro no servidor');
@@ -2655,6 +2664,9 @@ const handleFetchBySku = async () => {
     return Object.values(groups).sort(sorter);
   }, [agrupaPorSku, displayedAnuncios, sortBy]);
 
+  // Conta apenas anúncios pai (variações filhas não estão em allKnownAds)
+  const selectedParentCount = Array.from(selectedIds).filter(id => allKnownAds[id]).length;
+
   return (
     <>
     <div className="space-y-6 w-full">
@@ -2767,10 +2779,53 @@ const handleFetchBySku = async () => {
             />
           </div>
           
-          <select value={contaFilter} onChange={(e) => { setContaFilter(e.target.value); setCurrentPage(1); }} className="w-48 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white">
-            <option value="Todas">Todas as Contas</option>
-            {contasML.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
-          </select>
+          <div className="relative" ref={dropdownContaFilterRef}>
+            <button
+              type="button"
+              onClick={() => setDropdownContaFilter(v => !v)}
+              className="w-48 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white text-left flex items-center justify-between gap-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <span className="truncate">
+                {contaFilter.length === 0
+                  ? 'Todas as Contas'
+                  : contaFilter.length === 1
+                    ? contasML.find(c => c.id === contaFilter[0])?.nickname || contaFilter[0]
+                    : `${contaFilter.length} contas`}
+              </span>
+              <svg className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${dropdownContaFilter ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {dropdownContaFilter && (
+              <div className="absolute z-30 mt-1 w-56 bg-white border border-gray-200 rounded-md shadow-lg py-1">
+                <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm font-semibold text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={contaFilter.length === 0}
+                    onChange={() => { setContaFilter([]); setCurrentPage(1); }}
+                    className="w-3.5 h-3.5 rounded"
+                  />
+                  Todas as Contas
+                </label>
+                <div className="border-t border-gray-100 my-1" />
+                {contasML.map(c => (
+                  <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={contaFilter.includes(c.id)}
+                      onChange={() => {
+                        setContaFilter(prev => {
+                          const next = prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id];
+                          setCurrentPage(1);
+                          return next;
+                        });
+                      }}
+                      className="w-3.5 h-3.5 rounded"
+                    />
+                    {c.nickname}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
 
           <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }} className="w-48 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white">
             <option value="Todos">Status (Todos)</option>
@@ -3093,7 +3148,7 @@ const handleFetchBySku = async () => {
             Ações em Massa
             {selectedIds.size > 0 && (
               <span className="ml-1 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-                {selectedIds.size} selecionado{selectedIds.size > 1 ? 's' : ''}
+                {selectedParentCount} selecionado{selectedParentCount > 1 ? 's' : ''}
               </span>
             )}
             <span className="ml-1 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">

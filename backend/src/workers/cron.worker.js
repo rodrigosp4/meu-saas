@@ -58,8 +58,9 @@ async function atualizarCacheNotificacoes(userId) {
         const key = `${conta.id}:${packId}`;
         const countAtTime = silenciadasMap.get(key);
         // Inclui só se não está silenciada ou se chegou nova mensagem
+        // Conta conversas (não soma de mensagens) para bater com o que o Pós-Venda exibe
         if (countAtTime === undefined || r.count > countAtTime) {
-          totalMsgNaoLidas += r.count || 0;
+          totalMsgNaoLidas += 1;
         }
       }
       await delay(300);

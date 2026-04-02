@@ -276,6 +276,32 @@ export default function PosVenda({ usuarioId }) {
     }
   }
 
+// ───── Abrir Anexo ─────
+  async function visualizarAnexo(anexoId) {
+    try {
+      // Faz o fetch do anexo usando o mesmo método que já passa o seu token de auth
+      const r = await fetch(`/api/pos-venda/anexo/${anexoId}?contaId=${conversaSelecionada.contaId}`);
+      
+      if (!r.ok) {
+        throw new Error('Falha ao abrir anexo. Verifique sua conexão.');
+      }
+
+      // Converte a resposta em um arquivo binário (Blob)
+      const blob = await r.blob();
+      
+      // Cria uma URL temporária no próprio navegador para esse arquivo
+      const blobUrl = URL.createObjectURL(blob);
+      
+      // Abre a URL temporária em uma nova aba (o navegador vai renderizar o PDF ou a imagem)
+      window.open(blobUrl, '_blank');
+      
+      // Libera a memória após 1 minuto
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
   // ───── Enviar via Action Guide ─────
   async function enviarActionGuideOpcao() {
     if (!optionSelecionada || enviando || !conversaSelecionada) return;
@@ -593,9 +619,30 @@ export default function PosVenda({ usuarioId }) {
                           opacity: msg.status === 'rejected' ? 0.5 : 1,
                         }}>
                           {msg.text || <em style={{ color: '#aaa' }}>[Mensagem sem texto]</em>}
-                          {msg.message_attachments?.map((a, ai) => (
-                            <div key={ai} style={{ marginTop: '4px', fontSize: '0.82em', color: '#2980b9' }}>📎 {a.original_filename || a.filename}</div>
-                          ))}
+                          {msg.message_attachments?.map((a, ai) => {
+                            const anexoId = a.filename || a.id; 
+                            
+                            return (
+                              <div key={ai} style={{ marginTop: '6px', fontSize: '0.85em' }}>
+                                <button 
+                                  onClick={() => visualizarAnexo(anexoId)}
+                                  style={{ 
+                                    background: 'none', border: 'none', padding: 0, 
+                                    color: '#2980b9', textDecoration: 'none', 
+                                    fontWeight: 500, display: 'inline-flex', alignItems: 'center', 
+                                    gap: '4px', cursor: 'pointer' 
+                                  }}
+                                  onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                                  onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ pointerEvents: 'none' }}>
+                                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                                  </svg>
+                                  {a.original_filename || a.filename}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                         {msg.message_date?.read && (
                           <div style={{ fontSize: '0.66em', color: '#27ae60', marginTop: '1px' }}>Lida</div>

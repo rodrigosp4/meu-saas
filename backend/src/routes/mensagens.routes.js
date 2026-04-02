@@ -12,5 +12,5 @@ router.get('/api/pos-venda/action-guide/:packId',                mensagensContro
 router.post('/api/pos-venda/action-guide/:packId/option',        mensagensController.enviarActionGuide);
 router.post('/api/pos-venda/marcar-lida/:packId',                mensagensController.marcarComoLida);
 router.get('/api/pos-venda/pedido/:packId',                      mensagensController.getPedido);
-
+router.get('/api/pos-venda/anexo/:attachmentId',                 mensagensController.getAnexo);
 export default router;

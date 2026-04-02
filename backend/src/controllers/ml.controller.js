@@ -831,76 +831,91 @@ async syncAds(req, res) {
         where.id = { in: idsMatch };
       }
 
-      let [anuncios, total] = await Promise.all([
-        prisma.anuncioML.findMany({
-          where, skip, take: Number(limit),
+      // Estes filtros dependem de campos JSON ou comparação entre colunas — precisam ser aplicados em JS.
+      // Para que a paginação funcione corretamente, buscamos todos os registros sem skip/take,
+      // aplicamos os filtros e depois paginamos em JS.
+      const needsJsFilter =
+        promo === 'com_desconto' || prazo !== 'Todos' ||
+        descontoMin !== '' || descontoMax !== '' ||
+        freteGratis !== 'Todos' || produtoFull !== 'Todos' ||
+        sortBy === 'desconto_desc' || sortBy === 'desconto_asc';
+
+      let anuncios, total;
+
+      if (needsJsFilter) {
+        anuncios = await prisma.anuncioML.findMany({
+          where,
           orderBy: [orderBy, { id: 'asc' }],
           include: { conta: { select: { nickname: true } } }
-        }),
-        prisma.anuncioML.count({ where })
-      ]);
-      
-      if (promo === 'com_desconto') {
-        anuncios = anuncios.filter(ad => ad.precoOriginal && ad.precoOriginal > ad.preco);
-        total = anuncios.length;
-      }
-
-      if (prazo !== 'Todos') {
-        anuncios = anuncios.filter(ad => {
-          const dadosML = ad.dadosML || {};
-          const saleTerms = dadosML.sale_terms || [];
-          const mfgTerm = saleTerms.find(t => t.id === 'MANUFACTURING_TIME');
-          
-          if (prazo === 'imediato') return !mfgTerm;
-          else if (prazo === 'com_prazo') return !!mfgTerm;
-          return true;
         });
-        total = anuncios.length;
-      }
-      
-      if (descontoMin !== '' || descontoMax !== '') {
-        const minDesc = descontoMin !== '' ? Number(descontoMin) : null;
-        const maxDesc = descontoMax !== '' ? Number(descontoMax) : null;
 
-        anuncios = anuncios.filter(ad => {
-          if (!ad.precoOriginal || ad.precoOriginal <= ad.preco) {
-            if (minDesc !== null && 0 < minDesc) return false;
-            if (maxDesc !== null && 0 > maxDesc) return false;
+        if (promo === 'com_desconto') {
+          anuncios = anuncios.filter(ad => ad.precoOriginal && ad.precoOriginal > ad.preco);
+        }
+
+        if (prazo !== 'Todos') {
+          anuncios = anuncios.filter(ad => {
+            const saleTerms = (ad.dadosML?.sale_terms) || [];
+            const mfgTerm = saleTerms.find(t => t.id === 'MANUFACTURING_TIME');
+            if (prazo === 'imediato') return !mfgTerm;
+            if (prazo === 'com_prazo') return !!mfgTerm;
             return true;
-          }
-          const desconto = Math.round(((ad.precoOriginal - ad.preco) / ad.precoOriginal) * 100);
-          if (minDesc !== null && desconto < minDesc) return false;
-          if (maxDesc !== null && desconto > maxDesc) return false;
-          return true;
-        });
+          });
+        }
+
+        if (descontoMin !== '' || descontoMax !== '') {
+          const minDesc = descontoMin !== '' ? Number(descontoMin) : null;
+          const maxDesc = descontoMax !== '' ? Number(descontoMax) : null;
+          anuncios = anuncios.filter(ad => {
+            if (!ad.precoOriginal || ad.precoOriginal <= ad.preco) {
+              if (minDesc !== null && 0 < minDesc) return false;
+              if (maxDesc !== null && 0 > maxDesc) return false;
+              return true;
+            }
+            const desconto = Math.round(((ad.precoOriginal - ad.preco) / ad.precoOriginal) * 100);
+            if (minDesc !== null && desconto < minDesc) return false;
+            if (maxDesc !== null && desconto > maxDesc) return false;
+            return true;
+          });
+        }
+
+        if (freteGratis !== 'Todos') {
+          anuncios = anuncios.filter(ad => {
+            const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
+            return freteGratis === 'sim' ? freeShipping : !freeShipping;
+          });
+        }
+
+        if (produtoFull !== 'Todos') {
+          anuncios = anuncios.filter(ad => {
+            const isFull = ad.dadosML?.shipping?.logistic_type === 'fulfillment';
+            return produtoFull === 'sim' ? isFull : !isFull;
+          });
+        }
+
+        if (sortBy === 'desconto_desc' || sortBy === 'desconto_asc') {
+          anuncios.sort((a, b) => {
+            const descA = (a.precoOriginal && a.precoOriginal > a.preco) ? ((a.precoOriginal - a.preco) / a.precoOriginal) : 0;
+            const descB = (b.precoOriginal && b.precoOriginal > b.preco) ? ((b.precoOriginal - b.preco) / b.precoOriginal) : 0;
+            return sortBy === 'desconto_desc' ? descB - descA : descA - descB;
+          });
+        }
+
+        // Paginação em JS (após filtros)
         total = anuncios.length;
-      }
-      
-      if (freteGratis !== 'Todos') {
-        anuncios = anuncios.filter(ad => {
-          const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
-          return freteGratis === 'sim' ? freeShipping : !freeShipping;
-        });
-        total = anuncios.length;
+        anuncios = anuncios.slice(skip, skip + Number(limit));
+
+      } else {
+        [anuncios, total] = await Promise.all([
+          prisma.anuncioML.findMany({
+            where, skip, take: Number(limit),
+            orderBy: [orderBy, { id: 'asc' }],
+            include: { conta: { select: { nickname: true } } }
+          }),
+          prisma.anuncioML.count({ where })
+        ]);
       }
 
-      if (produtoFull !== 'Todos') {
-        anuncios = anuncios.filter(ad => {
-          const isFull = ad.dadosML?.shipping?.logistic_type === 'fulfillment';
-          return produtoFull === 'sim' ? isFull : !isFull;
-        });
-        total = anuncios.length;
-      }
-
-      if (sortBy === 'desconto_desc' || sortBy === 'desconto_asc') {
-        anuncios.sort((a, b) => {
-          const descA = (a.precoOriginal && a.precoOriginal > a.preco)
-            ? ((a.precoOriginal - a.preco) / a.precoOriginal) : 0;
-          const descB = (b.precoOriginal && b.precoOriginal > b.preco)
-            ? ((b.precoOriginal - b.preco) / b.precoOriginal) : 0;
-          return sortBy === 'desconto_desc' ? descB - descA : descA - descB;
-        });
-      }
       res.json({ anuncios, total });
     } catch (error) { res.status(500).json({ erro: error.message }); }
   },
@@ -1058,6 +1073,7 @@ async syncAds(req, res) {
       const {
         contasIds, search = '', searchType = 'todos', status = 'Todos', tag = 'Todas',
         promo = 'Todos', precoMin = '', precoMax = '',
+        descontoMin = '', descontoMax = '', prazo = 'Todos',
         semSku = 'false',
         priceCheckStatus = 'Todos', freteGratis = 'Todos', produtoFull = 'Todos', userId = '',
       } = req.query;
@@ -1125,12 +1141,38 @@ async syncAds(req, res) {
 
       const anuncios = await prisma.anuncioML.findMany({
         where,
-        select: { id: true, contaId: true, sku: true, titulo: true, preco: true, thumbnail: true, dadosML: true }
+        select: { id: true, contaId: true, sku: true, titulo: true, preco: true, precoOriginal: true, thumbnail: true, dadosML: true }
       });
 
       let anunciosFiltrados = anuncios;
+
+      if (prazo !== 'Todos') {
+        anunciosFiltrados = anunciosFiltrados.filter(ad => {
+          const mfgTerm = ad.dadosML?.sale_terms?.find(t => t.id === 'MANUFACTURING_TIME')?.value_name;
+          if (prazo === 'imediato') return !mfgTerm;
+          if (prazo === 'com_prazo') return !!mfgTerm;
+          return true;
+        });
+      }
+
+      if (descontoMin !== '' || descontoMax !== '') {
+        const minDesc = descontoMin !== '' ? Number(descontoMin) : null;
+        const maxDesc = descontoMax !== '' ? Number(descontoMax) : null;
+        anunciosFiltrados = anunciosFiltrados.filter(ad => {
+          if (!ad.precoOriginal || ad.precoOriginal <= ad.preco) {
+            if (minDesc !== null && 0 < minDesc) return false;
+            if (maxDesc !== null && 0 > maxDesc) return false;
+            return true;
+          }
+          const desconto = Math.round(((ad.precoOriginal - ad.preco) / ad.precoOriginal) * 100);
+          if (minDesc !== null && desconto < minDesc) return false;
+          if (maxDesc !== null && desconto > maxDesc) return false;
+          return true;
+        });
+      }
+
       if (freteGratis !== 'Todos') {
-        anunciosFiltrados = anuncios.filter(ad => {
+        anunciosFiltrados = anunciosFiltrados.filter(ad => {
           const freeShipping = ad.dadosML?.shipping?.free_shipping === true;
           return freteGratis === 'sim' ? freeShipping : !freeShipping;
         });

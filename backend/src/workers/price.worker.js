@@ -109,7 +109,10 @@ async function ativarPromocoesAuto(itemId, accessToken, inflar, precoFinal, tole
       if (inflarNum === 0) { deveAtivar = true; }
       else if (sellerPct !== null) { deveAtivar = sellerPct <= limiteMax; }
       else if (TIPOS_COM_PRECO.has(promo.type)) { deveAtivar = true; }
-      else { deveAtivar = false; erros.push(`[${promo.type}] Impossível validar margem.`); }
+      // ML não retorna seller_percentage para alguns tipos em itens com variação.
+      // Se há tolerância explícita, o usuário aceitou a incerteza — ativa assim mesmo.
+      else if (Number(toleranciaPromo) > 0) { deveAtivar = true; }
+      else { deveAtivar = false; erros.push(`[${promo.type}] Impossível validar margem (sem seller_percentage).`); }
       
       if (!deveAtivar) {
         if (!erros.some(e => e.includes(`[${promo.type}]`))) erros.push(`[${promo.type}] Ignorada (fora da margem).`);
@@ -498,7 +501,22 @@ export const priceWorker = new Worker('update-price', async (job) => {
         try {
           await axios.delete(`https://api.mercadolibre.com/seller-promotions/items/${item.id}?app_version=v2`, { headers: { Authorization: `Bearer ${conta.accessToken}` } });
           logDesteItem += ` | LimpPromo: OK`;
-        } catch (e) { logDesteItem += ` | LimpPromo: Falha`; }
+        } catch (e) {
+          const errMsg = e.response?.data?.message || e.message;
+          // Para itens com variação, tenta remover promoção por cada variação individualmente
+          if (variations.length > 0) {
+            let okVar = 0, failVar = 0;
+            for (const v of variations) {
+              try {
+                await axios.delete(`https://api.mercadolibre.com/seller-promotions/items/${item.id}?app_version=v2&variation_id=${v.id}`, { headers: { Authorization: `Bearer ${conta.accessToken}` } });
+                okVar++;
+              } catch { failVar++; }
+            }
+            logDesteItem += ` | LimpPromo: ${okVar > 0 ? `OK (${okVar} var)` : `Falha (${errMsg})`}`;
+          } else {
+            logDesteItem += ` | LimpPromo: Falha (${errMsg})`;
+          }
+        }
       }
 
       const variations = adData.variations || [];
@@ -528,6 +546,8 @@ export const priceWorker = new Worker('update-price', async (job) => {
       }
 
       if (ativarPromocoes) {
+        // Para itens com variação, aguarda o ML processar a atualização de preço antes de ativar promoções
+        if (variations.length > 0) await delay(2000);
         const logPromo = await ativarPromocoesAuto(item.id, conta.accessToken, inflar || 0, precoNum, toleranciaPromo || 0);
         logDesteItem += ` | Promo: ${logPromo}`;
       }

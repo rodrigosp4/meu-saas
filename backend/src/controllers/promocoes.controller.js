@@ -752,8 +752,10 @@ export const promocoesController = {
   // maxPct = número → exclui apenas as que ultrapassam aquele % do vendedor
   async excluirCampanhasMassa(req, res) {
     try {
-      const { userId, itemIds, maxPct } = req.body;
-      if (!userId || !Array.isArray(itemIds) || itemIds.length === 0) {
+      const { userId, maxPct } = req.body;
+      // Converte para string e filtra apenas IDs de anúncios pai (MLB...) — IDs de variação são numéricos e não têm campanhas
+      const itemIds = Array.isArray(req.body.itemIds) ? req.body.itemIds.map(String).filter(id => id.startsWith('MLB')) : [];
+      if (!userId || itemIds.length === 0) {
         return res.status(400).json({ erro: 'userId e itemIds são obrigatórios' });
       }
 

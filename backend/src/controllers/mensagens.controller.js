@@ -188,6 +188,47 @@ export const mensagensController = {
     }
   },
 
+// GET /api/pos-venda/anexo/:attachmentId?contaId=xxx
+  async getAnexo(req, res) {
+    try {
+      const userId = req.userId;
+      const { attachmentId } = req.params;
+      const { contaId } = req.query;
+
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
+
+      const contas = await getContasDoUsuario(userId);
+      const conta = contas.find(c => c.id === contaId);
+      if (!conta) return res.status(404).json({ erro: 'Conta ML não encontrada' });
+
+      const token = await getTokenForConta(conta);
+
+      // Pega o arquivo do Mercado Livre em formato de stream
+      const resp = await axios.get(
+        `${ML_API}/messages/attachments/${attachmentId}?tag=post_sale&site_id=MLB`,
+        { 
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'stream',
+          timeout: 15000 
+        }
+      );
+
+      // Repassa os headers (ex: content-type) para o navegador saber se é imagem, pdf, etc
+      res.set({
+        'Content-Type': resp.headers['content-type'],
+        'Content-Disposition': resp.headers['content-disposition'] || `inline; filename="${attachmentId}"`
+      });
+
+      // Encaminha o stream do ML diretamente para o cliente
+      resp.data.pipe(res);
+
+    } catch (error) {
+      const mlStatus = error.response?.status || 500;
+      res.status(mlStatus).json({ erro: 'Erro ao buscar anexo.' });
+    }
+  },
+
+
   // GET /api/pos-venda/pedidos-recentes?contaId=xxx&limite=50&apenasComMensagens=true
   // Lista pedidos recentes; quando apenasComMensagens=true verifica em lote quais têm mensagens
   async getPedidosRecentes(req, res) {

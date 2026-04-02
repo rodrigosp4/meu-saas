@@ -1057,6 +1057,7 @@ function ModalCorrigirPreco({ anunciosSelecionados, regrasPreco, usuarioId, conf
   const [enviarAtacado, setEnviarAtacado] = useState(false);
   const [ativarPromocoes, setAtivarPromocoes] = useState(false);
   const [toleranciaPromo, setTolercanciaPromo] = useState(0);
+  const [tipoPrecoTiny, setTipoPrecoTiny] = useState('venda');
 
 const [precosTinyMap, setPrecosTinyMap] = useState({});
   const [loadingPrecos, setLoadingPrecos] = useState(true);
@@ -1152,6 +1153,13 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
       return calcularPrecoCorrigir(Number(precoManual), inflar, reduzir)?.precoFinal;
     }
 
+    if (modo === 'tiny') {
+      const dadosTiny = precosTinyMap[skuDoAnuncio];
+      if (!dadosTiny || dadosTiny === 'NOT_FOUND') return null;
+      const base = resolverPrecoBase(dadosTiny, tipoPrecoTiny);
+      return base > 0 ? calcularPrecoCorrigir(base, inflar, reduzir)?.precoFinal : null;
+    }
+
     if (!regra) return null;
 
     let precoBaseItem = Number(precoBaseManual);
@@ -1172,6 +1180,12 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     if (modo === 'manual') {
       return calcularPrecoCorrigir(Number(precoManual), inflar, reduzir);
     }
+    if (modo === 'tiny') {
+      const dadosTiny = precosTinyMap[skuDoAnuncio];
+      if (!dadosTiny || dadosTiny === 'NOT_FOUND') return null;
+      const base = resolverPrecoBase(dadosTiny, tipoPrecoTiny);
+      return base > 0 ? calcularPrecoCorrigir(base, inflar, reduzir) : null;
+    }
     if (!regra) return null;
     let precoBaseItem = Number(precoBaseManual);
     if (precosTinyMap[skuDoAnuncio]) {
@@ -1186,6 +1200,11 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
     // Validação: modo manual sem preço
     if (modo === 'manual' && !precoManual) {
       alert('⚠️ Informe o Preço Base para usar o modo manual.');
+      return;
+    }
+    // Validação: modo tiny sem SKUs
+    if (modo === 'tiny' && skusUnicos.length === 0) {
+      alert('⚠️ O modo "Preço da Tiny" requer anúncios com SKU vinculado.');
       return;
     }
     // Validação: modo regra sem SKU e sem preço base manual
@@ -1211,6 +1230,7 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
         enviarAtacado,
         ativarPromocoes,
         toleranciaPromo: ativarPromocoes ? (Number(toleranciaPromo) || 0) : 0,
+        tipoPrecoTiny,
       };
 
       const res = await fetch('/api/ml/corrigir-preco', {
@@ -1293,7 +1313,8 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
             <p className="text-xs font-bold text-gray-500 uppercase mb-2">Modo de Precificação</p>
             <div className="flex gap-2">
               <button onClick={() => setModo('manual')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'manual' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço Manual</button>
-              <button onClick={() => setModo('regra')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'regra' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Por Regra de Precificação</button>
+              <button onClick={() => setModo('tiny')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'tiny' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço da Tiny</button>
+              <button onClick={() => setModo('regra')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${modo === 'regra' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Por Regra</button>
             </div>
           </div>
 
@@ -1307,6 +1328,65 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
                 placeholder="Ex: 89.90"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+          )}
+
+          {modo === 'tiny' && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Tipo de Preço da Tiny</label>
+                <div className="flex gap-2">
+                  <button onClick={() => setTipoPrecoTiny('venda')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${tipoPrecoTiny === 'venda' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço de Venda</button>
+                  <button onClick={() => setTipoPrecoTiny('promocional')} className={`flex-1 py-2 rounded-lg text-sm font-bold border transition ${tipoPrecoTiny === 'promocional' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>Preço Promocional</button>
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1.5">O preço da Tiny será enviado diretamente ao ML, sem aplicar regras de margem. Inflar/reduzir ainda serão aplicados.</p>
+              </div>
+              {loadingPrecos && <p className="text-[10px] text-blue-500">Buscando preço da Tiny...</p>}
+              {!loadingPrecos && skusUnicos.length === 0 && (
+                <p className="text-[10px] text-red-500 bg-red-50 border border-red-200 rounded px-2 py-1.5">⚠️ Nenhum anúncio tem SKU vinculado ao Tiny. Este modo não funcionará.</p>
+              )}
+              {!loadingPrecos && skusUnicos.length > 0 && !temMultiplosSKUs && (() => {
+                const dadosTiny = precosTinyMap[skusUnicos[0]];
+                const base = dadosTiny && dadosTiny !== 'NOT_FOUND' ? resolverPrecoBase(dadosTiny, tipoPrecoTiny) : null;
+                const precoFinal = base ? calcularPrecoCorrigir(base, inflar, reduzir)?.precoFinal : null;
+                return base ? (
+                  <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200 flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] text-emerald-700 font-semibold">Preço da Tiny ({tipoPrecoTiny === 'venda' ? 'Venda' : 'Promocional'})</p>
+                      <p className="text-sm font-black text-emerald-800">R$ {base.toFixed(2)}</p>
+                    </div>
+                    {precoFinal && (
+                      <div className="text-right">
+                        <p className="text-[10px] text-gray-500">Preço Final (com inflar/reduzir)</p>
+                        <p className="text-sm font-black text-green-700">R$ {precoFinal.toFixed(2)}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">⚠️ Preço não encontrado na Tiny para este SKU.</p>
+                );
+              })()}
+              {!loadingPrecos && temMultiplosSKUs && Object.keys(precosTinyMap).length > 0 && (
+                <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+                  <p className="text-[10px] font-bold text-emerald-700 uppercase mb-2">Preço por anúncio (SKUs diferentes)</p>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {anunciosSelecionados.map(ad => {
+                      const efSku = getEfetivaSku(ad);
+                      const dadosTiny = efSku ? precosTinyMap[efSku] : null;
+                      const base = dadosTiny && dadosTiny !== 'NOT_FOUND' ? resolverPrecoBase(dadosTiny, tipoPrecoTiny) : null;
+                      const precoFinal = base ? calcularPrecoCorrigir(base, inflar, reduzir)?.precoFinal : null;
+                      return (
+                        <div key={ad.id} className="flex items-center justify-between text-xs">
+                          <span className="truncate text-gray-600 max-w-[50%]">{ad.titulo}</span>
+                          <span className={`font-bold ${precoFinal ? 'text-green-700' : 'text-red-500'}`}>
+                            → R$ {precoFinal?.toFixed(2) || 'N/A'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1480,6 +1560,11 @@ const [precosTinyMap, setPrecosTinyMap] = useState({});
         {modo === 'manual' && !precoManual && (
           <div className="px-6 pb-0 pt-2">
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">⚠️ Informe o Preço Base acima para continuar.</p>
+          </div>
+        )}
+        {modo === 'tiny' && skusUnicos.length === 0 && (
+          <div className="px-6 pb-0 pt-2">
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">⚠️ Nenhum anúncio tem SKU vinculado. O modo "Preço da Tiny" requer SKU cadastrado.</p>
           </div>
         )}
         {modo === 'regra' && skusUnicos.length === 0 && !precoBaseManual && (

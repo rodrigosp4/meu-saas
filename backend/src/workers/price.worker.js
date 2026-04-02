@@ -253,7 +253,7 @@ function calcularPrecoCorrigir(precoBase, inflar, reduzir) {
 
 // 🚀 START MAIN WORKER
 export const priceWorker = new Worker('update-price', async (job) => {
-  const { tarefaId, userId, items, modo, regraId, regraIdPorConta, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase } = job.data;
+  const { tarefaId, userId, items, modo, regraId, regraIdPorConta, precoManual, precoBaseManual, inflar, reduzir, removerPromocoes, enviarAtacado, ativarPromocoes, toleranciaPromo, precosCSV, precosCSVTipoBase, tipoPrecoTiny } = job.data;
 
   const tarefaExiste = await prisma.tarefaFila.findUnique({ where: { id: tarefaId } });
   if (!tarefaExiste) return { success: false, message: 'Tarefa excluída' };
@@ -439,6 +439,13 @@ export const priceWorker = new Worker('update-price', async (job) => {
                           : Number(dadosCSV.preco) || 0;
           precoNum = calcularPrecoCorrigir(precoBase, inflar || 0, reduzir || 0);
         }
+      } else if (modo === 'tiny') {
+        // Usa preço direto da Tiny (venda ou promocional) sem aplicar regra de margem
+        const dadosTiny = skuDoAnuncio ? precosTinyMap[skuDoAnuncio] : null;
+        if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) {
+          const base = resolverPrecoBase(dadosTiny, tipoPrecoTiny || 'venda');
+          precoNum = calcularPrecoCorrigir(base, inflar || 0, reduzir || 0);
+        }
       } else if (regraEfetiva) {
         let precoBaseItem = 0;
         if ((tinyToken || modoCSV) && skuDoAnuncio) {
@@ -476,7 +483,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
 
       if (!precoNum || isNaN(precoNum) || precoNum <= 0) {
         if (!skuDoAnuncio) throw new Error(`Sem SKU.`);
-        if (tinyToken || modoCSV) {
+        if (tinyToken || modoCSV || modo === 'tiny') {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
           if (dadosTiny && dadosTiny.error) throw new Error(`${modoCSV ? 'CSV' : 'Tiny ERP'}: ${dadosTiny.error}`);
           const fonte = modoCSV ? 'planilha CSV' : 'Tiny ERP';

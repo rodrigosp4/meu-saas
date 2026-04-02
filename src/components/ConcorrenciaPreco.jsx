@@ -141,7 +141,7 @@ function FormAutomacao({ item, onSave, onCancel, loading }) {
 }
 
 // ── Linha de item ─────────────────────────────────────────────────────────────
-function ItemRow({ item, usuarioId, showConta, onItemUpdate, isCheapestInGroup = false }) {
+function ItemRow({ item, usuarioId, showConta, onItemUpdate, isCheapestInGroup = false, isPrioridade = false }) {
   const { auth, impersonating } = useAuth();
   const [expanded, setExpanded] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -248,6 +248,12 @@ function ItemRow({ item, usuarioId, showConta, onItemUpdate, isCheapestInGroup =
 
         {/* Status / Automação / Própria conta */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {isPrioridade && (
+            <span title="Conta prioritária — manter preços abaixo das demais"
+              style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 600 }}>
+              ★ Conta prioritária
+            </span>
+          )}
           {item.status && <StatusBadge status={item.status} />}
           <AutoBadge automation={item.automation} />
           {item.automation && (
@@ -311,7 +317,7 @@ function ItemRow({ item, usuarioId, showConta, onItemUpdate, isCheapestInGroup =
 }
 
 // ── Grupo de SKU ──────────────────────────────────────────────────────────────
-function SkuGroup({ sku, items, usuarioId, showConta, onItemUpdate }) {
+function SkuGroup({ sku, items, usuarioId, showConta, onItemUpdate, contaPrioridade = '' }) {
   const [open, setOpen] = useState(true);
 
   // O item mais barato do grupo é a "referência" — provavelmente é o que o ML
@@ -365,7 +371,7 @@ function SkuGroup({ sku, items, usuarioId, showConta, onItemUpdate }) {
                 {!isCheapest && item.ownAccountCompetition && (
                   <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: '#f59e0b' }} />
                 )}
-                <ItemRow item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={onItemUpdate} isCheapestInGroup={isCheapest && hasInternalConflict} />
+                <ItemRow item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={onItemUpdate} isCheapestInGroup={isCheapest && hasInternalConflict} isPrioridade={contaPrioridade ? item.contaId === contaPrioridade : false} />
               </div>
             );
           })}
@@ -393,6 +399,10 @@ export default function ConcorrenciaPreco({ usuarioId }) {
   const [filtroEstoque, setFiltroEstoque] = useState(false);
   const [filtroOcultarCompetitivos, setFiltroOcultarCompetitivos] = useState(false);
   const [agruparSku, setAgruparSku] = useState(false);
+
+  // Ordenação e prioridade
+  const [ordenacao, setOrdenacao] = useState('default');
+  const [contaPrioridade, setContaPrioridade] = useState('');
 
   const STATUS_COMPETITIVO = new Set(['no_benchmark_ok', 'no_benchmark_lowest', 'promotion_active']);
 
@@ -471,8 +481,23 @@ export default function ConcorrenciaPreco({ usuarioId }) {
       });
     }
 
+    // Ordenação
+    if (ordenacao !== 'default' || contaPrioridade) {
+      list = [...list].sort((a, b) => {
+        // Conta prioritária sempre sobe ao topo
+        if (contaPrioridade) {
+          const ap = a.contaId === contaPrioridade ? 0 : 1;
+          const bp = b.contaId === contaPrioridade ? 0 : 1;
+          if (ap !== bp) return ap - bp;
+        }
+        if (ordenacao === 'mais_vendidos') return (b.soldQuantity || 0) - (a.soldQuantity || 0);
+        if (ordenacao === 'mais_visitados') return (b.visits || 0) - (a.visits || 0);
+        return 0;
+      });
+    }
+
     return list;
-  }, [items, filtroEstoque, filtroOcultarCompetitivos]);
+  }, [items, filtroEstoque, filtroOcultarCompetitivos, ordenacao, contaPrioridade]);
 
   // Agrupamento por SKU
   const grouped = useMemo(() => {
@@ -543,6 +568,32 @@ export default function ConcorrenciaPreco({ usuarioId }) {
             Agrupar por SKU
           </label>
         </div>
+
+        {/* Ordenação */}
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 5 }}>ORDENAÇÃO</label>
+          <select value={ordenacao} onChange={e => setOrdenacao(e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: 7, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', minWidth: 180 }}>
+            <option value="default">Padrão</option>
+            <option value="mais_vendidos">Mais vendidos</option>
+            <option value="mais_visitados">Mais visitados</option>
+          </select>
+        </div>
+
+        {/* Conta prioritária */}
+        {multiConta && (
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 5 }}>
+              CONTA PRIORITÁRIA
+              <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 4 }}>(manter abaixo das outras)</span>
+            </label>
+            <select value={contaPrioridade} onChange={e => setContaPrioridade(e.target.value)}
+              style={{ padding: '7px 10px', borderRadius: 7, border: `1px solid ${contaPrioridade ? '#3b82f6' : '#cbd5e1'}`, fontSize: 13, background: contaPrioridade ? '#eff6ff' : '#fff', minWidth: 180, color: contaPrioridade ? '#1d4ed8' : 'inherit' }}>
+              <option value="">Nenhuma</option>
+              {contas.map(c => <option key={c.id} value={c.id}>{c.nickname}</option>)}
+            </select>
+          </div>
+        )}
 
         <button onClick={fetchData} disabled={loading}
           style={{ padding: '8px 18px', borderRadius: 8, border: 'none', cursor: loading ? 'not-allowed' : 'pointer', background: loading ? '#94a3b8' : '#e67e22', color: '#fff', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -615,14 +666,14 @@ export default function ConcorrenciaPreco({ usuarioId }) {
           ) : agruparSku && grouped ? (
             <div style={{ padding: 12 }}>
               {Object.entries(grouped.groups).map(([sku, skuItems]) => (
-                <SkuGroup key={sku} sku={sku} items={skuItems} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} />
+                <SkuGroup key={sku} sku={sku} items={skuItems} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} contaPrioridade={contaPrioridade} />
               ))}
               {grouped.noSku.length > 0 && (
                 <>
                   <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', padding: '8px 4px 4px', textTransform: 'uppercase' }}>Sem SKU</div>
                   {grouped.noSku.map(item => (
                     <div key={`${item.id}-${item.contaId}`} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', marginBottom: 6 }}>
-                      <ItemRow item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} />
+                      <ItemRow item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} isPrioridade={contaPrioridade ? item.contaId === contaPrioridade : false} />
                     </div>
                   ))}
                 </>
@@ -630,7 +681,7 @@ export default function ConcorrenciaPreco({ usuarioId }) {
             </div>
           ) : (
             filtered.map(item => (
-              <ItemRow key={`${item.id}-${item.contaId}`} item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} />
+              <ItemRow key={`${item.id}-${item.contaId}`} item={item} usuarioId={usuarioId} showConta={showConta} onItemUpdate={handleItemUpdate} isPrioridade={contaPrioridade ? item.contaId === contaPrioridade : false} />
             ))
           )}
 

@@ -363,7 +363,7 @@ export default function OtimizadorImagens({ usuarioId }) {
       const picsRestantes = picsAtuais
         .filter((_, i) => !imagensRemovidas.has(i))
         .map(p => p.id ? { id: p.id } : { source: p.secure_url || p.url || p.source });
-      pictures = [...picsRestantes, ...urlsParaEnviar.map(u => ({ source: u }))].slice(0, 12);
+      pictures = [...urlsParaEnviar.map(u => ({ source: u })), ...picsRestantes].slice(0, 12);
       modoReplaceEfetivo = 'ALL';
     } else {
       pictures = urlsParaEnviar.slice(0, 12).map(u => ({ source: u }));

@@ -5,6 +5,7 @@ import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
 import { getTinyRateLimit } from '../utils/tinyRateLimit.js';
 import { createTinyClient, getTinyAccessToken, listarProdutos, obterProduto } from '../utils/tinyClient.js';
+import { createBlingClient, getBlingAccessToken, listarProdutosBling, obterProdutoBling } from '../utils/blingClient.js';
 
 const connection = {
   host: config.redisHost, port: config.redisPort, password: config.redisPassword || undefined,
@@ -72,6 +73,56 @@ async function fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas = 6) {
       if (isRateLimit) return { error: 'Limite de requisições excedido na API da Tiny.' };
       if (isNetwork) return { error: 'Falha de rede com a API da Tiny.' };
       return { error: `Erro Tiny: ${err.message}` };
+    }
+  }
+  return null;
+}
+
+async function fetchPrecoBling(sku, blingToken, tentativas = 6) {
+  const skuStr = String(sku).trim().toLowerCase();
+  const client = createBlingClient(blingToken);
+
+  for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+    try {
+      await delay(120); // Bling rate limit: 600 req/10s → 120ms
+      // Docs: parâmetro correto é codigos[] (array)
+      const data = await listarProdutosBling(client, { 'codigos[]': String(sku).trim() });
+      const itens = data.data || [];
+
+      const exactMatch = itens.find(p => String(p.codigo || '').trim().toLowerCase() === skuStr);
+      if (!exactMatch) return null;
+
+      // tipo=C → produto pai com variações (no response da listagem, variacoes não vem embutido)
+      if (exactMatch.tipo === 'C') {
+        await delay(120);
+        const det = await obterProdutoBling(client, exactMatch.id);
+        const varMatch = (Array.isArray(det.variacoes) ? det.variacoes : [])
+          .find(v => String(v.codigo || '').trim().toLowerCase() === skuStr);
+        return {
+          preco: varMatch?.preco ?? det.preco ?? 0,
+          preco_promocional: varMatch?.precoPromocional ?? det.precoPromocional ?? 0,
+          preco_custo: det.precoCusto ?? 0,
+        };
+      }
+
+      return {
+        preco: exactMatch.preco || 0,
+        preco_promocional: exactMatch.precoPromocional || 0,
+        preco_custo: exactMatch.precoCusto || 0,
+      };
+
+    } catch (err) {
+      const isRateLimit = err.response?.status === 429 || err.response?.status === 503;
+      const isUnauth = err.response?.status === 401 || err.response?.status === 403;
+      const isNetwork = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
+      if (isUnauth) return { error: 'Token do Bling inválido.' };
+      if (tentativa < tentativas) {
+        await delay(isRateLimit ? (20000 + tentativa * 10000) : (isNetwork ? 4000 * tentativa : 3000));
+        continue;
+      }
+      if (isRateLimit) return { error: 'Limite de requisições excedido na API do Bling.' };
+      if (isNetwork) return { error: 'Falha de rede com a API do Bling.' };
+      return { error: `Erro Bling: ${err.message}` };
     }
   }
   return null;
@@ -271,36 +322,47 @@ export const priceWorker = new Worker('update-price', async (job) => {
   const [regras, configAtacadoDb, userConfig] = await Promise.all([
     prisma.regraPreco.findMany({ where: { userId } }),
     prisma.configAtacado.findUnique({ where: { userId } }),
-    prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true, tinyPlano: true } })
+    prisma.user.findUnique({ where: { id: userId }, select: { cepOrigem: true, tinyPlano: true, erpAtivo: true } })
   ]);
 
-  const tinyToken = await getTinyAccessToken(userId);
+  const erpAtivo = userConfig?.erpAtivo || null;
+  const usaBling = erpAtivo === 'bling';
+
+  const tinyToken = usaBling ? null : await getTinyAccessToken(userId);
+  const blingToken = usaBling ? await getBlingAccessToken(userId) : null;
+  const erpToken = usaBling ? blingToken : tinyToken;
   const tinyLimits = getTinyRateLimit(userConfig?.tinyPlano);
   const regraGlobal = regraIdPorConta ? null : regras.find(r => r.id === regraId);
   const faixasAtacado = (enviarAtacado && configAtacadoDb?.ativo && Array.isArray(configAtacadoDb.faixas)) ? configAtacadoDb.faixas : [];
   const modoCSV = modo === 'csv';
 
-  detalhesLogs.push(`>> Setup: Atacado=${enviarAtacado ? 'Sim' : 'Não'} | Promo=${ativarPromocoes ? 'Sim' : 'Não'} | Tiny=${tinyToken ? 'Conectado' : 'Não'}`);
+  // Abstração: chama Tiny ou Bling dependendo do ERP ativo
+  const fetchPrecoErp = usaBling
+    ? (sku, tentativas) => fetchPrecoBling(sku, blingToken, tentativas)
+    : (sku, tentativas) => fetchPrecoTiny(sku, tinyToken, tinyLimits, tentativas);
 
-  // Modo CSV: pré-popula precosTinyMap com dados da planilha (sem chamar Tiny ERP)
+  const nomeErp = usaBling ? 'Bling' : 'Tiny';
+  detalhesLogs.push(`>> Setup: Atacado=${enviarAtacado ? 'Sim' : 'Não'} | Promo=${ativarPromocoes ? 'Sim' : 'Não'} | ERP=${nomeErp}=${erpToken ? 'Conectado' : 'Não'}`);
+
+  // Modo CSV: pré-popula precosTinyMap com dados da planilha (sem chamar ERP)
   if (modoCSV && precosCSV && typeof precosCSV === 'object') {
     Object.assign(precosTinyMap, precosCSV);
     detalhesLogs.push(`>> Modo CSV: ${Object.keys(precosCSV).length} SKU(s) importados da planilha.`);
   }
 
-  // ✅ PRÉ-CARREGAMENTO ROBUSTO DO TINY ERP COM LÓGICA DE CHUNKS E ATUALIZAÇÃO DA TELA
-  if (tinyToken && modo !== 'manual' && !modoCSV) {
+  // ✅ PRÉ-CARREGAMENTO ROBUSTO DO ERP COM LÓGICA DE CHUNKS E ATUALIZAÇÃO DA TELA
+  if (erpToken && modo !== 'manual' && !modoCSV) {
     const skusConhecidos = [...new Set(items.map(a => a.sku).filter(Boolean))];
     if (skusConhecidos.length > 0) {
       
-      const chunkPreFetch = tinyLimits.blocked ? 1 : (tinyLimits.concurrency || 2);
-      
+      const chunkPreFetch = (!usaBling && tinyLimits.blocked) ? 1 : (usaBling ? 4 : (tinyLimits.concurrency || 2));
+
       for (let i = 0; i < skusConhecidos.length; i += chunkPreFetch) {
         const lote = skusConhecidos.slice(i, i + chunkPreFetch);
-        
+
         await Promise.all(lote.map(async (sku) => {
           try {
-            const precos = await fetchPrecoTiny(sku, tinyToken, tinyLimits);
+            const precos = await fetchPrecoErp(sku);
             precosTinyMap[sku] = (precos && !precos.error) ? precos : (precos?.error ? precos : 'NOT_FOUND');
           } catch (e) {
             precosTinyMap[sku] = 'NOT_FOUND';
@@ -310,9 +372,9 @@ export const priceWorker = new Worker('update-price', async (job) => {
         // Atualiza a tela a cada lote para mostrar que não está travado
         const atual = Math.min(i + chunkPreFetch, skusConhecidos.length);
         if (i % (chunkPreFetch * 2) === 0 || atual === skusConhecidos.length) {
-            await prisma.tarefaFila.updateMany({ 
-              where: { id: tarefaId }, 
-              data: { detalhes: detalhesLogs.join('\n') + `\n>> Pré-carregando Tiny ERP: Lendo SKU ${atual} de ${skusConhecidos.length}...` } 
+            await prisma.tarefaFila.updateMany({
+              where: { id: tarefaId },
+              data: { detalhes: detalhesLogs.join('\n') + `\n>> Pré-carregando ${nomeErp} ERP: Lendo SKU ${atual} de ${skusConhecidos.length}...` }
             }).catch(()=>{});
         }
       }
@@ -335,7 +397,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
           const lote = skusRateLimit.slice(i, i + chunkPreFetch);
           await Promise.all(lote.map(async (sku) => {
             try {
-              const precos = await fetchPrecoTiny(sku, tinyToken, tinyLimits, 4);
+              const precos = await fetchPrecoErp(sku, 4);
               if (precos && !precos.error) {
                 precosTinyMap[sku] = precos;
               } else if (precos?.error) {
@@ -357,7 +419,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
         detalhesLogs.push(`>> Re-tentativa concluída: ${totalRecuperados}/${skusRateLimit.length} SKUs recuperados.`);
       }
 
-      detalhesLogs.push(`>> Pré-carga do Tiny concluída com sucesso.`);
+      detalhesLogs.push(`>> Pré-carga do ${nomeErp} concluída com sucesso.`);
     }
   }
 
@@ -396,14 +458,14 @@ export const priceWorker = new Worker('update-price', async (job) => {
       }
       if (skuDoAnuncio) skuDoAnuncio = String(skuDoAnuncio).trim();
 
-      if (skuDoAnuncio && tinyToken && precosTinyMap[skuDoAnuncio] === undefined && !modoCSV) {
-        const precosTiny = await fetchPrecoTiny(skuDoAnuncio, tinyToken, tinyLimits);
+      if (skuDoAnuncio && erpToken && precosTinyMap[skuDoAnuncio] === undefined && !modoCSV) {
+        const precosTiny = await fetchPrecoErp(skuDoAnuncio);
         precosTinyMap[skuDoAnuncio] = (precosTiny && !precosTiny.error) ? precosTiny : (precosTiny?.error ? precosTiny : 'NOT_FOUND');
       }
 
       // Se o SKU tem erro retryable do pré-carregamento → relança para o sistema de retry exponencial
       const erroTinyPreload = precosTinyMap[skuDoAnuncio]?.error;
-      if (skuDoAnuncio && tinyToken && erroTinyPreload && !modoCSV) {
+      if (skuDoAnuncio && erpToken && erroTinyPreload && !modoCSV) {
         const isTokenInvalido = erroTinyPreload.includes('Token') || erroTinyPreload.includes('inválido');
         if (!isTokenInvalido) {
           // Rate limit, rede, timeout → retryable; token inválido → falha permanente
@@ -451,7 +513,7 @@ export const priceWorker = new Worker('update-price', async (job) => {
         }
       } else if (regraEfetiva) {
         let precoBaseItem = 0;
-        if ((tinyToken || modoCSV) && skuDoAnuncio) {
+        if ((erpToken || modoCSV) && skuDoAnuncio) {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
           if (dadosTiny && dadosTiny !== 'NOT_FOUND' && !dadosTiny.error) precoBaseItem = resolverPrecoBase(dadosTiny, regraEfetiva.precoBase || 'promocional');
         } else {
@@ -486,10 +548,10 @@ export const priceWorker = new Worker('update-price', async (job) => {
 
       if (!precoNum || isNaN(precoNum) || precoNum <= 0) {
         if (!skuDoAnuncio) throw new Error(`Sem SKU.`);
-        if (tinyToken || modoCSV || modo === 'tiny') {
+        if (erpToken || modoCSV || modo === 'tiny') {
           const dadosTiny = precosTinyMap[skuDoAnuncio];
-          if (dadosTiny && dadosTiny.error) throw new Error(`${modoCSV ? 'CSV' : 'Tiny ERP'}: ${dadosTiny.error}`);
-          const fonte = modoCSV ? 'planilha CSV' : 'Tiny ERP';
+          if (dadosTiny && dadosTiny.error) throw new Error(`${modoCSV ? 'CSV' : `${nomeErp} ERP`}: ${dadosTiny.error}`);
+          const fonte = modoCSV ? 'planilha CSV' : `${nomeErp} ERP`;
           const estadoMapa = dadosTiny === 'NOT_FOUND' ? 'NOT_FOUND' : (dadosTiny === undefined ? 'não encontrado' : `preco=${dadosTiny?.preco}`);
           throw new Error(`${fonte} não retornou preço. [SKU: "${skuDoAnuncio}", mapa: ${estadoMapa}]`);
         } else {

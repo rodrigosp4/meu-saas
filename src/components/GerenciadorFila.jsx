@@ -248,18 +248,43 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
 
   const { isLive, progress, lines } = parseLogContent(detalhes);
 
-  const erros = lines.filter(l => l.includes('Erro:')).length;
+  const isAcoesTarefa = tarefa.tipo?.startsWith('Ação em Massa');
+  const erros = lines.filter(l => l.includes('Erro:') || l.includes('ERRO:')).length;
+  const acoesErros = isAcoesTarefa ? lines.filter(l => l.startsWith('❌')).length : 0;
   const sucessos = lines.filter(l => l.startsWith('[ID:') && !l.includes('Erro:')).length;
   const filteredLines = searchTerm
     ? lines.map((line, i) => ({ line, i })).filter(({ line }) => line.toLowerCase().includes(searchTerm.toLowerCase()))
     : lines.map((line, i) => ({ line, i }));
   const atributosObrigatorios = extrairAtributosObrigatorios(detalhes);
 
+  const [retentando, setRetentando] = useState(false);
+
   const copyLog = () => {
     navigator.clipboard.writeText(detalhes || '').catch(() => {});
   };
 
   const reprocessarErros = () => setShowReprocessForm(true);
+
+  const retentarAcoes = async () => {
+    if (!confirm(`Retentar ${acoesErros} item(s) que falharam?`)) return;
+    setRetentando(true);
+    try {
+      const res = await fetch(`/api/fila/${tarefa.id}/retentar-acoes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.erro || 'Erro ao retentar.'); return; }
+      alert(`${data.itens} item(s) reenfileirado(s)!`);
+      onReprocessed?.();
+      onClose();
+    } catch {
+      alert('Falha ao comunicar com o servidor.');
+    } finally {
+      setRetentando(false);
+    }
+  };
 
   const retomar = async () => {
     if (!confirm('Forçar retomada da tarefa? O job será reenfileirado do início.')) return;
@@ -322,7 +347,16 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
                 {retomando ? '...' : '▶ Retomar'}
               </button>
             )}
-            {erros > 0 && status !== 'PROCESSANDO' && (
+            {acoesErros > 0 && status !== 'PROCESSANDO' && (
+              <button
+                onClick={retentarAcoes}
+                disabled={retentando}
+                className="text-xs px-3 py-1 bg-red-700 text-white rounded hover:bg-red-600 transition font-semibold disabled:opacity-50"
+              >
+                {retentando ? '...' : `↺ Tentar de Novo (${acoesErros})`}
+              </button>
+            )}
+            {!isAcoesTarefa && erros > 0 && status !== 'PROCESSANDO' && (
               <button
                 onClick={reprocessarErros}
                 className="text-xs px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-500 transition font-semibold"

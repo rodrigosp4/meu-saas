@@ -6,6 +6,7 @@ dotenv.config();
 export const config = {
   port: process.env.PORT || 3001,
   tinyRedirectUri: process.env.TINY_REDIRECT_URI,
+  blingRedirectUri: process.env.BLING_REDIRECT_URI,
   mlAppId: process.env.ML_APP_ID,
   mlClientSecret: process.env.ML_CLIENT_SECRET,
   mlRedirectUri: process.env.ML_REDIRECT_URI,

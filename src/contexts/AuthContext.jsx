@@ -75,10 +75,10 @@ export function AuthProvider({ children }) {
           const clone = response.clone();
           clone.json().then(data => {
             if (data?.tinyTokenInvalid) {
-              const key = 'tiny_token_alert_shown';
+              const key = 'erp_token_alert_shown';
               if (!sessionStorage.getItem(key)) {
                 sessionStorage.setItem(key, '1');
-                alert('Sua conexão com o Tiny ERP expirou. Vá em Configurações para reconectar.');
+                alert('Sua conexão com o ERP (Tiny ou Bling) expirou. Vá em Configurações para reconectar.');
               }
             }
           }).catch(() => {});

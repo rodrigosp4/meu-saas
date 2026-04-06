@@ -12,6 +12,7 @@ import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { getTinyRateLimit } from './../utils/tinyRateLimit.js';
 import { createTinyClient, getTinyAccessToken, listarProdutos, obterProduto, obterEstoque, normalizarProdutoV3 } from '../utils/tinyClient.js';
+import { createBlingClient, getBlingAccessToken, listarProdutosBling, obterProdutoBling, obterEstoqueBling, normalizarProdutoBling } from '../utils/blingClient.js';
 
 // Configuração de conexão com o Redis (Upstash) idêntica à da fila
 const connection = {
@@ -199,4 +200,180 @@ syncWorker.on('failed', (job, err) => {
 
 syncWorker.on('error', (err) => {
   console.error('❌ Erro no Worker de Sincronização (Redis):', err.message);
+});
+
+// =============================================================================
+// WORKER BLING
+// =============================================================================
+console.log('⚙️  Worker de Sincronização do Bling Iniciado e aguardando Jobs...');
+
+export const syncBlingWorker = new Worker('sync-bling', async (job) => {
+  const { userId, mode, sku, ids } = job.data;
+
+  if (!userId) {
+    throw new Error('Falta userId para executar a sincronização.');
+  }
+
+  const blingToken = await getBlingAccessToken(userId);
+  if (!blingToken) {
+    throw new Error('Conta Bling não conectada ou token expirado. Reconecte em Configurações.');
+  }
+
+  await job.updateProgress(5);
+
+  const blingClient = createBlingClient(blingToken);
+  // Bling: 600 req/10s → ~60ms entre requisições; usamos 120ms para margem
+  const BLING_DELAY_MS = 120;
+  const LIMIT = 100;
+  let idsToFetch = [];
+
+  // =========================================================================
+  // FASE 1: BUSCAR QUAIS IDs DEVEM SER ATUALIZADOS
+  // =========================================================================
+  try {
+    if (mode === 'ids' && Array.isArray(ids)) {
+      idsToFetch = ids;
+
+    } else if (mode === 'sku' && sku) {
+      // Docs: parâmetro correto é codigos[] (array)
+      const data = await listarProdutosBling(blingClient, { 'codigos[]': sku });
+      // Ignora tipo=V (variações individuais — já vêm embutidas no produto pai tipo=C)
+      idsToFetch = (data.data || []).filter(p => p.tipo !== 'V').map(p => p.id);
+
+    } else if (mode === 'recentes') {
+      const data = await listarProdutosBling(blingClient, { pagina: 1, limite: LIMIT });
+      idsToFetch = (data.data || []).filter(p => p.tipo !== 'V').map(p => p.id);
+
+    } else if (mode === 'all') {
+      let pagina = 1;
+      let hasMore = true;
+      while (hasMore) {
+        await delay(BLING_DELAY_MS);
+        try {
+          const data = await listarProdutosBling(blingClient, { pagina, limite: LIMIT });
+          const items = (data.data || []).filter(p => p.tipo !== 'V');
+          idsToFetch.push(...items.map(p => p.id));
+          hasMore = data.data?.length === LIMIT;
+          pagina++;
+        } catch (pageErr) {
+          console.warn(`⚠️ Bling: Falha ao buscar página ${pagina}: ${pageErr.message}`);
+          hasMore = false;
+        }
+      }
+
+    } else if (mode === 'novos') {
+      const produtosExistentes = await prisma.produto.findMany({
+        where: { userId },
+        select: { sku: true },
+      });
+      const skusExistentes = new Set(produtosExistentes.map(p => p.sku));
+
+      let pagina = 1;
+      let hasMore = true;
+      while (hasMore) {
+        await delay(BLING_DELAY_MS);
+        try {
+          const data = await listarProdutosBling(blingClient, { pagina, limite: LIMIT });
+          const items = (data.data || []).filter(p => p.tipo !== 'V');
+          for (const p of items) {
+            if (p.codigo && !skusExistentes.has(p.codigo)) idsToFetch.push(p.id);
+          }
+          hasMore = data.data?.length === LIMIT;
+          pagina++;
+        } catch (pageErr) {
+          console.warn(`⚠️ Bling: Falha ao buscar página ${pagina}: ${pageErr.message}`);
+          hasMore = false;
+        }
+      }
+    }
+  } catch (error) {
+    throw new Error(`Falha ao buscar lista de produtos no Bling: ${error.message}`);
+  }
+
+  if (idsToFetch.length === 0) {
+    await job.updateProgress(100);
+    return { success: true, message: 'Nenhum produto encontrado no Bling.' };
+  }
+
+  await job.updateProgress(15);
+
+  // =========================================================================
+  // FASE 2: BUSCAR DETALHES E SALVAR
+  // =========================================================================
+  const total = idsToFetch.length;
+  let processed = 0;
+
+  for (const idProduto of idsToFetch) {
+    let sucesso = false;
+    let tentativas = 0;
+    const maxTentativas = 3;
+
+    while (tentativas < maxTentativas && !sucesso) {
+      try {
+        await delay(BLING_DELAY_MS);
+
+        const det = await obterProdutoBling(blingClient, idProduto);
+        const estoqueAtual = await obterEstoqueBling(blingClient, idProduto);
+
+        if (det && det.codigo) {
+          const preco = det.preco || 0;
+          const dadosCompletos = normalizarProdutoBling(det, estoqueAtual);
+
+          await prisma.produto.upsert({
+            where: { userId_sku: { userId, sku: det.codigo } },
+            update: {
+              nome: det.nome,
+              preco,
+              estoque: estoqueAtual,
+              dadosTiny: dadosCompletos,
+            },
+            create: {
+              userId,
+              sku: det.codigo,
+              nome: det.nome,
+              preco,
+              estoque: estoqueAtual,
+              statusML: 'Não Publicado',
+              dadosTiny: dadosCompletos,
+            },
+          });
+        }
+
+        sucesso = true;
+      } catch (err) {
+        tentativas++;
+        if (tentativas >= maxTentativas) {
+          console.error(`⚠️ Bling: Erro final ao processar Produto ID ${idProduto}:`, err.message);
+        } else {
+          await delay(2500 * tentativas);
+        }
+      }
+    }
+
+    processed++;
+    const progress = 15 + Math.floor((processed / total) * 84);
+    await job.updateProgress(progress);
+  }
+
+  await job.updateProgress(100);
+  return { success: true, processed };
+
+}, {
+  connection,
+  concurrency: 5,
+  stalledInterval: 120000,
+  lockDuration: 300000,
+  drainDelay: 10,
+});
+
+syncBlingWorker.on('completed', (job) => {
+  console.log(`✅ Sincronização Bling concluída (Job ${job.id})! Produtos processados: ${job.returnvalue.processed || 0}`);
+});
+
+syncBlingWorker.on('failed', (job, err) => {
+  console.log(`❌ Falha na Sincronização Bling (Job ${job.id}): ${err.message}`);
+});
+
+syncBlingWorker.on('error', (err) => {
+  console.error('❌ Erro no Worker de Sincronização Bling (Redis):', err.message);
 });

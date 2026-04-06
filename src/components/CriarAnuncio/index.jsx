@@ -33,7 +33,7 @@ const parseGrade = (gradeRaw) => {
 
 // 1. ADICIONADO O usuarioId AQUI NAS PROPS
 export default function CriarAnuncio({ produto, usuarioId }) {
-  const { tinyToken } = useContasML();
+  const { nomeErp } = useContasML();
   const [detalhesProduto, setDetalhesProduto] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
@@ -185,10 +185,10 @@ export default function CriarAnuncio({ produto, usuarioId }) {
       const res = await fetch('/api/tiny-produto-detalhes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: produto.id, tinyToken })
+        body: JSON.stringify({ id: produto.id, userId: usuarioId })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || "O Tiny ERP rejeitou a requisição.");
+      if (!res.ok) throw new Error(data.erro || `O ${nomeErp || 'ERP'} rejeitou a requisição.`);
 
       if ((!data.filhos || data.filhos.length === 0) && produto.dadosTiny?.variacoes) {
          let varTiny = produto.dadosTiny.variacoes;

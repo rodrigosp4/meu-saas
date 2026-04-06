@@ -199,7 +199,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
   // ── Processar arquivo (CSV, XLS, XLSX) ────────────────────────────────
   const processarArquivo = useCallback((file) => {
     if (!file || !file.name.match(/\.(csv|xls|xlsx)$/i)) {
-      alert('Selecione um arquivo .csv, .xls ou .xlsx exportado do Tiny ERP');
+      alert('Selecione um arquivo .csv, .xls ou .xlsx exportado do ERP.');
       return;
     }
     setFileName(file.name);
@@ -222,7 +222,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
         const { produtos: p, ignoradosV, ignoradosInativo, ignoradosSemSku } = extrairProdutos(rows);
         if (p.length === 0 && rows.length > 0) {
           const colunas = Object.keys(rows[0]).join(', ');
-          alert(`Nenhum produto encontrado.\n\nColunas detectadas:\n${colunas}\n\nEsperado: "Código (SKU)", "Tipo do produto", "Situação", "Preço" etc.\n\nCertifique-se de exportar via Produtos → Exportar → CSV/Excel no Tiny ERP.`);
+          alert(`Nenhum produto encontrado.\n\nColunas detectadas:\n${colunas}\n\nEsperado: "Código (SKU)", "Tipo do produto", "Situação", "Preço" etc.\n\nCertifique-se de exportar via Produtos → Exportar → CSV/Excel no ERP.`);
           setFileName('');
           return;
         }
@@ -446,7 +446,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
         <div className="bg-gradient-to-r from-emerald-700 to-teal-600 px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-white font-black text-lg tracking-tight">Corretor de Preço via Planilha</h1>
-            <p className="text-emerald-100 text-xs mt-0.5">Importe o CSV do Tiny ERP e corrija preços em massa sem consumir a API</p>
+            <p className="text-emerald-100 text-xs mt-0.5">Importe o CSV do ERP e corrija preços em massa sem consumir a API</p>
           </div>
           <div className="bg-white/20 rounded-lg p-2">
             <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -715,7 +715,7 @@ export default function CorretorPrecoPlanilha({ usuarioId }) {
               <svg className="w-12 h-12 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              <p className="text-gray-400 text-sm font-semibold">Importe a planilha CSV do Tiny ERP para começar</p>
+              <p className="text-gray-400 text-sm font-semibold">Importe a planilha CSV do ERP para começar</p>
               <p className="text-gray-300 text-xs mt-1">Exporte em: Produtos → Exportar → CSV</p>
             </div>
           )}

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../config/prisma.js';
-import { syncQueue, mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
+import { syncQueue, syncBlingQueue, mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
 
 function parseErrorIds(detalhes) {
   if (!detalhes) return [];
@@ -15,12 +15,13 @@ function parseErrorIds(detalhes) {
 const router = Router();
 
 const QUEUES_BY_TIPO = {
-  'sync-tiny':     syncQueue,
-  'sync-ml':       mlSyncQueue,
-  'publish-ml':    publishQueue,
-  'update-price':  priceQueue,
+  'sync-tiny':      syncQueue,
+  'sync-bling':     syncBlingQueue,
+  'sync-ml':        mlSyncQueue,
+  'publish-ml':     publishQueue,
+  'update-price':   priceQueue,
   'price-check-v2': priceCheckQueue,
-  'acoes-massa':   acoesMassaQueue,
+  'acoes-massa':    acoesMassaQueue,
 };
 
 // 1. Buscar todas as tarefas do usuário
@@ -230,6 +231,66 @@ router.post('/api/fila/:tarefaId/reprocessar-erros', async (req, res) => {
     await prisma.tarefaFila.updateMany({ where: { id: novaTarefa.id }, data: { jobId: job.id } });
 
     res.json({ ok: true, tarefaId: novaTarefa.id, itens: anuncios.length });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 7. Retentar apenas os itens com erro de uma tarefa de ações em massa
+router.post('/api/fila/:tarefaId/retentar-acoes', async (req, res) => {
+  try {
+    const { tarefaId } = req.params;
+    const { userId } = req.body;
+
+    const tarefa = await prisma.tarefaFila.findFirst({ where: { id: tarefaId, userId } });
+    if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada.' });
+    if (!tarefa.payload) return res.status(400).json({ erro: 'Tarefa sem payload salvo. Não é possível retentar.' });
+
+    // Extrai IDs que falharam do log de ações (formato: "❌ [MLB123456] ...")
+    const errorIds = new Set();
+    for (const line of (tarefa.detalhes || '').split('\n')) {
+      const m = line.match(/^❌ \[([A-Z0-9]+)\]/);
+      if (m) errorIds.add(m[1]);
+    }
+    if (errorIds.size === 0) return res.status(400).json({ erro: 'Nenhum item com erro encontrado no log.' });
+
+    const payload = tarefa.payload;
+    const originalItems = Array.isArray(payload.items) ? payload.items : [];
+    const itensFalhos = originalItems.filter(i => errorIds.has(i.id));
+
+    // Fallback: busca no banco se itens não estiverem no payload
+    const itemsFinais = itensFalhos.length > 0 ? itensFalhos : (
+      await prisma.anuncioML.findMany({
+        where: { id: { in: [...errorIds] }, conta: { userId } },
+        select: { id: true, contaId: true }
+      })
+    );
+
+    if (itemsFinais.length === 0) return res.status(400).json({ erro: 'Itens com erro não encontrados.' });
+
+    const novaTarefa = await prisma.tarefaFila.create({
+      data: {
+        userId,
+        tipo: tarefa.tipo,
+        alvo: `${itemsFinais.length} erro(s) retentado(s)`,
+        conta: tarefa.conta || 'Várias Contas',
+        status: 'PENDENTE',
+        payload: { ...payload, items: itemsFinais }
+      }
+    });
+
+    const job = await acoesMassaQueue.add('acoes-massa-job', {
+      tarefaId: novaTarefa.id,
+      userId,
+      items: itemsFinais,
+      acao: payload.acao,
+      valor: payload.valor,
+      modoReplace: payload.modoReplace
+    });
+
+    await prisma.tarefaFila.updateMany({ where: { id: novaTarefa.id }, data: { jobId: job.id } });
+
+    res.json({ ok: true, tarefaId: novaTarefa.id, itens: itemsFinais.length });
   } catch (error) {
     res.status(500).json({ erro: error.message });
   }

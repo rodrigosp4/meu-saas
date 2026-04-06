@@ -1609,12 +1609,27 @@ async getPerguntas(req, res) {
       (a, b) => new Date(b.date_created) - new Date(a.date_created)
     );
 
-    // Atualiza cache de notificação com contagem real do DB após fetch ao vivo
+    // Ao buscar UNANSWERED ao vivo, sincroniza o status no banco para evitar contagem inflada.
+    // Perguntas que o ML não retornou mais como UNANSWERED devem ser marcadas como ANSWERED no banco.
     if (userId && status === 'UNANSWERED') {
       try {
-        const perguntasPendentes = await prisma.perguntaML.count({
-          where: { conta: { userId }, status: 'UNANSWERED' }
+        const idsRetornadosPeloML = new Set(todasAsPerguntas.map(p => p.id));
+        // Busca todos os ids que estão UNANSWERED no banco para este usuário
+        const pendentesNoBanco = await prisma.perguntaML.findMany({
+          where: { conta: { userId }, status: 'UNANSWERED' },
+          select: { id: true }
         });
+        const idsDesatualizados = pendentesNoBanco
+          .map(p => p.id)
+          .filter(id => !idsRetornadosPeloML.has(id));
+        // Marca como ANSWERED os que não vieram mais do ML
+        if (idsDesatualizados.length > 0) {
+          await prisma.perguntaML.updateMany({
+            where: { id: { in: idsDesatualizados } },
+            data: { status: 'ANSWERED' }
+          });
+        }
+        const perguntasPendentes = todasAsPerguntas.length;
         await prisma.notificacaoCache.upsert({
           where: { userId },
           create: { userId, msgNaoLidas: 0, perguntasPendentes },
@@ -2091,7 +2106,8 @@ async corrigirPreco(req, res) {
           tipo: `Ação em Massa: ${acao.toUpperCase()}`,
           alvo: `${items.length} anúncio(s)`,
           conta: 'Várias Contas',
-          status: 'PENDENTE'
+          status: 'PENDENTE',
+          payload: { items, acao, valor, modoReplace }
         }
       });
 
@@ -2453,17 +2469,17 @@ async syncPerguntasIniciais(req, res) {
         return { contaId: conta.id, suggestionIds, automatedIds };
       }));
 
-      // Achata em lista global: { itemId, contaId, automatedIds }
-      // Garante que o mesmo itemId não apareça duplicado (mesma conta)
+      // Achata em lista global: { itemId, contaId, isAutomated }
+      // Deduplicação por itemId (um anúncio pertence a apenas uma conta —
+      // se o mesmo MLB aparecer nas sugestões de duas contas, é duplicata)
       const seenItems = new Set();
       const allItems = []; // { itemId, contaId, isAutomated }
       for (const result of allEntriesByAccount) {
         if (result.status !== 'fulfilled') continue;
         const { contaId: cid, suggestionIds, automatedIds } = result.value;
         for (const itemId of suggestionIds) {
-          const key = `${cid}:${itemId}`;
-          if (seenItems.has(key)) continue;
-          seenItems.add(key);
+          if (seenItems.has(itemId)) continue;
+          seenItems.add(itemId);
           allItems.push({ itemId, contaId: cid, isAutomated: automatedIds.has(itemId) });
         }
       }
@@ -2519,13 +2535,13 @@ async syncPerguntasIniciais(req, res) {
       }
 
       // ── 5. Mapa SKU → todos os itens do usuário (para detectar própria conta) ──
-      // Busca todos os anúncios do usuário com SKU para cross-check
+      // Inclui anúncios active e closed para detectar quando a referência do catálogo é um anúncio próprio encerrado
       const allUserAds = await prisma.anuncioML.findMany({
-        where: { conta: { userId }, status: 'active' },
-        select: { id: true, preco: true, contaId: true, dadosML: true }
+        where: { conta: { userId }, status: { in: ['active', 'closed'] } },
+        select: { id: true, preco: true, contaId: true, dadosML: true, status: true }
       }).catch(() => []);
 
-      const skuToUserItems = {}; // sku → [{ itemId, contaId, nickname, price }]
+      const skuToUserItems = {}; // sku → [{ itemId, contaId, nickname, price, isClosed }]
       for (const ad of allUserAds) {
         const attrs = ad.dadosML?.attributes || [];
         const skuAttr = attrs.find(a => a.id === 'SELLER_SKU');
@@ -2537,6 +2553,7 @@ async syncPerguntasIniciais(req, res) {
           contaId: ad.contaId,
           nickname: contaMap[ad.contaId]?.nickname || ad.contaId,
           price: ad.preco || ad.dadosML?.price || 0,
+          isClosed: ad.status === 'closed',
         });
       }
 
@@ -2576,7 +2593,7 @@ async syncPerguntasIniciais(req, res) {
             .filter(x => x.price < currentPriceForItem)
             .sort((a, b) => a.price - b.price)[0];
           if (cheaper) {
-            ownAccountCompetition = { itemId: cheaper.itemId, contaId: cheaper.contaId, nickname: cheaper.nickname, price: cheaper.price };
+            ownAccountCompetition = { itemId: cheaper.itemId, contaId: cheaper.contaId, nickname: cheaper.nickname, price: cheaper.price, isClosed: cheaper.isClosed || false };
           }
         }
 

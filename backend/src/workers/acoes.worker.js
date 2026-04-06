@@ -89,6 +89,10 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
 
       for (const item of itensDaConta) {
         let logAcao = `[${item.id}] `;
+        let itemDone = false;
+
+        for (let attempt = 0; attempt <= 3 && !itemDone; attempt++) {
+          if (attempt > 0) logAcao = `[${item.id}] `;
         try {
           if (acao === 'ativar' || acao === 'pausar') {
             const status = acao === 'ativar' ? 'active' : 'paused';
@@ -368,10 +372,21 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
 
           sucessos++;
           logsDetalhes.push(`✅ ${logAcao}`);
-          await delay(250);
+          itemDone = true;
 
         } catch (err) {
+          const isRateLimit = err.response?.status === 429;
+          if (isRateLimit && attempt < 3) {
+            const retryAfter = parseInt(err.response?.headers?.['retry-after'] || '0', 10);
+            const waitMs = retryAfter > 0 ? retryAfter * 1000 : (attempt + 1) * 30000;
+            logsDetalhes.push(`⏳ [${item.id}] Rate limit 429 — aguardando ${Math.round(waitMs / 1000)}s (tentativa ${attempt + 1}/3)...`);
+            await salvarProgresso();
+            await delay(waitMs);
+            continue; // retry
+          }
+
           falhas++;
+          itemDone = true;
 
           let msgErro = err.message;
 
@@ -393,8 +408,11 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
 
           logsDetalhes.push(`❌ ${logAcao} ERRO: ${msgErro}`);
         }
+        } // end retry loop
 
         processados++;
+        // Delay entre itens: 600ms base. Para 'excluir', 1500ms para evitar rate limit
+        await delay(acao === 'excluir' ? 1500 : 600);
         if (processados % 10 === 0) await salvarProgresso();
       }
     }

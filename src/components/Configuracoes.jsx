@@ -11,6 +11,12 @@ export default function Configuracoes({ usuarioId }) {
   const [tinyClientId, setTinyClientId] = useState('');
   const [tinyClientSecret, setTinyClientSecret] = useState('');
   const [salvandoCredenciais, setSalvandoCredenciais] = useState(false);
+  // Bling ERP
+  const [blingConectado, setBlingConectado] = useState(false);
+  const [blingClientId, setBlingClientId] = useState('');
+  const [blingClientSecret, setBlingClientSecret] = useState('');
+  const [salvandoCredenciaiBling, setSalvandoCredenciaisBling] = useState(false);
+  const [erpAtivo, setErpAtivo] = useState(null); // 'tiny' | 'bling' | null
   const [contasML, setContasML] = useState([]);
   const [regrasPreco, setRegrasPreco] = useState([]);
   const isProcessingOAuth = useRef(new URLSearchParams(window.location.search).has('code'));
@@ -80,6 +86,10 @@ export default function Configuracoes({ usuarioId }) {
         setTinyPlano(data.tinyPlano || 'descontinuado');
         if (data.tinyClientId) setTinyClientId(data.tinyClientId);
         if (data.tinyClientSecret) setTinyClientSecret(data.tinyClientSecret);
+        setBlingConectado(!!data.blingConectado);
+        if (data.blingClientId) setBlingClientId(data.blingClientId);
+        if (data.blingClientSecret) setBlingClientSecret(data.blingClientSecret);
+        setErpAtivo(data.erpAtivo || null);
         const contas = data.contasML || [];
         setContasML(contas);
         setRegrasPreco(data.regrasPreco || []);
@@ -125,6 +135,7 @@ export default function Configuracoes({ usuarioId }) {
       body: JSON.stringify({ userId: usuarioId })
     });
     setTinyConectado(false);
+    setErpAtivo(null);
   };
 
   const salvarCredenciaisTiny = async () => {
@@ -149,6 +160,36 @@ export default function Configuracoes({ usuarioId }) {
       body: JSON.stringify({ tinyPlano })
     });
     setSalvandoPlano(false);
+  };
+
+  // ===== BLING ERP =====
+  const conectarBling = () => {
+    window.location.href = `/api/bling/connect?userId=${usuarioId}`;
+  };
+
+  const desconectarBling = async () => {
+    if (!window.confirm('Deseja desconectar a conta Bling?')) return;
+    await fetch('/api/bling/disconnect', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: usuarioId })
+    });
+    setBlingConectado(false);
+    setErpAtivo(null);
+  };
+
+  const salvarCredenciaisBling = async () => {
+    if (!blingClientId.trim() || !blingClientSecret.trim()) {
+      alert('Preencha o Client ID e o Client Secret do Bling.');
+      return;
+    }
+    setSalvandoCredenciaisBling(true);
+    const res = await fetch(`/api/usuario/${usuarioId}/bling-credentials`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blingClientId: blingClientId.trim(), blingClientSecret: blingClientSecret.trim() })
+    });
+    setSalvandoCredenciaisBling(false);
+    if (res.ok) alert('Credenciais Bling salvas! Agora clique em "Conectar Bling ERP".');
+    else alert('Erro ao salvar credenciais do Bling.');
   };
 
   // 3. EXCLUIR CONTA NO BANCO
@@ -422,10 +463,29 @@ export default function Configuracoes({ usuarioId }) {
     window.history.replaceState({}, document.title, window.location.pathname);
     if (tinyStatus === 'connected') {
       setTinyConectado(true);
-      alert('Conta Tiny conectada com sucesso!');
+      setErpAtivo('tiny');
+      setBlingConectado(false);
+      alert('Conta Tiny conectada com sucesso! O Bling ERP foi desativado.');
     } else if (tinyStatus === 'error') {
       const msg = urlParams.get('msg') || 'erro desconhecido';
       alert(`Falha ao conectar Tiny: ${msg}`);
+    }
+  }, []);
+
+  // 7. CALLBACK DO BLING (retorno do OAuth)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const blingStatus = urlParams.get('bling');
+    if (!blingStatus) return;
+    window.history.replaceState({}, document.title, window.location.pathname);
+    if (blingStatus === 'connected') {
+      setBlingConectado(true);
+      setErpAtivo('bling');
+      setTinyConectado(false);
+      alert('Conta Bling conectada com sucesso! O Tiny ERP foi desativado.');
+    } else if (blingStatus === 'error') {
+      const msg = urlParams.get('msg') || 'erro desconhecido';
+      alert(`Falha ao conectar Bling: ${msg}`);
     }
   }, []);
 
@@ -618,6 +678,11 @@ export default function Configuracoes({ usuarioId }) {
       {/* 1. TINY ERP */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
         <h4 className="text-lg font-bold" style={{ color: c.orange }}>Conexão Tiny ERP</h4>
+        {erpAtivo === 'bling' && (
+          <p className="text-xs mt-1 mb-3 px-3 py-2 rounded" style={{ backgroundColor: '#fef9c3', color: '#92400e' }}>
+            O Bling ERP está ativo. Conectar o Tiny irá desativar o Bling automaticamente.
+          </p>
+        )}
         <div className="mt-4 flex flex-col gap-4">
           {/* Credenciais do app Tiny (por usuário) */}
           <div className="flex flex-col gap-2">
@@ -659,6 +724,11 @@ export default function Configuracoes({ usuarioId }) {
             <span className="text-sm" style={{ color: c.text }}>
               {tinyConectado ? 'Conta Tiny conectada' : 'Nenhuma conta conectada'}
             </span>
+            {erpAtivo === 'tiny' && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                ERP ativo
+              </span>
+            )}
           </div>
           <div className="flex gap-3">
             <button
@@ -704,6 +774,84 @@ export default function Configuracoes({ usuarioId }) {
             >
               {salvandoPlano ? 'Salvando...' : 'Salvar Plano'}
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 1b. BLING ERP */}
+      <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
+        <h4 className="text-lg font-bold" style={{ color: c.orange }}>Conexão Bling ERP</h4>
+        {erpAtivo === 'tiny' && (
+          <p className="text-xs mt-1 mb-3 px-3 py-2 rounded" style={{ backgroundColor: '#fef9c3', color: '#92400e' }}>
+            O Tiny ERP está ativo. Conectar o Bling irá desativar o Tiny automaticamente.
+          </p>
+        )}
+        <div className="mt-4 flex flex-col gap-4">
+          {/* Credenciais do app Bling */}
+          <div className="flex flex-col gap-2">
+            <p className="text-xs" style={{ color: c.muted }}>
+              Registre seu app no Bling em <strong>Configurações → API → Aplicativos → Novo App</strong> e cole as credenciais abaixo.
+            </p>
+            <div className="flex gap-3 flex-wrap">
+              <input
+                type="text"
+                placeholder="Client ID"
+                value={blingClientId}
+                onChange={e => setBlingClientId(e.target.value)}
+                className="flex-1 min-w-48 px-3 py-2 border rounded-md text-sm"
+                style={{ borderColor: c.border }}
+              />
+              <input
+                type="password"
+                placeholder="Client Secret"
+                value={blingClientSecret}
+                onChange={e => setBlingClientSecret(e.target.value)}
+                className="flex-1 min-w-48 px-3 py-2 border rounded-md text-sm"
+                style={{ borderColor: c.border }}
+              />
+              <button
+                onClick={salvarCredenciaisBling}
+                disabled={salvandoCredenciaiBling}
+                className="px-4 py-2 text-white rounded text-sm transition disabled:opacity-50"
+                style={{ backgroundColor: c.orange }}
+                onMouseOver={e => { if (!salvandoCredenciaiBling) e.target.style.backgroundColor = c.orangeHover; }}
+                onMouseOut={e => e.target.style.backgroundColor = c.orange}
+              >
+                {salvandoCredenciaiBling ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          </div>
+          {/* Status */}
+          <div className="flex items-center gap-3">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${blingConectado ? 'bg-green-500' : 'bg-gray-400'}`} />
+            <span className="text-sm" style={{ color: c.text }}>
+              {blingConectado ? 'Conta Bling conectada' : 'Nenhuma conta conectada'}
+            </span>
+            {erpAtivo === 'bling' && (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
+                ERP ativo
+              </span>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={conectarBling}
+              className="px-4 py-2 text-white rounded transition"
+              style={{ backgroundColor: c.orange }}
+              onMouseOver={e => e.target.style.backgroundColor = c.orangeHover}
+              onMouseOut={e => e.target.style.backgroundColor = c.orange}
+            >
+              {blingConectado ? 'Reconectar Bling' : 'Conectar Bling ERP'}
+            </button>
+            {blingConectado && (
+              <button
+                onClick={desconectarBling}
+                className="px-4 py-2 rounded border transition text-sm"
+                style={{ color: c.muted, borderColor: c.border }}
+              >
+                Desconectar
+              </button>
+            )}
           </div>
         </div>
       </div>

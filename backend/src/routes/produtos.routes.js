@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import prisma from '../config/prisma.js';
 import { Prisma } from '@prisma/client';
-import { syncQueue } from '../workers/queue.js';
+import { syncQueue, syncBlingQueue } from '../workers/queue.js';
 import { config } from '../config/env.js';
 import { getTinyRateLimit } from '../utils/tinyRateLimit.js';
 import { createTinyClient, getTinyAccessToken, listarProdutos, obterProduto, obterEstoque } from '../utils/tinyClient.js';
@@ -346,8 +346,13 @@ router.post('/api/produtos/importar-planilha', async (req, res) => {
 router.post('/api/produtos/sync', async (req, res) => {
   try {
     const { mode, sku, userId, ids } = req.body;
-    const job = await syncQueue.add('sync-tiny', { mode, sku, userId, ids });
-    res.json({ jobId: job.id, message: 'Sincronização iniciada' });
+    // Seleciona a fila correta com base no ERP ativo do usuário
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { erpAtivo: true } });
+    const usesBling = user?.erpAtivo === 'bling';
+    const queue = usesBling ? syncBlingQueue : syncQueue;
+    const jobName = usesBling ? 'sync-bling' : 'sync-tiny';
+    const job = await queue.add(jobName, { mode, sku, userId, ids });
+    res.json({ jobId: job.id, message: 'Sincronização iniciada', erp: usesBling ? 'bling' : 'tiny' });
   } catch (error) {
     res.status(500).json({ erro: "Falha ao colocar sincronização na fila." });
   }
@@ -355,7 +360,9 @@ router.post('/api/produtos/sync', async (req, res) => {
 
 router.get('/api/produtos/sync-status/:id', async (req, res) => {
   try {
-    const job = await syncQueue.getJob(req.params.id);
+    // Tenta em ambas as filas
+    let job = await syncQueue.getJob(req.params.id);
+    if (!job) job = await syncBlingQueue.getJob(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job não encontrado' });
     const state = await job.getState();
     res.json({ state, progress: job.progress || 0 });
@@ -366,7 +373,8 @@ router.get('/api/produtos/sync-status/:id', async (req, res) => {
 
 router.delete('/api/produtos/sync-status/:id', async (req, res) => {
   try {
-    const job = await syncQueue.getJob(req.params.id);
+    let job = await syncQueue.getJob(req.params.id);
+    if (!job) job = await syncBlingQueue.getJob(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job não encontrado' });
     await job.remove();
     res.json({ ok: true });
@@ -381,6 +389,66 @@ router.post('/api/tiny-produto-detalhes', async (req, res) => {
 
   try {
     const uid = userId || req.userId;
+    const userRecord = await prisma.user.findUnique({ where: { id: uid }, select: { erpAtivo: true } });
+    const usaBling = userRecord?.erpAtivo === 'bling';
+
+    if (usaBling) {
+      // ── Bling ERP ──────────────────────────────────────────────────────────
+      const { getBlingAccessToken: getBlingToken, createBlingClient: makeBlingClient, obterProdutoBling, obterEstoqueBling } = await import('../utils/blingClient.js');
+      const token = await getBlingToken(uid);
+      if (!token) return res.status(503).json({ erro: 'Token Bling expirado ou inválido. Reconecte em Configurações.', tinyTokenInvalid: true });
+
+      const client = makeBlingClient(token);
+      const det = await obterProdutoBling(client, id);
+      const estoqueAtual = await obterEstoqueBling(client, id);
+
+      // midia.imagens = { externas: [{link}], internas: [{link}] } — não é array
+      const extractBlingImages = (midia) => {
+        const imgs = midia?.imagens;
+        if (!imgs || typeof imgs !== 'object') return [];
+        const ext = Array.isArray(imgs.externas) ? imgs.externas : [];
+        const int = Array.isArray(imgs.internas) ? imgs.internas : [];
+        return [...ext, ...int].map(img => ({ url: img.link || img.url })).filter(img => img.url);
+      };
+
+      const variacoes = Array.isArray(det.variacoes) ? det.variacoes : [];
+      const filhos = variacoes.map(v => ({
+        id: v.id,
+        codigo: v.codigo,
+        nome: v.nome,
+        preco: v.preco || 0,
+        preco_promocional: v.precoPromocional || 0,
+        // grade fica em v.variacao.nome = "Tamanho:G;Cor:Verde"
+        grade: v.variacao?.nome || v.nome || '',
+        anexos: extractBlingImages(v.midia),
+        estoque_atual: 0,
+      }));
+
+      return res.json({
+        id: det.id,
+        codigo: det.codigo,
+        nome: det.nome,
+        descricao: det.nome,
+        descricao_complementar: det.descricaoComplementar || null,
+        preco: det.preco || 0,
+        preco_promocional: det.precoPromocional || 0,
+        preco_custo: det.precoCusto || 0,
+        tipoVariacao: variacoes.length > 0 ? 'V' : null,
+        tipo_produto: det.tipo || null,
+        origem: det.origem ?? null,
+        marca: det.marca?.nome || null,
+        gtin: det.gtin || null,
+        peso_bruto: det.pesoLiquido || null,
+        alturaEmbalagem: det.dimensoes?.altura || null,
+        larguraEmbalagem: det.dimensoes?.largura || null,
+        comprimentoEmbalagem: det.dimensoes?.comprimento || null,
+        anexos: extractBlingImages(det.midia),
+        estoque_atual: estoqueAtual,
+        filhos,
+      });
+    }
+
+    // ── Tiny ERP (padrão) ───────────────────────────────────────────────────
     const token = await getTinyAccessToken(uid);
     if (!token) return res.status(503).json({ erro: 'Token Tiny expirado ou inválido. Reconecte em Configurações.', tinyTokenInvalid: true });
 

@@ -37,8 +37,9 @@ const TINY_PRESETS = [
 
 // ── Componente ────────────────────────────────────────────────────────────────
 export default function ClienteAPI({ usuarioId }) {
-  const { contas: contasMlCtx } = useContasML();
-  const [api, setApi] = useState('ml'); // 'ml' | 'tiny'
+  const { contas: contasMlCtx, erpAtivo } = useContasML();
+  const erpLabel = erpAtivo === 'bling' ? 'bling' : 'tiny';
+  const [api, setApi] = useState('ml'); // 'ml' | 'tiny' | 'bling'
   const [contasMl, setContasMl] = useState([]);
   const [contaId, setContaId] = useState('');
 
@@ -104,8 +105,9 @@ export default function ClienteAPI({ usuarioId }) {
       } else {
         const params = {};
         tinyParams.forEach(({ key, value }) => { if (key.trim()) params[key.trim()] = value; });
-        payload = { userId: usuarioId, endpoint: tinyEndpoint, params };
-        url = `${API_BASE}/api/cliente-api/tiny`;
+        const erpEndpoint = api === 'bling' ? '/api/cliente-api/bling' : '/api/cliente-api/tiny';
+        payload = { userId: usuarioId, path: tinyEndpoint, queryParams: params };
+        url = `${API_BASE}${erpEndpoint}`;
       }
 
       const res = await fetch(url, {
@@ -224,7 +226,7 @@ export default function ClienteAPI({ usuarioId }) {
         {/* ── Seletor de API ── */}
         <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e0e0e0', padding: '14px 18px' }}>
           <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-            {['ml', 'tiny'].map(a => (
+            {['ml', erpLabel].map(a => (
               <button
                 key={a}
                 onClick={() => { setApi(a); setResponse(null); setError(''); }}
@@ -236,7 +238,7 @@ export default function ClienteAPI({ usuarioId }) {
                   transition: 'all 0.15s',
                 }}
               >
-                {a === 'ml' ? '🛒 Mercado Livre' : '📦 Tiny ERP'}
+                {a === 'ml' ? '🛒 Mercado Livre' : a === 'bling' ? '📦 Bling ERP' : '📦 Tiny ERP'}
               </button>
             ))}
           </div>

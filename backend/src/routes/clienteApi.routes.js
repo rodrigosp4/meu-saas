@@ -4,6 +4,7 @@ import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { getTinyRateLimit } from '../utils/tinyRateLimit.js';
 import { createTinyClient, getTinyAccessToken } from '../utils/tinyClient.js';
+import { createBlingClient, getBlingAccessToken } from '../utils/blingClient.js';
 
 const router = Router();
 
@@ -153,6 +154,42 @@ router.post('/api/cliente-api/tiny', async (req, res) => {
       status: tinyRes.status,
       statusText: tinyRes.statusText,
       data: tinyRes.data,
+      elapsed,
+    });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── Proxy para Bling ERP v3 ──────────────────────────────────────────────────
+// Body: { userId, path, method?, queryParams?, body? }
+router.post('/api/cliente-api/bling', async (req, res) => {
+  const { userId, path: apiPath, method = 'GET', queryParams = {}, body: reqBody } = req.body;
+
+  if (!userId || !apiPath) {
+    return res.status(400).json({ erro: 'userId e path são obrigatórios.' });
+  }
+
+  try {
+    const blingToken = await getBlingAccessToken(userId);
+    if (!blingToken) return res.status(404).json({ erro: 'Conta Bling não conectada. Conecte em Configurações.' });
+
+    const client = createBlingClient(blingToken);
+    const start = Date.now();
+
+    const blingRes = await client.request({
+      method: method.toUpperCase(),
+      url: apiPath.startsWith('/') ? apiPath : `/${apiPath}`,
+      params: queryParams,
+      data: reqBody && Object.keys(reqBody).length > 0 ? reqBody : undefined,
+      validateStatus: () => true,
+    });
+
+    const elapsed = Date.now() - start;
+    res.json({
+      status: blingRes.status,
+      statusText: blingRes.statusText,
+      data: blingRes.data,
       elapsed,
     });
   } catch (err) {

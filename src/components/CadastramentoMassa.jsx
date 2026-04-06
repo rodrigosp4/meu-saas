@@ -130,14 +130,14 @@ export default function CadastramentoMassa({ usuarioId }) {
 
     setVerificandoSku(produto.sku);
     try {
-      // 1. Busca dados frescos do Tiny ERP
+      // 1. Busca dados frescos do ERP (Tiny ou Bling)
       const res = await fetch('/api/tiny-produto-detalhes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: tinyId })
+        body: JSON.stringify({ id: tinyId, userId: usuarioId })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.erro || "Falha ao buscar no Tiny");
+      if (!res.ok) throw new Error(data.erro || "Falha ao buscar no ERP");
 
       // 2. Extrai imagens e refaz validação de dimensões (>= 500px)
       let imagensValidas = [];
@@ -1004,7 +1004,7 @@ export default function CadastramentoMassa({ usuarioId }) {
                                 onClick={() => handleReverificarProduto(p)}
                                 disabled={verificandoSku === p.sku}
                                 className="px-2 py-1 bg-white border border-gray-300 rounded text-[10px] font-bold text-gray-600 hover:bg-gray-100 transition-colors flex items-center gap-1 disabled:opacity-50"
-                                title="Buscar dados mais recentes no Tiny ERP e verificar novamente"
+                                title="Buscar dados mais recentes no ERP e verificar novamente"
                             >
                                 {verificandoSku === p.sku ? (
                                 <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full"></span>

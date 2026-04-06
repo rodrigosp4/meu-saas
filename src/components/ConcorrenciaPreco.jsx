@@ -261,20 +261,27 @@ function ItemRow({ item, usuarioId, showConta, onItemUpdate, isCheapestInGroup =
               Mín: {fmtBRL(item.automation.min_price)}{item.automation.max_price ? ` | Máx: ${fmtBRL(item.automation.max_price)}` : ''}
             </div>
           )}
-          {isCheapestInGroup && (() => {
+          {isCheapestInGroup && !item.ownAccountCompetition && (() => {
             const aindaAcima = item.status === 'with_benchmark_highest' || item.status === 'with_benchmark_high';
             return (
-              <span title={aindaAcima ? 'É o mais barato entre suas contas, mas ainda acima dos concorrentes externos' : 'É o mais barato entre suas contas'}
+              <span title={aindaAcima ? 'É o mais barato entre suas contas, mas ainda acima dos concorrentes externos' : 'É o mais barato entre suas contas e ganha no mercado'}
                 style={{ background: aindaAcima ? '#fef9c3' : '#dcfce7', color: aindaAcima ? '#854d0e' : '#166534', border: `1px solid ${aindaAcima ? '#fde047' : '#bbf7d0'}`, borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 600, cursor: 'help' }}>
                 {aindaAcima ? '🏷️ Referência do grupo (ainda acima do mercado)' : '🏷️ Referência do grupo'}
               </span>
             );
           })()}
-          {!isCheapestInGroup && item.ownAccountCompetition && (
-            <span title={`${item.ownAccountCompetition.nickname} vende por ${fmtBRL(item.ownAccountCompetition.price)}`}
-              style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 600, cursor: 'help' }}>
-              ⚠️ Compete com: {item.ownAccountCompetition.nickname} ({fmtBRL(item.ownAccountCompetition.price)})
-            </span>
+          {item.ownAccountCompetition && (
+            item.ownAccountCompetition.isClosed ? (
+              <span title={`Referência do catálogo é seu anúncio ENCERRADO (${item.ownAccountCompetition.nickname} — ${fmtBRL(item.ownAccountCompetition.price)}). O ML está usando um anúncio seu deletado como referência de grupo.`}
+                style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 600, cursor: 'help' }}>
+                🗑️ Ref. encerrada: {item.ownAccountCompetition.nickname} ({fmtBRL(item.ownAccountCompetition.price)})
+              </span>
+            ) : (
+              <span title={`${item.ownAccountCompetition.nickname} vende por ${fmtBRL(item.ownAccountCompetition.price)}`}
+                style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', borderRadius: 5, padding: '1px 6px', fontSize: 10, fontWeight: 600, cursor: 'help' }}>
+                ⚠️ Compete com: {item.ownAccountCompetition.nickname} ({fmtBRL(item.ownAccountCompetition.price)})
+              </span>
+            )
           )}
         </div>
 
@@ -467,17 +474,21 @@ export default function ConcorrenciaPreco({ usuarioId }) {
     }
 
     if (filtroOcultarCompetitivos) {
-      // Encontra todos os SKUs que já possuem pelo menos 1 anúncio competitivo/ganhando
+      // Só conta como "ganhando no mercado" um item que:
+      // 1. Tem status competitivo (no_benchmark_ok / lowest / promoção ativa)
+      // 2. NÃO tem ownAccountCompetition — ou seja, não está perdendo para outro
+      //    anúncio próprio mais barato. Isso garante que estamos verificando o
+      //    anúncio que de fato enfrenta a concorrência externa, não apenas o mais
+      //    barato dentro do grupo próprio.
       const skusComCompetitivo = new Set();
       for (const item of list) {
-        if (item.sku && STATUS_COMPETITIVO.has(item.status)) {
+        if (item.sku && STATUS_COMPETITIVO.has(item.status) && !item.ownAccountCompetition) {
           skusComCompetitivo.add(item.sku);
         }
       }
-      // Remove: itens cujo SKU já tem um competitivo, e itens sem SKU que eles mesmos são competitivos
       list = list.filter(i => {
         if (i.sku) return !skusComCompetitivo.has(i.sku);
-        return !STATUS_COMPETITIVO.has(i.status);
+        return !STATUS_COMPETITIVO.has(i.status) || !!i.ownAccountCompetition;
       });
     }
 

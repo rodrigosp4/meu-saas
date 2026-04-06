@@ -915,6 +915,7 @@ export const promocoesController = {
                 if (pctEfetivo === null && promo.suggested_discounted_price != null && promo.original_price > 0) {
                   pctEfetivo = (1 - promo.suggested_discounted_price / promo.original_price) * 100;
                 }
+                console.log(`[ativarCandidatosRealtime] ${anuncio.id} | tipo=${promoTipo} | sp=${sp} | pctEfetivo=${pctEfetivo?.toFixed(2)} | limiteMax=${limiteMax} | status=${itemStatus}`);
                 if (pctEfetivo !== null && pctEfetivo > limiteMax) {
                   skipped.push({ itemId: anuncio.id, promoId, motivo: 'acima_limite', pct: pctEfetivo });
                   continue;
@@ -960,9 +961,15 @@ export const promocoesController = {
           }
 
           if (itensFila.length === 0) {
+            const skipLog = skipped.map(s => {
+              if (s.motivo === 'acima_limite') return `[${s.itemId}/${s.promoId || 'sem-id'}] acima do limite: ${s.pct?.toFixed(2)}% > ${limiteMax}%`;
+              if (s.motivo === 'sem_preco') return `[${s.itemId}/${s.promoId || 'sem-id'}] sem preço válido para ativar`;
+              if (s.motivo === 'sem_token') return `[${s.itemId}] sem token de acesso`;
+              return `[${s.itemId}/${s.promoId || 'sem-id'}] ${s.motivo}`;
+            }).join('\n');
             await prisma.tarefaFila.update({
               where: { id: tarefa.id },
-              data: { status: 'CONCLUIDO', detalhes: `Nenhum candidato encontrado dentro do limite de ${limiteMax}%. Skipped: ${skipped.length}` },
+              data: { status: 'CONCLUIDO', detalhes: `Nenhum candidato encontrado dentro do limite de ${limiteMax}%. Skipped: ${skipped.length}\n\n${skipLog}` },
             });
             return;
           }

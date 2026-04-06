@@ -28,6 +28,14 @@ model User {
   tinyTokenExpiresAt   BigInt?
   tinyPlano            String?                 @default("descontinuado")
   cepOrigem            String?                 @default("01001000")
+  // Bling ERP
+  blingClientId        String?
+  blingClientSecret    String?
+  blingAccessToken     String?
+  blingRefreshToken    String?
+  blingTokenExpiresAt  BigInt?
+  // ERP ativo: 'tiny' | 'bling' | null
+  erpAtivo             String?
   createdAt            DateTime                @default(now())
   passwordResetToken   String?
   passwordResetExpires DateTime?

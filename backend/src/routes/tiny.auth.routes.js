@@ -77,6 +77,11 @@ router.get('/api/tiny/callback', async (req, res) => {
         tinyAccessToken: access_token,
         tinyRefreshToken: refresh_token,
         tinyTokenExpiresAt: BigInt(Date.now() + expires_in * 1000),
+        erpAtivo: 'tiny',
+        // Desativa Bling ao conectar Tiny
+        blingAccessToken: null,
+        blingRefreshToken: null,
+        blingTokenExpiresAt: null,
       },
     });
 
@@ -95,7 +100,7 @@ router.delete('/api/tiny/disconnect', async (req, res) => {
 
   await prisma.user.update({
     where: { id: userId },
-    data: { tinyAccessToken: null, tinyRefreshToken: null, tinyTokenExpiresAt: null },
+    data: { tinyAccessToken: null, tinyRefreshToken: null, tinyTokenExpiresAt: null, erpAtivo: null },
   });
 
   res.json({ ok: true });

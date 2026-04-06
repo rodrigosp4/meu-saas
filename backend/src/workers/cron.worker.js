@@ -3,7 +3,7 @@ import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
-import { cronQueue, mlSyncQueue, syncQueue } from './queue.js';
+import { cronQueue, mlSyncQueue, syncQueue, syncBlingQueue } from './queue.js';
 
 const connection = {
   host: config.redisHost,
@@ -368,9 +368,9 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
 
   console.log('⏰ [Cron] Iniciando varredura diária...');
 
-  // Busca todos os usuários com token Tiny configurado
+  // Busca todos os usuários com token Tiny ou Bling configurado
   const usuarios = await prisma.user.findMany({
-    select: { id: true, tinyAccessToken: true },
+    select: { id: true, tinyAccessToken: true, blingAccessToken: true, erpAtivo: true },
   });
 
   // 1) Ativa promoções para cada usuário ANTES de enfileirar o sync ML
@@ -408,16 +408,24 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
       contasSincronizadas++;
     }
 
-    // Importa produtos novos da Tiny (SKUs ainda não cadastrados no banco)
-    if (user.tinyAccessToken) {
+    // Importa produtos novos do ERP ativo (SKUs ainda não cadastrados no banco)
+    if (user.erpAtivo === 'bling' && user.blingAccessToken) {
+      await syncBlingQueue.add(
+        'sync-bling',
+        { userId: user.id, mode: 'novos' },
+        {
+          delay: 35 * 60 * 1000,
+          attempts: 2,
+          backoff: { type: 'fixed', delay: 60000 },
+        }
+      );
+      usuariosSincronizados++;
+    } else if (user.tinyAccessToken) {
       await syncQueue.add(
         'sync-tiny',
+        { userId: user.id, mode: 'novos' },
         {
-          userId: user.id,
-          mode: 'novos',
-        },
-        {
-          delay: 35 * 60 * 1000, // 35 minutos após o ML
+          delay: 35 * 60 * 1000,
           attempts: 2,
           backoff: { type: 'fixed', delay: 60000 },
         }

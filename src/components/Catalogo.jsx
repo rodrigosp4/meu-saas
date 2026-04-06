@@ -247,7 +247,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
     if (!user) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Usuário não logado.' }]); return; }
     const precoFinal = calcPrecoFinal(precoBase);
     if (!precoFinal) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe um preço base válido.' }]); return; }
-    if (!skuBase.trim()) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe o SKU do Tiny ERP.' }]); return; }
+    if (!skuBase.trim()) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Informe o SKU do ERP.' }]); return; }
 
     const contasAtivas = contasML.filter(c => accountConfigs[c.id]?.ativo);
     if (!contasAtivas.length) { setPublishLog([{ tipo: 'erro', conta: '', texto: 'Selecione ao menos uma conta.' }]); return; }
@@ -388,7 +388,7 @@ function ProductCard({ produto, contasML, configAtacado = null, publishedMap = {
             <h5 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Preço e Estratégia</h5>
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">SKU no Tiny ERP</label>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">SKU no ERP</label>
                 <input type="text" placeholder="Ex: ABC-123"
                   value={skuBase} onChange={e => setSkuBase(e.target.value)}
                   className="w-full px-2 py-1.5 border rounded text-sm focus:border-emerald-400 focus:outline-none" />

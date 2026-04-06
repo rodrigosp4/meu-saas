@@ -187,7 +187,7 @@ router.get('/api/usuario/:id/config', async (req, res) => {
     const userId = req.userId;
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { contasMl: true, regras: true, configAtacado: true }
+      include: { contasMl: true, regras: true, configAtacado: true },
     });
 
     if (!user) {
@@ -205,6 +205,10 @@ router.get('/api/usuario/:id/config', async (req, res) => {
       tinyPlano: user.tinyPlano || 'descontinuado',
       tinyClientId: user.tinyClientId || null,
       tinyClientSecret: user.tinyClientSecret || null,
+      blingConectado: !!user.blingAccessToken,
+      blingClientId: user.blingClientId || null,
+      blingClientSecret: user.blingClientSecret || null,
+      erpAtivo: user.erpAtivo || null,
       cepOrigem: user.cepOrigem || '01001000',
       contasML: contasFormatadas,
       regrasPreco: user.regras,
@@ -258,7 +262,25 @@ router.post('/api/usuario/:id/tiny-credentials', async (req, res) => {
   }
 });
 
-// 6b. SALVAR PLANO DO TINY (rate limit)
+// 6b. SALVAR CREDENCIAIS DO BLING (client_id e client_secret por usuário)
+router.post('/api/usuario/:id/bling-credentials', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { blingClientId, blingClientSecret } = req.body;
+    if (!blingClientId || !blingClientSecret) {
+      return res.status(400).json({ erro: 'blingClientId e blingClientSecret são obrigatórios.' });
+    }
+    await prisma.user.update({
+      where: { id: userId },
+      data: { blingClientId, blingClientSecret },
+    });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+});
+
+// 6c. SALVAR PLANO DO TINY (rate limit)
 router.post('/api/usuario/:id/tiny-plano', async (req, res) => {
   try {
     const userId = req.userId;

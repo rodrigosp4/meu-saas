@@ -9,6 +9,8 @@ export function ContasMLProvider({ children }) {
   const [tinyToken, setTinyToken] = useState(null);
   const [tinyConectado, setTinyConectado] = useState(false);
   const [tinyPlano, setTinyPlano] = useState('descontinuado');
+  const [blingConectado, setBlingConectado] = useState(false);
+  const [erpAtivo, setErpAtivo] = useState(null); // 'tiny' | 'bling' | null
   const [loading, setLoading] = useState(false);
 
   const fetchConfig = useCallback(async () => {
@@ -27,6 +29,8 @@ export function ContasMLProvider({ children }) {
       setTinyToken(data.tinyToken || null);
       setTinyConectado(!!data.tinyConectado);
       setTinyPlano(data.tinyPlano || 'descontinuado');
+      setBlingConectado(!!data.blingConectado);
+      setErpAtivo(data.erpAtivo || null);
     } catch {
       // silencioso
     } finally {
@@ -38,8 +42,23 @@ export function ContasMLProvider({ children }) {
     fetchConfig();
   }, [fetchConfig]);
 
+  // ERP conectado e ativo (qualquer um)
+  const erpConectado = erpAtivo !== null && (tinyConectado || blingConectado);
+  const nomeErp = erpAtivo === 'bling' ? 'Bling' : 'Tiny';
+
   return (
-    <ContasMLContext.Provider value={{ contas, tinyToken, tinyConectado, tinyPlano, loading, refresh: fetchConfig }}>
+    <ContasMLContext.Provider value={{
+      contas,
+      tinyToken,
+      tinyConectado,
+      tinyPlano,
+      blingConectado,
+      erpAtivo,
+      erpConectado,
+      nomeErp,
+      loading,
+      refresh: fetchConfig,
+    }}>
       {children}
     </ContasMLContext.Provider>
   );

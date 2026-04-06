@@ -71,11 +71,11 @@ function extrairProdutosDaPlanilha(rows) {
 }
 
 export default function Anuncios({ onAnunciar, usuarioId }) {
-  const { tinyToken, tinyConectado } = useContasML();
+  const { erpConectado, nomeErp } = useContasML();
   const [produtos, setProdutos] = useState([]);
   const [totalProdutos, setTotalProdutos] = useState(0);
   const[syncProgress, setSyncProgress] = useState(null);
-  const [activeJobId, setActiveJobId] = useState(() => localStorage.getItem('tiny_sync_job_id'));
+  const [activeJobId, setActiveJobId] = useState(() => localStorage.getItem('erp_sync_job_id'));
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('Todos');
   const [currentPage, setCurrentPage] = useState(1);
@@ -111,7 +111,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         if (statusRes.status === 404) {
           clearInterval(interval);
           setActiveJobId(null);
-          localStorage.removeItem('tiny_sync_job_id');
+          localStorage.removeItem('erp_sync_job_id');
           setSyncProgress(null);
           return;
         }
@@ -122,14 +122,14 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
           setTimeout(() => {
             setSyncProgress(null);
             setActiveJobId(null);
-            localStorage.removeItem('tiny_sync_job_id');
+            localStorage.removeItem('erp_sync_job_id');
             fetchProdutos();
           }, 1500);
         } else if (statusData.state === 'failed') {
           clearInterval(interval);
           setSyncProgress(null);
           setActiveJobId(null);
-          localStorage.removeItem('tiny_sync_job_id');
+          localStorage.removeItem('erp_sync_job_id');
           alert("❌ Erro ao sincronizar. Verifique o terminal do Worker.");
         } else {
           setSyncProgress(statusData.progress === 0 ? "Fila" : (statusData.progress || 5));
@@ -173,14 +173,14 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
       await fetch(`/api/produtos/sync-status/${activeJobId}`, { method: 'DELETE' });
     } catch (_) {}
     setActiveJobId(null);
-    localStorage.removeItem('tiny_sync_job_id');
+    localStorage.removeItem('erp_sync_job_id');
     setSyncProgress(null);
   };
 
   // ✅ MODIFICADO: para aceitar 'ids' e limpar seleção
   const iniciarSincronizacao = async (mode = 'all', sku = '', ids =[]) => {
-    if (!tinyToken && !tinyConectado) {
-      alert("Vá em Configurações e salve seu Token do Tiny ERP primeiro!");
+    if (!erpConectado) {
+      alert(`Vá em Configurações e conecte o ${nomeErp || 'ERP'} primeiro!`);
       return;
     }
     setIsSyncModalOpen(false);
@@ -192,11 +192,11 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
       const res = await fetch('/api/produtos/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, tinyToken, mode, sku, ids })
+        body: JSON.stringify({ userId: usuarioId, mode, sku, ids })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || "Falha ao iniciar sincronização");
-      localStorage.setItem('tiny_sync_job_id', data.jobId);
+      localStorage.setItem('erp_sync_job_id', data.jobId);
       setActiveJobId(data.jobId);
     } catch (error) {
       console.error(error);
@@ -252,7 +252,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
 
   const processarArquivoPlanilha = useCallback((file) => {
     if (!file || !file.name.match(/\.(csv|xls|xlsx)$/i)) {
-      alert('Selecione um arquivo .csv, .xls ou .xlsx exportado do Tiny ERP');
+      alert('Selecione um arquivo .csv, .xls ou .xlsx exportado do ERP.');
       return;
     }
     setPlanilhaFileName(file.name);
@@ -276,7 +276,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         const { produtos: p, ignoradosV, ignoradosSemSku } = extrairProdutosDaPlanilha(rows);
         if (p.length === 0) {
           const colunas = Object.keys(rows[0]).join(', ');
-          alert(`Nenhum produto encontrado.\n\nColunas detectadas:\n${colunas}\n\nEsperado: "Código (SKU)", "Descrição", "Preço" etc.\n\nCertifique-se de exportar via Produtos → Exportar no Tiny ERP.`);
+          alert(`Nenhum produto encontrado.\n\nColunas detectadas:\n${colunas}\n\nEsperado: "Código (SKU)", "Descrição", "Preço" etc.\n\nCertifique-se de exportar via Produtos → Exportar no ${nomeErp} ERP.`);
           setPlanilhaFileName('');
           return;
         }
@@ -373,7 +373,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
               <div className="w-full max-w-md">
                 <div className="flex justify-between mb-1">
                   <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
-                    {syncProgress === "Fila" ? "Aguardando na fila..." : "Sincronizando com o Tiny..."}
+                    {syncProgress === "Fila" ? "Aguardando na fila..." : `Sincronizando com o ${nomeErp}...`}
                   </span>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium" style={{ color: '#e67e22' }}>
@@ -404,7 +404,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         <button 
           onClick={() => {
             if (selectedTinyIds.size > 0) {
-              if (window.confirm(`Deseja sincronizar os ${selectedTinyIds.size} produtos selecionados do Tiny ERP?`)) {
+              if (window.confirm(`Deseja sincronizar os ${selectedTinyIds.size} produtos selecionados do ${nomeErp} ERP?`)) {
                 iniciarSincronizacao('ids', '', Array.from(selectedTinyIds));
               }
             } else {
@@ -417,7 +417,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
           onMouseOver={e => { if (!e.target.disabled) e.target.style.backgroundColor = selectedTinyIds.size > 0 ? '#229954' : '#d35400'; }}
           onMouseOut={e => { e.target.style.backgroundColor = selectedTinyIds.size > 0 ? '#27ae60' : '#e67e22'; }}
         >
-          {syncProgress !== null ? 'Sincronizando...' : selectedTinyIds.size > 0 ? `Sincronizar ${selectedTinyIds.size} Selecionado(s)` : '🔄 Sincronizar com Tiny'}
+          {syncProgress !== null ? 'Sincronizando...' : selectedTinyIds.size > 0 ? `Sincronizar ${selectedTinyIds.size} Selecionado(s)` : `🔄 Sincronizar com ${nomeErp}`}
         </button>
       </div>
 
@@ -435,7 +435,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         {planilhaAberta && (
           <div className="p-4 bg-white" style={{ borderTop: '1px solid #bde0fb' }}>
             <p className="text-xs mb-3" style={{ color: '#6b7280' }}>
-              Exporte sua lista de produtos no Tiny ERP (Produtos → Exportar) e importe aqui. Os produtos serão criados ou atualizados no banco local.
+              Exporte sua lista de produtos no ERP (Produtos → Exportar) e importe aqui. Os produtos serão criados ou atualizados no banco local.
             </p>
 
             {/* Drop zone */}
@@ -578,7 +578,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                         <button onClick={(e) => {
                             e.stopPropagation();
                             const idCorreto = produto.dadosTiny?.id || produto.idTiny;
-                            if (!idCorreto) return alert("Erro: Produto sem ID do Tiny salvo.");
+                            if (!idCorreto) return alert("Erro: Produto sem ID do ERP salvo.");
                             
                             onAnunciar({
                               id: idCorreto, 

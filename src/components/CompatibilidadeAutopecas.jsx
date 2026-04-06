@@ -173,6 +173,8 @@ export function ModalPreenchimentoRapido({ ads, contaId: contaIdProp, usuarioId,
     loadConfig();
   }, []); // eslint-disable-line
 
+  const MODAL_YEAR_ATTR_IDS = ['VEHICLE_YEAR', 'YEAR'];
+
   const handleAttrChange = async (attrId, selectedName) => {
     if (!domainConfig) return;
     const attrs = domainConfig.attributes;
@@ -200,10 +202,10 @@ export function ModalPreenchimentoRapido({ ads, contaId: contaIdProp, usuarioId,
       for (let i = 0; i <= currentIndex; i++) {
         const a = attrs[i];
         const sel = (a === attrId) ? selectedItem : newSelected[a];
-        if (sel) {
+        if (sel && !Array.isArray(sel)) {
           const entry = { id: a };
           if (sel.id) entry.value_id = String(sel.id);
-          else if (['VEHICLE_YEAR', 'YEAR'].includes(a) && sel.name) entry.value_name = sel.name;
+          else if (MODAL_YEAR_ATTR_IDS.includes(a) && sel.name) entry.value_name = sel.name;
           knownAttrs.push(entry);
         }
       }
@@ -221,32 +223,120 @@ export function ModalPreenchimentoRapido({ ads, contaId: contaIdProp, usuarioId,
     }
   };
 
+  const handleYearMultiChangeModal = (attrId, selectedNames) => {
+    if (!domainConfig) return;
+    const attrs = domainConfig.attributes;
+    const currentIndex = attrs.indexOf(attrId);
+    if (currentIndex === -1) return;
+
+    const currentValues = attrValues[attrId] || [];
+    const selectedItems = selectedNames.map(name => currentValues.find(v => v.name === name)).filter(Boolean);
+
+    const newSelected = { ...attrSelected };
+    const newValues = { ...attrValues };
+    for (let i = currentIndex + 1; i < attrs.length; i++) {
+      delete newSelected[attrs[i]];
+      delete newValues[attrs[i]];
+    }
+    setResultados([]);
+    setSelecionados(new Set());
+
+    if (selectedItems.length === 0) {
+      delete newSelected[attrId];
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+    } else if (selectedItems.length === 1) {
+      newSelected[attrId] = selectedItems[0];
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+      if (currentIndex + 1 < attrs.length) {
+        const nextAttr = attrs[currentIndex + 1];
+        const knownAttrs = [];
+        for (let i = 0; i <= currentIndex; i++) {
+          const a = attrs[i];
+          const sel = a === attrId ? selectedItems[0] : newSelected[a];
+          if (sel && !Array.isArray(sel)) {
+            const entry = { id: a };
+            if (sel.id) entry.value_id = String(sel.id);
+            else if (MODAL_YEAR_ATTR_IDS.includes(a) && sel.name) entry.value_name = sel.name;
+            knownAttrs.push(entry);
+          }
+        }
+        fetch(`${API_BASE}/attribute-values`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contaId, userId: usuarioId, domainId: domainConfig.domainId, attributeId: nextAttr, knownAttributes: knownAttrs }),
+        }).then(r => r.ok ? r.json() : null).then(d => {
+          if (d) setAttrValues(prev => ({ ...prev, [nextAttr]: d.values || [] }));
+        }).catch(console.error);
+      }
+    } else {
+      newSelected[attrId] = selectedItems;
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+    }
+  };
+
   const handleBuscar = async () => {
     if (!domainConfig) return;
     const knownAttrs = [];
+    let multiYearAttrId = null;
+    let multiYearItems = null;
+
     for (const attrId of domainConfig.attributes) {
       const sel = attrSelected[attrId];
       if (!sel) continue;
+      if (Array.isArray(sel)) {
+        multiYearAttrId = attrId;
+        multiYearItems = sel;
+        continue;
+      }
       if (sel.id) knownAttrs.push({ id: attrId, value_ids: [String(sel.id)] });
-      else if (['VEHICLE_YEAR', 'YEAR'].includes(attrId) && sel.name) knownAttrs.push({ id: attrId, value_name: sel.name });
+      else if (MODAL_YEAR_ATTR_IDS.includes(attrId) && sel.name) knownAttrs.push({ id: attrId, value_name: sel.name });
     }
-    if (knownAttrs.length === 0) { setStatus('Selecione pelo menos um campo antes de buscar.', 'warning'); return; }
+
+    if (knownAttrs.length === 0 && !multiYearItems) { setStatus('Selecione pelo menos um campo antes de buscar.', 'warning'); return; }
     setLoading(true);
-    setStatus('Buscando veículos...', 'info');
     setResultados([]);
     setSelecionados(new Set());
+
     try {
-      const res = await fetch(`${API_BASE}/search-vehicles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contaId, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: knownAttrs, maxResults: 500 }),
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.erro || 'Falha na busca'); }
-      const data = await res.json();
-      const results = data.results || [];
-      setResultados(results);
-      setSelecionados(new Set(results.map((_, i) => i)));
-      setStatus(`${results.length} veículo(s) encontrado(s). Revise a seleção e clique em Aplicar.`, results.length > 0 ? 'success' : 'warning');
+      let allResults = [];
+
+      if (multiYearItems && multiYearItems.length > 1) {
+        setStatus(`Buscando veículos para ${multiYearItems.length} anos...`, 'info');
+        const promises = multiYearItems.map(yearItem => {
+          const yearAttrs = [...knownAttrs];
+          if (yearItem.id) yearAttrs.push({ id: multiYearAttrId, value_ids: [String(yearItem.id)] });
+          else yearAttrs.push({ id: multiYearAttrId, value_name: yearItem.name });
+          return fetch(`${API_BASE}/search-vehicles`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contaId, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: yearAttrs, maxResults: 500 }),
+          }).then(r => r.ok ? r.json() : { results: [] }).catch(() => ({ results: [] }));
+        });
+        const allData = await Promise.all(promises);
+        const seen = new Set();
+        for (const data of allData) {
+          for (const v of (data.results || [])) {
+            if (!seen.has(v.id)) { seen.add(v.id); allResults.push(v); }
+          }
+        }
+      } else {
+        setStatus('Buscando veículos...', 'info');
+        const res = await fetch(`${API_BASE}/search-vehicles`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contaId, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: knownAttrs, maxResults: 500 }),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.erro || 'Falha na busca'); }
+        const data = await res.json();
+        allResults = data.results || [];
+      }
+
+      setResultados(allResults);
+      setSelecionados(new Set(allResults.map((_, i) => i)));
+      setStatus(`${allResults.length} veículo(s) encontrado(s). Revise a seleção e clique em Aplicar.`, allResults.length > 0 ? 'success' : 'warning');
     } catch (e) {
       setStatus(`Erro: ${e.message}`, 'error');
     } finally {
@@ -321,6 +411,38 @@ export function ModalPreenchimentoRapido({ ads, contaId: contaIdProp, usuarioId,
               const label = ATTR_LABELS[attrId] || attrId;
               const prevAttrId = domainConfig.attributes[idx - 1];
               const isEnabled = idx === 0 || !!attrSelected[prevAttrId];
+              const isYear = MODAL_YEAR_ATTR_IDS.includes(attrId);
+
+              if (isYear) {
+                const selectedNames = Array.isArray(selected) ? selected.map(s => s.name) : (selected ? [selected.name] : []);
+                return (
+                  <div key={attrId} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <div style={{ width: 95, fontSize: '0.82em', fontWeight: 500, color: '#555', textAlign: 'right', flexShrink: 0, paddingTop: 5 }}>{label}:</div>
+                    <div style={{ flex: 1 }}>
+                      <select
+                        multiple
+                        size={Math.min(values.length || 4, 6)}
+                        value={selectedNames}
+                        onChange={e => {
+                          const chosen = [...e.target.selectedOptions].map(o => o.value);
+                          handleYearMultiChangeModal(attrId, chosen);
+                        }}
+                        disabled={!isEnabled || loading}
+                        style={{ ...S.select, width: '100%', opacity: isEnabled ? 1 : 0.5 }}
+                      >
+                        {values.map(v => <option key={v.id || v.name} value={v.name}>{v.name}</option>)}
+                      </select>
+                      {values.length > 0 && selectedNames.length === 0 && (
+                        <span style={{ fontSize: '0.72em', color: '#aaa', marginTop: 2, display: 'block' }}>Ctrl/Shift para múltiplos anos</span>
+                      )}
+                      {selectedNames.length > 1 && (
+                        <span style={{ fontSize: '0.72em', color: '#e67e22', marginTop: 2, display: 'block' }}>{selectedNames.length} anos selecionados</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div key={attrId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 95, fontSize: '0.82em', fontWeight: 500, color: '#555', textAlign: 'right', flexShrink: 0 }}>{label}:</div>
@@ -954,6 +1076,62 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
     }
   };
 
+  const YEAR_ATTR_IDS = ['VEHICLE_YEAR', 'YEAR'];
+
+  const handleYearMultiChange = (attrId, selectedNames) => {
+    if (!domainConfig) return;
+    const attrs = domainConfig.attributes;
+    const currentIndex = attrs.indexOf(attrId);
+    if (currentIndex === -1) return;
+
+    const currentValues = attrValues[attrId] || [];
+    const selectedItems = selectedNames.map(name => currentValues.find(v => v.name === name)).filter(Boolean);
+
+    const newSelected = { ...attrSelected };
+    const newValues = { ...attrValues };
+    for (let i = currentIndex + 1; i < attrs.length; i++) {
+      delete newSelected[attrs[i]];
+      delete newValues[attrs[i]];
+    }
+
+    if (selectedItems.length === 0) {
+      delete newSelected[attrId];
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+    } else if (selectedItems.length === 1) {
+      newSelected[attrId] = selectedItems[0];
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+      // Cascade ao próximo atributo
+      if (currentIndex + 1 < attrs.length) {
+        const nextAttr = attrs[currentIndex + 1];
+        const knownAttrs = [];
+        for (let i = 0; i <= currentIndex; i++) {
+          const a = attrs[i];
+          const sel = a === attrId ? selectedItems[0] : newSelected[a];
+          if (sel && !Array.isArray(sel)) {
+            const entry = { id: a };
+            if (sel.id) entry.value_id = String(sel.id);
+            else if (YEAR_ATTR_IDS.includes(a) && sel.name) entry.value_name = sel.name;
+            knownAttrs.push(entry);
+          }
+        }
+        fetch(`${API_BASE}/attribute-values`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contaId: contaSelecionada, userId: usuarioId, domainId: domainConfig.domainId, attributeId: nextAttr, knownAttributes: knownAttrs }),
+        }).then(r => r.ok ? r.json() : null).then(d => {
+          if (d) setAttrValues(prev => ({ ...prev, [nextAttr]: d.values || [] }));
+        }).catch(console.error);
+      }
+    } else {
+      // Múltiplos anos: salva como array, sem cascade
+      newSelected[attrId] = selectedItems;
+      setAttrSelected(newSelected);
+      setAttrValues(newValues);
+    }
+  };
+
   // =================================================================
   // 3. BUSCAR VEÍCULOS NO CATÁLOGO ML
   // =================================================================
@@ -969,45 +1147,80 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
     // Formato errado → a API ignora o filtro e retorna tudo ou nada.
     // ──────────────────────────────────────────────────────────────
     const knownAttrs = [];
+    let multiYearAttrId = null;
+    let multiYearItems = null;
+
     for (const attrId of domainConfig.attributes) {
       const sel = attrSelected[attrId];
       if (!sel) continue;
 
+      if (Array.isArray(sel)) {
+        // Múltiplos anos selecionados — tratado depois com buscas paralelas
+        multiYearAttrId = attrId;
+        multiYearItems = sel;
+        continue;
+      }
+
       if (sel.id) {
-        // ✅ Correto: value_ids como array
         knownAttrs.push({ id: attrId, value_ids: [String(sel.id)] });
-      } else if (['VEHICLE_YEAR', 'YEAR'].includes(attrId) && sel.name) {
-        // Ano pode usar value_name (a API aceita)
+      } else if (YEAR_ATTR_IDS.includes(attrId) && sel.name) {
         knownAttrs.push({ id: attrId, value_name: sel.name });
       } else {
-        // Sem value_id e não é ano → omite para não causar erro 400
-        // "value_ids must not be empty" na API
         console.warn(`[compat] Atributo '${attrId}' sem value_id. Filtro omitido da busca.`);
       }
     }
 
-    if (knownAttrs.length === 0) {
-      // Igual ao Python: permite busca ampla com confirmação
+    if (knownAttrs.length === 0 && !multiYearItems) {
       const confirmar = window.confirm(
         'Nenhum filtro selecionado.\n\nDeseja buscar TODOS os veículos do domínio?\n(Pode ser demorado e retornar muitos resultados)'
       );
       if (!confirmar) return;
     }
+
     setCarregando(true);
-    setStatus('Buscando veículos no catálogo ML...', 'info');
     setResultadosBusca([]);
     setSelecionadosBusca(new Set());
+
     try {
-      const res = await fetch(`${API_BASE}/search-vehicles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contaId: contaSelecionada, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: knownAttrs, maxResults: 5000 }),
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.erro || 'Falha na busca'); }
-      const data = await res.json();
-      setResultadosBusca(data.results || []);
-      setTotalBusca(data.total || 0);
-      setStatus(`${(data.results || []).length} veículos encontrados (total: ${data.total || 0}).`, 'success');
+      let allResults = [];
+      let totalCount = 0;
+
+      if (multiYearItems && multiYearItems.length > 1) {
+        setStatus(`Buscando veículos para ${multiYearItems.length} anos selecionados...`, 'info');
+        const promises = multiYearItems.map(yearItem => {
+          const yearAttrs = [...knownAttrs];
+          if (yearItem.id) yearAttrs.push({ id: multiYearAttrId, value_ids: [String(yearItem.id)] });
+          else yearAttrs.push({ id: multiYearAttrId, value_name: yearItem.name });
+          return fetch(`${API_BASE}/search-vehicles`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contaId: contaSelecionada, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: yearAttrs, maxResults: 5000 }),
+          }).then(r => r.ok ? r.json() : { results: [], total: 0 }).catch(() => ({ results: [], total: 0 }));
+        });
+        const allData = await Promise.all(promises);
+        const seen = new Set();
+        for (const data of allData) {
+          totalCount += data.total || 0;
+          for (const v of (data.results || [])) {
+            if (!seen.has(v.id)) { seen.add(v.id); allResults.push(v); }
+          }
+        }
+      } else {
+        setStatus('Buscando veículos no catálogo ML...', 'info');
+        const res = await fetch(`${API_BASE}/search-vehicles`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contaId: contaSelecionada, userId: usuarioId, domainId: domainConfig.domainId, knownAttributes: knownAttrs, maxResults: 5000 }),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.erro || 'Falha na busca'); }
+        const data = await res.json();
+        allResults = data.results || [];
+        totalCount = data.total || 0;
+      }
+
+      setResultadosBusca(allResults);
+      setTotalBusca(totalCount);
+      setStatus(`${allResults.length} veículos encontrados (total: ${totalCount}).`, 'success');
     } catch (error) {
       setStatus(`Erro na busca: ${error.message}`, 'error');
     } finally {
@@ -1555,7 +1768,44 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
             {/* Dropdowns cascata */}
             {domainConfig && domainConfig.attributes.map(attrId => {
               const values = attrValues[attrId] || [];
-              const selectedVal = attrSelected[attrId]?.name || '';
+              const isYear = YEAR_ATTR_IDS.includes(attrId);
+              const sel = attrSelected[attrId];
+
+              if (isYear) {
+                const selectedNames = Array.isArray(sel) ? sel.map(s => s.name) : (sel ? [sel.name] : []);
+                return (
+                  <div key={attrId} style={S.campoLinha}>
+                    <span style={S.campoLabel}>{getAttrDisplayName(attrId)}:</span>
+                    <div style={{ flex: 1, position: 'relative' }}>
+                      <select
+                        multiple
+                        size={Math.min(values.length || 4, 6)}
+                        value={selectedNames}
+                        onChange={e => {
+                          const chosen = [...e.target.selectedOptions].map(o => o.value);
+                          handleYearMultiChange(attrId, chosen);
+                        }}
+                        style={{ ...S.select, flex: 1, width: '100%', minWidth: 0, opacity: values.length === 0 ? 0.5 : 1 }}
+                        disabled={values.length === 0 || carregando}
+                      >
+                        {values.map(v => <option key={v.id ?? v.name} value={v.name}>{v.name}</option>)}
+                      </select>
+                      {selectedNames.length > 1 && (
+                        <span style={{ fontSize: '0.73em', color: '#e67e22', marginTop: 2, display: 'block' }}>
+                          {selectedNames.length} anos selecionados — Ctrl/Shift para múltiplos
+                        </span>
+                      )}
+                      {values.length > 0 && selectedNames.length === 0 && (
+                        <span style={{ fontSize: '0.73em', color: '#aaa', marginTop: 2, display: 'block' }}>
+                          Clique para selecionar — Ctrl/Shift para múltiplos
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              const selectedVal = sel?.name || '';
               return (
                 <div key={attrId} style={S.campoLinha}>
                   <span style={S.campoLabel}>{getAttrDisplayName(attrId)}:</span>

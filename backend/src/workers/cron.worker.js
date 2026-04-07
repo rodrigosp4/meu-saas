@@ -3,6 +3,7 @@ import axios from 'axios';
 import prisma from '../config/prisma.js';
 import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
+import { sincronizarReclamacoes } from '../services/reclamacoes.service.js';
 import { cronQueue, mlSyncQueue, syncQueue, syncBlingQueue } from './queue.js';
 
 const connection = {
@@ -27,6 +28,7 @@ async function getTokenParaConta(conta) {
     return conta.accessToken;
   }
 }
+
 
 // ===== VERIFICAR MENSAGENS NÃO LIDAS + PERGUNTAS PENDENTES =====
 async function atualizarCacheNotificacoes(userId) {
@@ -69,18 +71,176 @@ async function atualizarCacheNotificacoes(userId) {
     }
   }
 
+  // Busca e salva perguntas UNANSWERED do ML para pré-popular o cache
+  const idsRetornadosPeloML = new Set();
+  for (const conta of contas) {
+    try {
+      const token = await getTokenParaConta(conta);
+      const resp = await axios.get(
+        `${ML_BASE}/questions/search?seller_id=${conta.id}&api_version=4&status=UNANSWERED&limit=50`,
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 }
+      );
+      const questions = resp.data?.questions || [];
+      for (const q of questions) {
+        idsRetornadosPeloML.add(String(q.id));
+        await prisma.perguntaML.upsert({
+          where: { id: String(q.id) },
+          update: { status: q.status, textoResposta: q.answer?.text || null, dadosML: q },
+          create: {
+            id: String(q.id),
+            contaId: conta.id,
+            itemId: q.item_id,
+            compradorId: String(q.from?.id || ''),
+            textoPergunta: q.text,
+            textoResposta: q.answer?.text || null,
+            status: q.status,
+            dataCriacao: new Date(q.date_created),
+            dataResposta: q.answer?.date_created ? new Date(q.answer.date_created) : null,
+            dadosML: q,
+          },
+        }).catch(() => {});
+      }
+      await delay(500);
+    } catch (e) {
+      if (e.response?.status === 429) await delay(3000);
+    }
+  }
+
+  // Marca como ANSWERED no banco as que o ML não retornou mais como pendentes
+  if (idsRetornadosPeloML.size > 0) {
+    const pendentesNoBanco = await prisma.perguntaML.findMany({
+      where: { conta: { userId }, status: 'UNANSWERED' },
+      select: { id: true },
+    });
+    const idsDesatualizados = pendentesNoBanco
+      .map(p => p.id)
+      .filter(id => !idsRetornadosPeloML.has(id));
+    if (idsDesatualizados.length > 0) {
+      await prisma.perguntaML.updateMany({
+        where: { id: { in: idsDesatualizados } },
+        data: { status: 'ANSWERED' },
+      });
+    }
+  }
+
   const perguntasPendentes = await prisma.perguntaML.count({
-    where: {
-      conta: { userId },
-      status: 'UNANSWERED',
-    },
+    where: { conta: { userId }, status: 'UNANSWERED' },
   });
+
+  // Reclamações abertas não lidas
+  const reclamacoesPendentes = await sincronizarReclamacoes(userId);
 
   await prisma.notificacaoCache.upsert({
     where: { userId },
-    create: { userId, msgNaoLidas: totalMsgNaoLidas, perguntasPendentes },
-    update: { msgNaoLidas: totalMsgNaoLidas, perguntasPendentes },
+    create: { userId, msgNaoLidas: totalMsgNaoLidas, perguntasPendentes, reclamacoesPendentes },
+    update: { msgNaoLidas: totalMsgNaoLidas, perguntasPendentes, reclamacoesPendentes },
   });
+}
+
+// ===== SYNC DE PROMOÇÕES PARA O CRON =====
+// Busca promoções frescas da API do ML e atualiza a tabela promoML antes de verificar alertas.
+// Só rebusca itens se o cache tiver mais de 6h (evita sobrecarregar a API do ML).
+async function sincronizarPromocoesParaCron(userId) {
+  const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 horas
+  const contas = await prisma.contaML.findMany({ where: { userId } });
+  if (contas.length === 0) return;
+
+  for (const conta of contas) {
+    try {
+      const token = await getTokenParaConta(conta);
+      const headers = { Authorization: `Bearer ${token}` };
+
+      // Busca lista de promoções da conta
+      let allPromos = [];
+      let offset = 0;
+      const limit = 50;
+      while (true) {
+        const r = await axios.get(
+          `https://api.mercadolibre.com/seller-promotions/users/${conta.id}?app_version=v2&limit=${limit}&offset=${offset}`,
+          { headers, timeout: 15000 }
+        );
+        const batch = r.data.results || [];
+        allPromos.push(...batch);
+        const paging = r.data.paging || {};
+        if (offset + limit >= (paging.total || 0) || batch.length === 0) break;
+        offset += limit;
+        await new Promise(r => setTimeout(r, 300));
+      }
+      console.log(`[Cron-PromoSync] Conta ${conta.nickname || conta.id}: ${allPromos.length} promoções encontradas.`);
+
+      // Atualiza cada promoção no banco, buscando itens apenas se necessário
+      for (const promo of allPromos) {
+        try {
+          const existente = await prisma.promoML.findUnique({
+            where: { id_contaId: { id: promo.id, contaId: conta.id } },
+          });
+
+          const statusAtivo = promo.status === 'started' || promo.status === 'pending';
+          let items = existente?.itens || [];
+
+          if (statusAtivo) {
+            const statusMudou = existente?.status !== promo.status;
+            const cacheExpirado = !existente?.fetchedAt ||
+              (Date.now() - new Date(existente.fetchedAt).getTime()) > CACHE_TTL_MS;
+
+            if (statusMudou || cacheExpirado) {
+              // Busca itens atualizados via API
+              let allItems = [];
+              let searchAfter = null;
+              let itemOffset = 0;
+              for (let page = 0; page < 50; page++) {
+                try {
+                  const params = new URLSearchParams({ promotion_type: promo.type, app_version: 'v2', limit: '50' });
+                  if (searchAfter) params.set('search_after', searchAfter);
+                  else if (itemOffset > 0) params.set('offset', itemOffset.toString());
+                  const res = await axios.get(
+                    `https://api.mercadolibre.com/seller-promotions/promotions/${promo.id}/items?${params}`,
+                    { headers, timeout: 15000 }
+                  );
+                  const itens = res.data.results || [];
+                  if (itens.length > 0) allItems.push(...itens);
+                  const paging = res.data.paging || {};
+                  searchAfter = paging.searchAfter || paging.search_after || null;
+                  if (searchAfter) { if (itens.length === 0) break; }
+                  else { itemOffset += 50; if (itemOffset >= (paging.total || 0) || itens.length === 0) break; }
+                  await new Promise(r => setTimeout(r, 200));
+                } catch (e) {
+                  if (e.response?.status === 500 || e.response?.status === 404) break;
+                  break;
+                }
+              }
+              items = allItems;
+            }
+          }
+
+          await prisma.promoML.upsert({
+            where: { id_contaId: { id: promo.id, contaId: conta.id } },
+            create: {
+              id: promo.id, contaId: conta.id, tipo: promo.type,
+              sub_type: promo.sub_type || null, status: promo.status,
+              nome: promo.name || null,
+              startDate: promo.start_date ? new Date(promo.start_date) : null,
+              finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
+              itens: items, dadosML: promo,
+            },
+            update: {
+              tipo: promo.type, sub_type: promo.sub_type || null, status: promo.status,
+              nome: promo.name || null,
+              startDate: promo.start_date ? new Date(promo.start_date) : null,
+              finishDate: promo.finish_date ? new Date(promo.finish_date) : null,
+              itens: items, dadosML: promo,
+              ...(statusAtivo ? { fetchedAt: new Date() } : {}),
+            },
+          });
+          await new Promise(r => setTimeout(r, 100));
+        } catch (e) {
+          console.error(`[Cron-PromoSync] Erro ao salvar promo ${promo.id}:`, e.message);
+        }
+      }
+    } catch (e) {
+      console.error(`[Cron-PromoSync] Erro na conta ${conta.id}:`, e.message);
+    }
+  }
 }
 
 // ===== MONITOR DE PROMOÇÕES =====
@@ -373,9 +533,14 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
     select: { id: true, tinyAccessToken: true, blingAccessToken: true, erpAtivo: true },
   });
 
-  // 1) Ativa promoções para cada usuário ANTES de enfileirar o sync ML
+  // 1) Sincroniza promoções da API do ML (atualiza cache promoML) e depois ativa
   let totalAlertas = 0;
   for (const user of usuarios) {
+    try {
+      await sincronizarPromocoesParaCron(user.id);
+    } catch (e) {
+      console.error(`[Cron-PromoSync] Erro para userId=${user.id}:`, e.message);
+    }
     try {
       const novas = await verificarMonitorPromocoes(user.id);
       totalAlertas += novas;

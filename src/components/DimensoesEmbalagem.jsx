@@ -35,6 +35,10 @@ export default function DimensoesEmbalagem({ usuarioId }) {
   const [filtroStatus, setFiltroStatus] = useState('todos'); // todos | pendente | concluido
   const [filtroApenasComEstoque, setFiltroApenasComEstoque] = useState(false);
   const [ocultarCatalogo, setOcultarCatalogo] = useState(true);
+  const [agruparPorSKU, setAgruparPorSKU] = useState(false);
+  const [skusExpandidos, setSkusExpandidos] = useState(new Set());
+  const [gruposSKU, setGruposSKU] = useState([]);
+  const [totalGrupos, setTotalGrupos] = useState(0);
   const [loading, setLoading] = useState(false);
   const [selecionados, setSelecionados] = useState(new Set());
   const [modalAberto, setModalAberto] = useState(false);
@@ -95,9 +99,36 @@ export default function DimensoesEmbalagem({ usuarioId }) {
     }
   }, [contasSelecionadas, search, filtroStatus, ocultarCatalogo, filtroApenasComEstoque]);
 
+  const buscarGruposSKU = useCallback(async () => {
+    if (contasSelecionadas.length === 0) { setGruposSKU([]); setTotalGrupos(0); return; }
+    setLoading(true);
+    setSkusExpandidos(new Set());
+    setSelecionados(new Set());
+    try {
+      const params = new URLSearchParams({
+        contasIds: contasSelecionadas.join(','),
+        search,
+        filtroStatus,
+        ocultarCatalogo: String(ocultarCatalogo),
+        filtroApenasComEstoque: String(filtroApenasComEstoque),
+      });
+      const res = await fetch(`/api/ml/dimensoes-embalagem/por-sku?${params}`);
+      if (!res.ok) throw new Error('Erro ao buscar grupos por SKU');
+      const data = await res.json();
+      setGruposSKU(data.grupos || []);
+      setTotalGrupos(data.totalGrupos || 0);
+    } catch (e) {
+      alert('Erro ao buscar grupos: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [contasSelecionadas, search, filtroStatus, ocultarCatalogo, filtroApenasComEstoque]);
+
   useEffect(() => {
-    if (contasSelecionadas.length > 0) buscarAnuncios(1);
-  }, [contasSelecionadas, filtroStatus, ocultarCatalogo, filtroApenasComEstoque]);
+    if (contasSelecionadas.length === 0) return;
+    if (agruparPorSKU) buscarGruposSKU();
+    else buscarAnuncios(1);
+  }, [contasSelecionadas, filtroStatus, ocultarCatalogo, filtroApenasComEstoque, agruparPorSKU]);
 
   const toggleConta = (id) => {
     setContasSelecionadas(prev =>
@@ -114,15 +145,16 @@ export default function DimensoesEmbalagem({ usuarioId }) {
   };
 
   const toggleTodos = () => {
-    if (selecionados.size === anuncios.length) {
+    const lista = agruparPorSKU ? todosItensGrupos : anuncios;
+    if (selecionados.size === lista.length) {
       setSelecionados(new Set());
     } else {
-      setSelecionados(new Set(anuncios.map(a => a.id)));
+      setSelecionados(new Set(lista.map(a => a.id)));
     }
   };
 
   const getItensSelecionados = () =>
-    anuncios.filter(a => selecionados.has(a.id)).map(a => ({ id: a.id, contaId: a.contaId }));
+    todosItensGrupos.filter(a => selecionados.has(a.id)).map(a => ({ id: a.id, contaId: a.contaId }));
 
   // Seleciona todos os IDs filtrados (todas as páginas)
   const selecionarTodosFiltrados = async () => {
@@ -192,7 +224,7 @@ export default function DimensoesEmbalagem({ usuarioId }) {
       }
     } else {
       // Verifica se todos os selecionados têm dimensões
-      const semDim = anuncios.filter(a => selecionados.has(a.id) && !getDimStr(a));
+      const semDim = todosItensGrupos.filter(a => selecionados.has(a.id) && !getDimStr(a));
       if (semDim.length > 0) {
         return alert(`${semDim.length} item(ns) selecionado(s) não possui(em) dimensões cadastradas para reenvio.`);
       }
@@ -221,9 +253,25 @@ export default function DimensoesEmbalagem({ usuarioId }) {
     }
   };
 
+  const toggleSKUExpandido = (sku) => {
+    setSkusExpandidos(prev => {
+      const next = new Set(prev);
+      next.has(sku) ? next.delete(sku) : next.add(sku);
+      return next;
+    });
+  };
+
+  // Para verificação de "reenviar existentes" no modo agrupado,
+  // coletamos todos os itens expandidos/selecionados de todos os grupos
+  const todosItensGrupos = React.useMemo(() => {
+    if (!agruparPorSKU) return anuncios;
+    return gruposSKU.flatMap(g => g.itens);
+  }, [agruparPorSKU, gruposSKU, anuncios]);
+
   const totalPages = Math.ceil(total / LIMIT);
-  const todosCheck = anuncios.length > 0 && selecionados.size === anuncios.length;
-  const algumCheck = selecionados.size > 0 && selecionados.size < anuncios.length;
+  const listaAtiva = agruparPorSKU ? todosItensGrupos : anuncios;
+  const todosCheck = listaAtiva.length > 0 && selecionados.size === listaAtiva.length;
+  const algumCheck = selecionados.size > 0 && selecionados.size < listaAtiva.length;
 
   const conteinerStyle = { fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" };
 
@@ -280,9 +328,19 @@ export default function DimensoesEmbalagem({ usuarioId }) {
           Apenas c/ estoque
         </label>
 
+        {/* Agrupar por SKU */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.85em', color: '#555', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input
+            type="checkbox"
+            checked={agruparPorSKU}
+            onChange={e => { setAgruparPorSKU(e.target.checked); setSkusExpandidos(new Set()); }}
+          />
+          Agrupar por SKU
+        </label>
+
         {/* Botão buscar */}
         <button
-          onClick={() => buscarAnuncios(1)}
+          onClick={() => agruparPorSKU ? buscarGruposSKU() : buscarAnuncios(1)}
           disabled={loading}
           style={{
             padding: '7px 18px', background: '#2d3e50', color: '#fff', border: 'none',
@@ -333,7 +391,9 @@ export default function DimensoesEmbalagem({ usuarioId }) {
         <span style={{ fontSize: '0.9em', color: '#555' }}>
           {selecionados.size > 0
             ? <strong>{selecionados.size} selecionado(s)</strong>
-            : `${total} anúncio(s) encontrado(s)`}
+            : agruparPorSKU
+              ? `${totalGrupos} SKU(s) agrupado(s)`
+              : `${total} anúncio(s) encontrado(s)`}
         </span>
 
         <button
@@ -398,7 +458,115 @@ export default function DimensoesEmbalagem({ usuarioId }) {
           <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
             Nenhum anúncio encontrado. Use os filtros e clique em Buscar.
           </div>
+        ) : agruparPorSKU ? (
+          /* ====== VISÃO AGRUPADA POR SKU ====== */
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
+            <thead>
+              <tr style={{ background: '#f4f6f8', borderBottom: '2px solid #e0e0e0' }}>
+                <th style={{ padding: '10px 12px', textAlign: 'center', width: 36 }}></th>
+                <th style={{ padding: '10px 8px', textAlign: 'left', width: 140 }}>SKU</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center', width: 80 }}>Qtd</th>
+                <th style={{ padding: '10px 8px', textAlign: 'left' }}>Dimensões encontradas</th>
+                <th style={{ padding: '10px 8px', textAlign: 'center', width: 130 }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gruposSKU.map(({ sku, itens, dims, temDivergencia, temPendente }) => {
+                const expandido = skusExpandidos.has(sku);
+                const skuLabel = sku === '__sem_sku__' ? <span style={{ color: '#bbb', fontStyle: 'italic' }}>Sem SKU</span> : sku;
+                const rowBg = temDivergencia ? '#fff5f5' : temPendente ? '#fffdf0' : '#f6fff8';
+                const statusLabel = temDivergencia
+                  ? <span style={{ background: '#fde8e8', color: '#c0392b', padding: '2px 8px', borderRadius: 9, fontSize: '0.78em', fontWeight: 700 }}>⚠ Divergência</span>
+                  : temPendente
+                    ? <span style={{ background: '#fff3cd', color: '#856404', padding: '2px 8px', borderRadius: 9, fontSize: '0.78em', fontWeight: 600 }}>Pendente</span>
+                    : <span style={{ background: '#d4edda', color: '#155724', padding: '2px 8px', borderRadius: 9, fontSize: '0.78em', fontWeight: 600 }}>Concluído</span>;
+                return (
+                  <React.Fragment key={sku}>
+                    <tr
+                      style={{ background: rowBg, borderBottom: expandido ? 'none' : '1px solid #eee', cursor: 'pointer' }}
+                      onClick={() => toggleSKUExpandido(sku)}
+                    >
+                      <td style={{ padding: '8px 12px', textAlign: 'center', color: '#888', fontSize: '0.9em' }}>
+                        {expandido ? '▾' : '▸'}
+                      </td>
+                      <td style={{ padding: '8px', fontWeight: 600, color: '#2c3e50' }}>{skuLabel}</td>
+                      <td style={{ padding: '8px', textAlign: 'center', color: '#555' }}>{itens.length}</td>
+                      <td style={{ padding: '8px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {dims.filter(Boolean).length === 0 ? (
+                            <span style={{ color: '#ccc', fontSize: '0.82em' }}>Não informado</span>
+                          ) : dims.filter(Boolean).map((d, i) => {
+                            const parsed = parseDimStr(d);
+                            return (
+                              <span key={i} style={{
+                                background: temDivergencia ? (i === 0 ? '#fde8e8' : '#fef0e8') : '#eef4ff',
+                                border: `1px solid ${temDivergencia ? '#f5c6c6' : '#c8daf5'}`,
+                                borderRadius: 5, padding: '2px 8px', fontSize: '0.8em', color: '#444'
+                              }}>
+                                {parsed
+                                  ? `L${parsed.largura}×A${parsed.altura}×C${parsed.comprimento} / ${parsed.peso}g`
+                                  : d}
+                                {temDivergencia && <span style={{ marginLeft: 4, color: '#c0392b', fontWeight: 700 }}>#{i + 1}</span>}
+                              </span>
+                            );
+                          })}
+                          {temPendente && (
+                            <span style={{ background: '#fff3cd', border: '1px solid #ffe08a', borderRadius: 5, padding: '2px 8px', fontSize: '0.8em', color: '#856404' }}>
+                              {itens.filter(a => !getDimStr(a)).length}× sem dimensão
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px', textAlign: 'center' }}>{statusLabel}</td>
+                    </tr>
+                    {expandido && itens.map((ad, idx) => {
+                      const dimStr = getDimStr(ad);
+                      const dim = parseDimStr(dimStr);
+                      const isSel = selecionados.has(ad.id);
+                      return (
+                        <tr
+                          key={ad.id}
+                          style={{
+                            background: isSel ? '#fff8f0' : (idx % 2 === 0 ? '#fafeff' : '#f5fafe'),
+                            borderBottom: idx === itens.length - 1 ? '2px solid #e0e0e0' : '1px solid #eee',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => toggleSelecionado(ad.id)}
+                        >
+                          <td style={{ padding: '6px 12px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={isSel} onChange={() => toggleSelecionado(ad.id)} style={{ cursor: 'pointer' }} />
+                          </td>
+                          <td colSpan={2} style={{ padding: '6px 8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {ad.thumbnail
+                                ? <img src={ad.thumbnail} alt="" style={{ width: 32, height: 32, objectFit: 'contain', borderRadius: 3, border: '1px solid #eee', flexShrink: 0 }} />
+                                : <div style={{ width: 32, height: 32, background: '#f0f0f0', borderRadius: 3, flexShrink: 0 }} />}
+                              <div>
+                                <div style={{ fontWeight: 500, color: '#2c3e50', fontSize: '0.9em', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ad.titulo}>{ad.titulo}</div>
+                                <div style={{ fontSize: '0.78em', color: '#888' }}>{ad.id} · {ad.conta?.nickname || '—'}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ padding: '6px 8px' }}>
+                            {dim ? (
+                              <span style={{ fontSize: '0.82em', color: '#444' }}>
+                                L{dim.largura}×A{dim.altura}×C{dim.comprimento} / {dim.peso}g
+                              </span>
+                            ) : <span style={{ color: '#ccc', fontSize: '0.82em' }}>Não informado</span>}
+                          </td>
+                          <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                            <StatusBadge temDimensoes={!!dimStr} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         ) : (
+          /* ====== VISÃO NORMAL (lista) ====== */
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
             <thead>
               <tr style={{ background: '#f4f6f8', borderBottom: '2px solid #e0e0e0' }}>

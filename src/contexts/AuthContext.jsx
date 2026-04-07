@@ -12,11 +12,12 @@ const PERMISSIONS_BY_ROLE = {
     'centralPromocoes', 'monitorConcorrentes', 'perguntasPreVenda',
     'posVenda', 'catalogo', 'qualidadePublicacoes', 'otimizadorImagens',
     'dimensoesEmbalagem', 'corretorPrecoPlanilha', 'planejadorProductAds',
-    'chamados',
+    'chamados', 'reclamacoes', 'centralAjuda',
   ],
   VIEWER: [
     'home', 'produtosErp', 'gerenciadorML', 'fila', 'catalogo',
-    'qualidadePublicacoes', 'monitorConcorrentes', 'chamados',
+    'qualidadePublicacoes', 'monitorConcorrentes', 'chamados', 'reclamacoes',
+    'centralAjuda',
   ],
 };
 
@@ -119,6 +120,9 @@ export function AuthProvider({ children }) {
     if (['adminPanel', 'agendadorTarefas'].includes(pageId)) {
       return isSuperAdmin && !impersonating;
     }
+
+    // Páginas acessíveis pelo SUPER_ADMIN sem impersonação (além das exclusivas acima)
+    if (isSuperAdmin && !impersonating && pageId === 'centralAjuda') return true;
 
     // SUPER_ADMIN sem impersonação: só acessa páginas administrativas (nenhuma página de cliente)
     if (isSuperAdmin && !impersonating) return false;

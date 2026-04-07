@@ -103,7 +103,7 @@ export default function OtimizadorImagens({ usuarioId }) {
   const [urlTestandoIdx, setUrlTestandoIdx] = useState(null);
   const [urlsValidas, setUrlsValidas] = useState({});
   const [imagensRemovidas, setImagensRemovidas] = useState(new Set());
-  const [modoReplace, setModoReplace] = useState('FIRST'); // FIRST | ALL
+  const [modoReplace, setModoReplace] = useState('FIRST'); // FIRST | ALL | APPEND
   const [aplicarTodosSku, setAplicarTodosSku] = useState(true);
   const [enviando, setEnviando] = useState(false);
 
@@ -948,6 +948,10 @@ export default function OtimizadorImagens({ usuarioId }) {
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input type="radio" name="mode" value="ALL" checked={modoReplace === 'ALL'} onChange={() => setModoReplace('ALL')} className="mt-0.5" />
                   <span className="text-xs text-gray-700">Substituir TODAS as imagens (apagar as antigas)</span>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input type="radio" name="mode" value="APPEND" checked={modoReplace === 'APPEND'} onChange={() => setModoReplace('APPEND')} className="mt-0.5" />
+                  <span className="text-xs text-gray-700">Adicionar ao final (mantendo as existentes)</span>
                 </label>
               </div>
 

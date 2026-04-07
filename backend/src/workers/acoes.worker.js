@@ -316,19 +316,22 @@ export const acoesWorker = new Worker('acoes-massa', async (job) => {
             const pictures = Array.isArray(valor) ? valor : [];
             if (pictures.length === 0) throw new Error('Nenhuma imagem informada.');
             let finalPictures = pictures;
-            if (modoReplace === 'FIRST') {
+            if (modoReplace === 'FIRST' || modoReplace === 'APPEND') {
               try {
                 const itemRes = await safeAxios.get(`https://api.mercadolibre.com/items/${item.id}?attributes=pictures`, { headers });
                 const existingIds = (itemRes.data?.pictures || []).map(p => ({ id: p.id }));
-                finalPictures = [...pictures, ...existingIds];
+                finalPictures = modoReplace === 'FIRST'
+                  ? [...pictures, ...existingIds]
+                  : [...existingIds, ...pictures];
               } catch (_) {}
             }
+            finalPictures = finalPictures.slice(0, 12);
             await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { pictures: finalPictures }, { headers });
             const anuncio = await prisma.anuncioML.findUnique({ where: { id: item.id }, select: { tagPrincipal: true } });
             if (anuncio?.tagPrincipal === 'poor_quality_thumbnail' || anuncio?.tagPrincipal === 'poor_quality_picture') {
               await prisma.anuncioML.update({ where: { id: item.id }, data: { tagPrincipal: null } }).catch(() => {});
             }
-            logAcao += `${finalPictures.length} imagem(ns) atualizada(s)${modoReplace === 'FIRST' ? ' (manteve existentes)' : ''}.`;
+            logAcao += `${finalPictures.length} imagem(ns) atualizada(s)${modoReplace === 'FIRST' ? ' (manteve existentes, nova como capa)' : modoReplace === 'APPEND' ? ' (adicionada(s) ao final)' : ''}.`;
 
           } else if (acao === 'excluir') {
             await safeAxios.put(`https://api.mercadolibre.com/items/${item.id}`, { status: 'closed' }, { headers });

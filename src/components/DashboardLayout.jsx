@@ -190,6 +190,20 @@ const icons = {
       <line x1="9" y1="14" x2="13" y2="14" />
     </svg>
   ),
+  reclamacoes: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+  ),
+  centralAjuda: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+  ),
 };
 
 // ── Labels de página ───────────────────────────────────────────────────────
@@ -209,7 +223,7 @@ const pageTitles = {
   centralPromocoes: 'Central de Promoções',
   monitorConcorrentes: 'Monitor de Anúncios Concorrentes',
   perguntasPreVenda: 'Perguntas Pré-Venda',
-  posVenda: 'Pós-Venda (Mensagens & Reclamações)',
+  posVenda: 'Pós-Venda — Mensagens',
   catalogo: 'Catálogo',
   qualidadePublicacoes: 'Qualidade das Publicações (Ficha Técnica)',
   dimensoesEmbalagem: 'Dimensões de Embalagem',
@@ -220,6 +234,8 @@ const pageTitles = {
   clienteAPI: 'Cliente API (ML & Tiny)',
   rascunhos: 'Rascunhos de Cadastro',
   chamados: 'Chamados de Suporte',
+  reclamacoes: 'Reclamações ML',
+  centralAjuda: 'Central de Ajuda',
 };
 
 // ── Componente principal ───────────────────────────────────────────────────
@@ -231,7 +247,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
   const { drafts } = useDraftManager(usuarioId);
 
   // ── Notificações ──────────────────────────────────────────────────────────
-  const [notif, setNotif] = useState({ msgNaoLidas: 0, perguntasPendentes: 0 });
+  const [notif, setNotif] = useState({ msgNaoLidas: 0, perguntasPendentes: 0, reclamacoesPendentes: 0 });
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
 
   useEffect(() => {
@@ -313,6 +329,8 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     { id: 'configuracoes',       label: 'Configurações API',      icon: icons.settings },
     { id: 'fila',                label: 'Gerenciador de Fila',    icon: icons.queue },
     { id: 'chamados',            label: 'Chamados de Suporte',    icon: icons.chamados },
+    { id: 'reclamacoes',         label: 'Reclamações ML',          icon: icons.reclamacoes },
+    { id: 'centralAjuda',        label: 'Central de Ajuda',        icon: icons.centralAjuda },
     ...(drafts.length > 0 ? [{ id: 'rascunhos', label: `Rascunhos (${drafts.length})`, icon: icons.draft }] : []),
   ];
 
@@ -657,6 +675,20 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
 
               {/* Sino de notificações */}
+              <style>{`
+                @keyframes bell-pulse {
+                  0%, 100% { transform: rotate(0deg); }
+                  15% { transform: rotate(12deg); }
+                  30% { transform: rotate(-10deg); }
+                  45% { transform: rotate(8deg); }
+                  60% { transform: rotate(-6deg); }
+                  75% { transform: rotate(4deg); }
+                }
+                @keyframes badge-pulse {
+                  0%, 100% { transform: scale(1); }
+                  50% { transform: scale(1.25); }
+                }
+              `}</style>
               <div data-notif-dropdown style={{ position: 'relative' }}>
                 <button
                   onClick={() => setShowNotifDropdown(v => !v)}
@@ -670,20 +702,44 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
                   onMouseEnter={e => e.currentTarget.style.background = '#f0f0f0'}
                   onMouseLeave={e => e.currentTarget.style.background = 'none'}
                 >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-                  </svg>
+                  <span style={{
+                    display: 'flex',
+                    animation: notif.reclamacoesPendentes > 0 ? 'bell-pulse 1.5s ease-in-out infinite' : 'none',
+                    transformOrigin: 'top center',
+                  }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                      stroke={notif.reclamacoesPendentes > 0 ? '#e67e22' : 'currentColor'}
+                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                    </svg>
+                  </span>
+
+                  {/* Badge vermelho: msgs + perguntas */}
                   {(notif.msgNaoLidas + notif.perguntasPendentes) > 0 && (
                     <span style={{
-                      position: 'absolute', top: 2, right: 2,
+                      position: 'absolute', top: 2, right: notif.reclamacoesPendentes > 0 ? 14 : 2,
                       backgroundColor: '#e74c3c', color: '#fff',
                       borderRadius: '50%', width: 16, height: 16,
                       fontSize: '0.65em', fontWeight: 700,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      lineHeight: 1,
+                      lineHeight: 1, transition: 'right 0.2s',
                     }}>
                       {Math.min(notif.msgNaoLidas + notif.perguntasPendentes, 99)}
+                    </span>
+                  )}
+
+                  {/* Badge laranja "?" para reclamações */}
+                  {notif.reclamacoesPendentes > 0 && (
+                    <span style={{
+                      position: 'absolute', top: 2, right: 2,
+                      backgroundColor: '#e67e22', color: '#fff',
+                      borderRadius: '50%', width: 16, height: 16,
+                      fontSize: '0.6em', fontWeight: 900,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      lineHeight: 1, animation: 'badge-pulse 1.5s ease-in-out infinite',
+                    }}>
+                      ?
                     </span>
                   )}
                 </button>
@@ -693,18 +749,39 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
                     position: 'absolute', right: 0, top: 'calc(100% + 6px)',
                     backgroundColor: '#fff', border: '1px solid #e0e0e0',
                     borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-                    minWidth: 260, zIndex: 2000, overflow: 'hidden',
+                    minWidth: 280, zIndex: 2000, overflow: 'hidden',
                   }}>
                     <div style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', fontSize: '0.78em', fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       Notificações
                     </div>
 
-                    {notif.msgNaoLidas === 0 && notif.perguntasPendentes === 0 ? (
+                    {notif.msgNaoLidas === 0 && notif.perguntasPendentes === 0 && notif.reclamacoesPendentes === 0 ? (
                       <div style={{ padding: '14px', fontSize: '0.85em', color: '#aaa', textAlign: 'center' }}>
                         Nenhuma notificação pendente
                       </div>
                     ) : (
                       <>
+                        {notif.reclamacoesPendentes > 0 && (
+                          <button
+                            onClick={() => { setActivePage('reclamacoes'); setShowNotifDropdown(false); }}
+                            style={{
+                              width: '100%', textAlign: 'left', padding: '11px 14px',
+                              background: '#fff9f0', border: 'none', borderBottom: '1px solid #f5f5f5',
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+                              transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#fff3e0'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#fff9f0'}
+                          >
+                            <span style={{ fontSize: '1.1em' }}>⚠️</span>
+                            <div>
+                              <div style={{ fontSize: '0.85em', fontWeight: 700, color: '#e67e22' }}>
+                                {notif.reclamacoesPendentes} reclamação{notif.reclamacoesPendentes !== 1 ? 'ões' : ''} não lida{notif.reclamacoesPendentes !== 1 ? 's' : ''}
+                              </div>
+                              <div style={{ fontSize: '0.75em', color: '#888' }}>Clique para abrir Reclamações ML</div>
+                            </div>
+                          </button>
+                        )}
                         {notif.msgNaoLidas > 0 && (
                           <button
                             onClick={() => { setActivePage('posVenda'); setShowNotifDropdown(false); }}

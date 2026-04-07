@@ -1515,7 +1515,27 @@ async getAdsBySku(req, res) {
 
 async getPerguntas(req, res) {
   try {
-    const { userId, status = 'UNANSWERED', limit = 50 } = req.query;
+    const { userId, status = 'UNANSWERED', limit = 50, fromCache = 'false' } = req.query;
+
+    // Modo cache: lê direto do banco sem chamar o ML (usado ao abrir a tela após o cron já ter sincronizado)
+    // Usa req.userId (do JWT) para garantir isolamento — ignora o userId do query string
+    if (fromCache === 'true') {
+      const perguntas = await prisma.perguntaML.findMany({
+        where: { conta: { userId: req.userId }, status },
+        orderBy: { dataCriacao: 'desc' },
+        take: parseInt(limit),
+        include: { conta: { select: { id: true, nickname: true } } },
+      });
+      const mapped = perguntas.map(p => ({
+        ...p,
+        contaId: p.conta.id,
+        contaNickname: p.conta.nickname,
+        item_id: p.itemId,
+        text: p.textoPergunta,
+        date_created: p.dataCriacao,
+      }));
+      return res.json({ perguntas: mapped, total: mapped.length, fromCache: true });
+    }
 
     const contas = await prisma.contaML.findMany({
       where: { userId },
@@ -2068,6 +2088,81 @@ async corrigirPreco(req, res) {
       }
 
       res.json({ ok: true, resultado }); // { itemId: "10x5x30,500" | null }
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
+    }
+  },
+
+  async getDimensoesPorSKU(req, res) {
+    try {
+      const { contasIds, search, filtroStatus, ocultarCatalogo, filtroApenasComEstoque } = req.query;
+      const userId = req.user?.id;
+
+      if (!contasIds) return res.status(400).json({ erro: 'contasIds obrigatório' });
+      const ids = contasIds.split(',').filter(Boolean);
+
+      const where = {
+        contaId: { in: ids },
+        conta: { userId },
+      };
+
+      if (search) {
+        where.OR = [
+          { titulo: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          { id: { contains: search } },
+        ];
+      }
+
+      let anuncios = await prisma.anuncioML.findMany({
+        where,
+        select: { id: true, contaId: true, sku: true, titulo: true, thumbnail: true, estoque: true, dadosML: true, conta: { select: { nickname: true } } },
+      });
+
+      if (ocultarCatalogo === 'true') {
+        anuncios = anuncios.filter(a => !a.dadosML?.catalog_product_id);
+      }
+      if (filtroApenasComEstoque === 'true') {
+        anuncios = anuncios.filter(a => a.estoque > 0);
+      }
+
+      const getDim = a => a.dadosML?.shipping?.dimensions || null;
+
+      if (filtroStatus === 'pendente') {
+        anuncios = anuncios.filter(a => !getDim(a));
+      } else if (filtroStatus === 'concluido') {
+        anuncios = anuncios.filter(a => !!getDim(a));
+      }
+
+      const mapa = new Map();
+      for (const ad of anuncios) {
+        const chave = ad.sku || '__sem_sku__';
+        if (!mapa.has(chave)) mapa.set(chave, []);
+        mapa.get(chave).push({
+          id: ad.id,
+          contaId: ad.contaId,
+          sku: ad.sku,
+          titulo: ad.titulo,
+          thumbnail: ad.thumbnail,
+          estoque: ad.estoque,
+          conta: ad.conta,
+          dadosML: ad.dadosML ? { shipping: ad.dadosML.shipping, catalog_product_id: ad.dadosML.catalog_product_id } : null,
+        });
+      }
+
+      const grupos = Array.from(mapa.entries()).map(([sku, itens]) => {
+        const dimsSet = [...new Set(itens.map(a => getDim(a) || ''))];
+        const dims = dimsSet.filter(Boolean);
+        const temDivergencia = dims.length > 1;
+        const temPendente = itens.some(a => !getDim(a));
+        return { sku, itens, dims, temDivergencia, temPendente };
+      }).sort((a, b) => {
+        if (a.temDivergencia !== b.temDivergencia) return b.temDivergencia - a.temDivergencia;
+        if (a.temPendente !== b.temPendente) return b.temPendente - a.temPendente;
+        return (a.sku === '__sem_sku__' ? 1 : 0) - (b.sku === '__sem_sku__' ? 1 : 0);
+      });
+
+      res.json({ grupos, totalGrupos: grupos.length, totalAnuncios: anuncios.length });
     } catch (error) {
       res.status(500).json({ erro: error.message });
     }

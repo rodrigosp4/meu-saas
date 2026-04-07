@@ -74,6 +74,7 @@ export default function Configuracoes({ usuarioId }) {
   const [suporteAtivo, setSuporteAtivo] = useState(false);
   const [suporteExpira, setSuporteExpira] = useState(null);
   const [salvandoSuporteToggle, setSalvandoSuporteToggle] = useState(false);
+  const [abaConfig, setAbaConfig] = useState('integracoes');
 
 // 1. CARREGA TUDO DO BANCO DE DADOS
   const carregarConfig = (id) => {
@@ -744,10 +745,43 @@ export default function Configuracoes({ usuarioId }) {
     cardBg: '#ffffff',
   };
 
+  const ABAS_CONFIG = [
+    { key: 'integracoes', label: 'Integrações & APIs' },
+    { key: 'regras',      label: 'Regras de Preço' },
+    ...(role === 'OWNER' ? [{ key: 'equipe', label: 'Equipe' }] : []),
+  ];
+
   return (
     <div className="space-y-8 max-w-5xl pb-10">
-      <h3 className="text-2xl font-bold" style={{ color: c.heading }}>Configurações e Integrações</h3>
-      
+      <div>
+        <h3 className="text-2xl font-bold mb-4" style={{ color: c.heading }}>Configurações e Integrações</h3>
+        <div style={{ display: 'flex', gap: 2, borderBottom: `2px solid ${c.border}`, marginBottom: 0 }}>
+          {ABAS_CONFIG.map(aba => (
+            <button
+              key={aba.key}
+              onClick={() => setAbaConfig(aba.key)}
+              style={{
+                padding: '8px 20px',
+                fontWeight: 600,
+                fontSize: '0.85em',
+                border: 'none',
+                borderBottom: abaConfig === aba.key ? `2px solid ${c.orange}` : '2px solid transparent',
+                marginBottom: -2,
+                background: 'none',
+                color: abaConfig === aba.key ? c.orange : c.muted,
+                cursor: 'pointer',
+                transition: 'color 0.15s',
+              }}
+            >
+              {aba.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ===== ABA: INTEGRAÇÕES & APIs ===== */}
+      {abaConfig === 'integracoes' && <>
+
       {/* 1. TINY ERP */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
         <h4 className="text-lg font-bold" style={{ color: c.orange }}>Conexão Tiny ERP</h4>
@@ -929,6 +963,11 @@ export default function Configuracoes({ usuarioId }) {
         </div>
       </div>
 
+      </> /* fim: integracoes — bloco Tiny+Bling */}
+
+      {/* ===== ABA: REGRAS DE PREÇO ===== */}
+      {abaConfig === 'regras' && <>
+
       {/* 2. CEP DE ORIGEM */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
         <h4 className="text-lg font-bold" style={{ color: c.orange }}>CEP de Origem (Frete Grátis)</h4>
@@ -956,6 +995,10 @@ export default function Configuracoes({ usuarioId }) {
           </button>
         </div>
       </div>
+
+      </> /* fim: regras — bloco CEP */}
+
+      {abaConfig === 'integracoes' && <>
 
       {/* 3. CONTAS MERCADO LIVRE */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
@@ -1009,6 +1052,10 @@ export default function Configuracoes({ usuarioId }) {
           </div>
         )}
       </div>
+
+      </> /* fim: integracoes — bloco Contas ML */}
+
+      {abaConfig === 'regras' && <>
 
       {/* 4. MOTOR DE PRECIFICAÇÃO DINÂMICO */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
@@ -1360,6 +1407,10 @@ export default function Configuracoes({ usuarioId }) {
         </div>
       </div>
 
+      </> /* fim: regras — bloco Motor+Atacado */}
+
+      {abaConfig === 'integracoes' && <>
+
       {/* ================================================================ */}
       {/* 6. IMGUR — HOSPEDAGEM DE IMAGENS                                 */}
       {/* ================================================================ */}
@@ -1560,12 +1611,10 @@ export default function Configuracoes({ usuarioId }) {
         </div>
       </div>
 
+      </> /* fim: integracoes — bloco Imgur+RemoveBg */}
 
-    {/* ================================================================
-        SEÇÃO: CONTROLE DE USUÁRIOS (apenas OWNER)
-        ================================================================ */}
-    {role === 'OWNER' && (
-      <>
+      {/* ===== ABA: EQUIPE ===== */}
+      {abaConfig === 'equipe' && role === 'OWNER' && <>
         {/* SUB-USUÁRIOS */}
         <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
           <div className="flex justify-between items-center mb-4">
@@ -1678,8 +1727,7 @@ export default function Configuracoes({ usuarioId }) {
             </button>
           </div>
         </div>
-      </>
-    )}
+      </> /* fim: equipe */}
 
     {/* MODAL SUB-USUÁRIO */}
     {modalSubUser && (

@@ -76,6 +76,7 @@ model User {
   conversasLidas       ConversaLida[]
   chamados             Chamado[]
   mensagensChamado     MensagemChamado[]   @relation("MensagensChamado")
+  reclamacoes          ReclamacaoCache[]
 }
 
 model Assinatura {
@@ -505,9 +506,68 @@ model AnexoChamado {
 
 // ── Cache de Notificações ─────────────────────────────────────────────────────
 model NotificacaoCache {
-  userId             String   @id
-  msgNaoLidas        Int      @default(0)
-  perguntasPendentes Int      @default(0)
-  updatedAt          DateTime @updatedAt
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                String   @id
+  msgNaoLidas           Int      @default(0)
+  perguntasPendentes    Int      @default(0)
+  reclamacoesPendentes  Int      @default(0)
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ── Cache de Reclamações ML ───────────────────────────────────────────────────
+model ReclamacaoCache {
+  id           String   @id            // ML claim ID
+  userId       String
+  contaId      String                  // ML seller account ID
+  status       String                  // opened, closed
+  type         String                  // mediations, returns, etc.
+  stage        String                  // claim, dispute, recontact, none
+  resourceId   String                  // order/payment/shipment ID
+  resource     String                  // order, payment, shipment, purchase
+  reasonId     String?
+  buyerId      String?
+  lida         Boolean  @default(false)
+  dadosML      Json                    // full claim object from ML API
+  dateCreated  DateTime
+  lastUpdated  DateTime
+  criadoEm    DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, lida])
+}
+
+// ── Central de Ajuda ─────────────────────────────────────────────────────────
+
+model CategoriaAjuda {
+  id        String        @id @default(uuid())
+  titulo    String
+  slug      String        @unique
+  icone     String?
+  descricao String?
+  ordem     Int           @default(0)
+  createdAt DateTime      @default(now())
+  artigos   ArtigoAjuda[]
+}
+
+model ArtigoAjuda {
+  id           String         @id @default(uuid())
+  categoriaId  String
+  parentId     String?
+  titulo       String
+  slug         String         @unique
+  descricao    String?
+  conteudo     String
+  publicado    Boolean        @default(false)
+  ordem        Int            @default(0)
+  criadoEm     DateTime       @default(now())
+  atualizadoEm DateTime       @updatedAt
+  categoria    CategoriaAjuda @relation(fields: [categoriaId], references: [id], onDelete: Cascade)
+  parent       ArtigoAjuda?   @relation("SubArtigos", fields: [parentId], references: [id], onDelete: Cascade)
+  filhos       ArtigoAjuda[]  @relation("SubArtigos")
+
+  @@index([categoriaId])
+  @@index([publicado])
+  @@index([parentId])
 }

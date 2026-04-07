@@ -20,6 +20,8 @@ export const MODULOS = [
   { id: 'planejadorProductAds', label: 'Planejador de Product Ads' },
   { id: 'concorrenciaPreco',    label: 'Concorrência de Preço' },
   { id: 'chamados',             label: 'Chamados de Suporte' },
+  { id: 'reclamacoes',          label: 'Reclamações ML' },
+  { id: 'centralAjuda',         label: 'Central de Ajuda' },
 ];
 
 // Recursos granulares (ações dentro dos módulos)
@@ -92,6 +94,13 @@ export const RECURSOS_SISTEMA = [
   // ── Chamados ─────────────────────────────────────────────────────────────────
   { id: 'chamados.visualizar',       label: 'Visualizar chamados',                grupo: 'Chamados',              modulo: 'chamados',           deps: [] },
   { id: 'chamados.criar',            label: 'Abrir novo chamado',                 grupo: 'Chamados',              modulo: 'chamados',           deps: ['chamados.visualizar'] },
+
+  // ── Reclamações ML ────────────────────────────────────────────────────────────
+  { id: 'reclamacoes.visualizar',    label: 'Visualizar reclamações',             grupo: 'Reclamações',           modulo: 'reclamacoes',        deps: [] },
+  { id: 'reclamacoes.responder',     label: 'Enviar mensagem em reclamação',      grupo: 'Reclamações',           modulo: 'reclamacoes',        deps: ['reclamacoes.visualizar'] },
+
+  // ── Central de Ajuda ──────────────────────────────────────────────────────────
+  { id: 'centralAjuda.visualizar',   label: 'Acessar Central de Ajuda',           grupo: 'Central de Ajuda',      modulo: 'centralAjuda',       deps: [] },
 ];
 
 /**

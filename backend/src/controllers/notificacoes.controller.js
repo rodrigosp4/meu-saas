@@ -10,6 +10,7 @@ export const notificacoesController = {
       res.json({
         msgNaoLidas: cache?.msgNaoLidas ?? 0,
         perguntasPendentes: cache?.perguntasPendentes ?? 0,
+        reclamacoesPendentes: cache?.reclamacoesPendentes ?? 0,
         updatedAt: cache?.updatedAt ?? null,
       });
     } catch (error) {

@@ -30,6 +30,8 @@ import PainelRascunhos from './components/PainelRascunhos.jsx';
 import TabelaMedidas from './components/TabelaMedidas.jsx';
 import ConcorrenciaPreco from './components/ConcorrenciaPreco.jsx';
 import Chamados from './components/Chamados.jsx';
+import Reclamacoes from './components/Reclamacoes.jsx';
+import CentralAjuda from './components/CentralAjuda.jsx';
 
 function App() {
   const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura } = useAuth();
@@ -51,7 +53,7 @@ function App() {
   }, [activePage]);
 
   // SUPER_ADMIN sem impersonação → redireciona para adminPanel se estiver numa página de cliente
-  const ADMIN_PAGES = ['adminPanel', 'agendadorTarefas', 'home'];
+  const ADMIN_PAGES = ['adminPanel', 'agendadorTarefas', 'home', 'centralAjuda'];
   useEffect(() => {
     if (isLoggedIn && role === 'SUPER_ADMIN' && !impersonating && !ADMIN_PAGES.includes(activePage)) {
       setActivePage('adminPanel');
@@ -164,6 +166,8 @@ function App() {
       {canAccess('concorrenciaPreco') && activePage === 'concorrenciaPreco' && <ConcorrenciaPreco usuarioId={uid} />}
       {canAccess('planejadorProductAds') && activePage === 'planejadorProductAds' && <PlanejadorProductAds usuarioId={uid} />}
       {canAccess('chamados') && activePage === 'chamados' && <Chamados usuarioId={uid} />}
+      {canAccess('reclamacoes') && activePage === 'reclamacoes' && <Reclamacoes usuarioId={uid} />}
+      {canAccess('centralAjuda') && activePage === 'centralAjuda' && <CentralAjuda />}
       {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} usuarioId={uid} />}
     </DashboardLayout>
   );

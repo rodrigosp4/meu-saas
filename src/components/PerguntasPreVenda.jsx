@@ -302,6 +302,22 @@ export default function PerguntasPreVenda({ usuarioId }) {
       .catch(() => {});
   }, [usuarioId]);
 
+  // Auto-carrega perguntas do cache ao abrir a tela (cron já as buscou do ML)
+  useEffect(() => {
+    if (!usuarioId || contas.length === 0) return;
+    const params = new URLSearchParams({ userId: usuarioId, status: 'UNANSWERED', limit: 100, fromCache: 'true' });
+    setCarregando(true);
+    fetch(`/api/ml/perguntas?${params}`)
+      .then(r => r.json())
+      .then(data => {
+        setPerguntas(data.perguntas || []);
+        setTotal((data.perguntas || []).length);
+        setBuscou(true);
+      })
+      .catch(() => {})
+      .finally(() => setCarregando(false));
+  }, [usuarioId, contas.length]);
+
   // Auto-scroll na conversa
   useEffect(() => {
     if (conversaRef.current) {

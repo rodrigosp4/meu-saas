@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { TAG_DISPLAY_MAP } from './GerenciadorAnuncios';
 import { useContasML } from '../contexts/ContasMLContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const IMAGE_QUALITY_TAGS = ['poor_quality_thumbnail', 'poor_quality_picture', 'picture_downloading_pending'];
 
@@ -86,6 +87,7 @@ function ImagePreview({ url, label, onValidated }) {
 
 // ===== COMPONENTE PRINCIPAL =====
 export default function OtimizadorImagens({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const { contas: contasMLCtx } = useContasML();
   const [anuncios, setAnuncios] = useState(() => lerCacheOtimizador()?.data || []);
   const [cacheTs, setCacheTs] = useState(() => lerCacheOtimizador()?.ts || null);
@@ -117,6 +119,18 @@ export default function OtimizadorImagens({ usuarioId }) {
   const [sortReverse, setSortReverse] = useState(true);
   const [agrupaPorSku, setAgrupaPorSku] = useState(false);
   const [grupoSelecionado, setGrupoSelecionado] = useState(null); // array de ads quando agrupado
+
+  // Aba ativa
+  const [abaAtiva, setAbaAtiva] = useState('otimizador'); // 'otimizador' | 'troca'
+
+  // Estados da aba Sugestão de Troca (A/B test)
+  const [trocaSku, setTrocaSku] = useState(null);
+  const [aplicandoAlvo, setAplicandoAlvo] = useState(null); // adId sendo aplicado
+  const [alvosAplicados, setAlvosAplicados] = useState(new Set()); // adIds já aplicados na sessão
+  const [trocaImgsPorAlvo, setTrocaImgsPorAlvo] = useState({}); // { adId: string[] }
+  const [skusAplicados, setSkusAplicados] = useState(new Set()); // SKUs removidos da lista
+  const [focusedAlvo, setFocusedAlvo] = useState(null); // adId com foco para paste global
+  const [uploadandoAlvo, setUploadandoAlvo] = useState(null); // adId fazendo upload
 
   const debounceRef = useRef(null);
   const handleFiltroTexto = (val) => {
@@ -225,6 +239,35 @@ export default function OtimizadorImagens({ usuarioId }) {
       semSkuAds: semSku,
     };
   }, [agrupaPorSku, listaFiltrada]);
+
+  // Sugestões de troca: SKUs com pelo menos 1 anúncio com vendas e pelo menos 1 ativo sem vendas
+  const sugestoesTroca = useMemo(() => {
+    if (anuncios.length === 0) return [];
+    const groups = {};
+    anuncios.forEach(ad => {
+      if (!ad.sku) return;
+      if (!groups[ad.sku]) groups[ad.sku] = { sku: ad.sku, ads: [] };
+      groups[ad.sku].ads.push(ad);
+    });
+    const result = [];
+    Object.values(groups).forEach(g => {
+      if (skusAplicados.has(g.sku)) return;
+      const comVendas = g.ads
+        .filter(ad => Number(ad.vendas || 0) > 0)
+        .sort((a, b) => Number(b.vendas || 0) - Number(a.vendas || 0));
+      const semVendas = g.ads.filter(ad => Number(ad.vendas || 0) === 0 && ad.status === 'active' && !ad.dadosML?.catalog_product_id);
+      if (comVendas.length > 0 && semVendas.length > 0) {
+        result.push({
+          sku: g.sku,
+          titulo: comVendas[0].titulo,
+          doador: comVendas[0],
+          targets: semVendas,
+          maxVendas: Number(comVendas[0].vendas || 0),
+        });
+      }
+    });
+    return result.sort((a, b) => b.maxVendas - a.maxVendas);
+  }, [anuncios, skusAplicados]);
 
   const selecionarItem = (ad) => {
     setSelecionado(ad);
@@ -427,8 +470,102 @@ export default function OtimizadorImagens({ usuarioId }) {
     setUrlsValidas({});
   };
 
+  const aplicarImagemAlvo = async (alvo, urls) => {
+    const pics = urls.filter(u => u.trim().startsWith('http')).map(u => ({ source: u.trim() }));
+    if (pics.length === 0) { alert('Adicione pelo menos uma URL de imagem válida.'); return; }
+    setAplicandoAlvo(alvo.id);
+    try {
+      const res = await fetch('/api/ml/acoes-massa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: usuarioId, items: [{ id: alvo.id, contaId: alvo.contaId }], acao: 'atualizar_imagens', valor: pics, modoReplace: 'FIRST' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro desconhecido');
+      setAlvosAplicados(prev => new Set([...prev, alvo.id]));
+    } catch (e) {
+      alert(`Erro: ${e.message}`);
+    } finally {
+      setAplicandoAlvo(null);
+    }
+  };
+
+  const getUrlsAlvo = (adId) => trocaImgsPorAlvo[adId] || [''];
+  const setUrlsAlvo = (adId, urls) => setTrocaImgsPorAlvo(prev => ({ ...prev, [adId]: urls }));
+
+  const urlsDoador = (doador) => doador?.dadosML?.pictures?.length
+    ? doador.dadosML.pictures.map(p => p.secure_url || p.url || p.source).filter(Boolean)
+    : doador?.thumbnail ? [doador.thumbnail] : [];
+
+  const uploadParaImgurAlvo = useCallback(async (adId, file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    setUploadandoAlvo(adId);
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch(`/api/usuario/${usuarioId}/imgur/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.erro || 'Erro no upload');
+      setTrocaImgsPorAlvo(prev => {
+        const urls = prev[adId] || [''];
+        const idx = urls.findIndex(u => !u.trim());
+        if (idx >= 0) { const n = [...urls]; n[idx] = data.url; return { ...prev, [adId]: n }; }
+        if (urls.length < 12) return { ...prev, [adId]: [...urls, data.url] };
+        return prev;
+      });
+    } catch (e) {
+      alert(`Erro ao enviar para o Imgur: ${e.message}`);
+    } finally {
+      setUploadandoAlvo(null);
+    }
+  }, [usuarioId]);
+
+  // Paste global para a aba troca — envia para o card com foco
+  React.useEffect(() => {
+    if (abaAtiva !== 'troca' || !focusedAlvo) return;
+    const onPaste = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const items = Array.from(e.clipboardData?.items || []);
+      const imgItem = items.find(i => i.type.startsWith('image/'));
+      if (imgItem) { e.preventDefault(); uploadParaImgurAlvo(focusedAlvo, imgItem.getAsFile()); }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [abaAtiva, focusedAlvo, uploadParaImgurAlvo]);
+
   return (
     <div className="flex flex-col h-full" style={{ minHeight: 0 }}>
+      {/* Tabs */}
+      <div className="flex items-center gap-0 border-b border-gray-200 bg-white flex-shrink-0 px-4">
+        <button
+          onClick={() => setAbaAtiva('otimizador')}
+          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${abaAtiva === 'otimizador' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          Otimizador de Imagens
+        </button>
+        <button
+          onClick={() => setAbaAtiva('troca')}
+          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${abaAtiva === 'troca' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          Sugestão de Troca de Imagens
+          {sugestoesTroca.length > 0 && (
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${abaAtiva === 'troca' ? 'bg-teal-500 text-white' : 'bg-gray-200 text-gray-600'}`}>
+              {sugestoesTroca.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {abaAtiva === 'otimizador' && <>
       {/* Filtros + Carregar */}
       <div className="flex items-center gap-3 flex-wrap px-4 py-3 bg-white border-b border-gray-200 flex-shrink-0">
         <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Filtros:</span>
@@ -831,13 +968,17 @@ export default function OtimizadorImagens({ usuarioId }) {
 
               {/* Ações */}
               <div className="flex items-center gap-2 pt-2 border-t border-gray-100 flex-shrink-0">
+                {canUseResource('imagens.otimizar') && (
                 <button
                   onClick={ignorarItem}
                   className="px-3 py-2 text-xs font-semibold text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
                 >
                   Ignorar (Ocultar)
                 </button>
+                )}
                 <div className="flex-1" />
+                {canUseResource('imagens.otimizar') && (
+                <>
                 <button
                   onClick={() => aplicarImagens(false)}
                   disabled={enviando || (urlsParaEnviar.length === 0 && imagensRemovidas.size === 0)}
@@ -853,11 +994,245 @@ export default function OtimizadorImagens({ usuarioId }) {
                 >
                   {enviando ? 'Enviando...' : <>Aplicar e Próximo ⚡</>}
                 </button>
+                </>
+                )}
               </div>
             </>
           )}
         </div>
       </div>
+      </>}
+
+      {/* ===== ABA: SUGESTÃO DE TROCA DE IMAGENS ===== */}
+      {abaAtiva === 'troca' && (
+        <div className="flex flex-1 min-h-0">
+          {/* Lista de sugestões */}
+          <div className="flex flex-col flex-shrink-0 border-r border-gray-200" style={{ width: 380 }}>
+            <div className="px-3 py-2 bg-teal-50 border-b border-teal-100 flex-shrink-0">
+              <p className="text-xs font-bold text-teal-700">
+                {sugestoesTroca.length} SKU{sugestoesTroca.length !== 1 ? 's' : ''} com oportunidade de troca
+              </p>
+              <p className="text-[10px] text-teal-600 mt-0.5">
+                SKUs onde há anúncios vendendo bem e outros ativos sem nenhuma venda.
+              </p>
+            </div>
+
+            {anuncios.length === 0 ? (
+              <div className="flex flex-col items-center justify-center flex-1 text-gray-400 text-sm p-6 gap-2 text-center">
+                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <p>Carregue os dados primeiro na aba "Otimizador de Imagens".</p>
+              </div>
+            ) : sugestoesTroca.length === 0 ? (
+              <div className="flex flex-col items-center justify-center flex-1 text-gray-400 text-sm p-6 gap-2 text-center">
+                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p>Nenhuma sugestão encontrada. Todos os SKUs têm padrão de vendas consistente.</p>
+              </div>
+            ) : (
+              <div className="overflow-auto flex-1">
+                {sugestoesTroca.map(s => {
+                  const isSelected = trocaSku?.sku === s.sku;
+                  return (
+                    <div
+                      key={s.sku}
+                      onClick={() => { setTrocaSku(s); setAlvosAplicados(new Set()); setTrocaImgsPorAlvo({}); }}
+                      className={`flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-100 cursor-pointer transition-colors ${isSelected ? 'bg-teal-50 border-l-2 border-l-teal-500' : 'hover:bg-gray-50'}`}
+                    >
+                      <img
+                        src={s.doador.thumbnail || ''}
+                        alt=""
+                        className="w-12 h-12 object-cover rounded border border-gray-200 flex-shrink-0"
+                        onError={e => { e.target.style.display = 'none'; }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-mono font-black text-teal-700 truncate">{s.sku}</p>
+                        <p className="text-xs text-gray-600 truncate leading-tight">{s.titulo}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] font-bold text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
+                            campeão: {s.maxVendas} vendas
+                          </span>
+                          <span className="text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
+                            {s.targets.length} sem venda
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Painel A/B test */}
+          <div className="flex-1 overflow-auto bg-gray-50 p-4 flex flex-col gap-3">
+            {!trocaSku ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-300 gap-3">
+                <svg className="w-14 h-14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+                <p className="text-sm font-medium">Selecione um SKU para montar o teste A/B</p>
+              </div>
+            ) : (
+              <>
+                {/* Referência: campeão */}
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3 flex items-center gap-3 flex-shrink-0">
+                  <div className="flex gap-1 flex-shrink-0">
+                    {urlsDoador(trocaSku.doador).slice(0, 5).map((url, i) => (
+                      <img key={i} src={url} alt="" className="w-12 h-12 object-cover rounded border-2 border-green-300" onError={e => { e.target.style.display = 'none'; }} />
+                    ))}
+                    {urlsDoador(trocaSku.doador).length > 5 && (
+                      <div className="w-12 h-12 rounded border-2 border-green-300 bg-green-100 flex items-center justify-center text-[10px] font-bold text-green-700">
+                        +{urlsDoador(trocaSku.doador).length - 5}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-green-700 bg-green-200 px-2 py-0.5 rounded-full uppercase">Referência — {trocaSku.maxVendas} vendas</span>
+                      <span className="text-[10px] text-gray-400 font-mono">{trocaSku.doador.id}</span>
+                    </div>
+                    <p className="text-xs text-gray-700 truncate mt-0.5">{trocaSku.doador.titulo}</p>
+                    <p className="text-[10px] text-gray-400">{trocaSku.doador.conta?.nickname || trocaSku.doador.contaId}</p>
+                  </div>
+                  {trocaSku.doador.permalink && (
+                    <a href={trocaSku.doador.permalink} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline flex-shrink-0">ML →</a>
+                  )}
+                </div>
+
+                {/* Instrução */}
+                <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex-shrink-0">
+                  <span className="font-bold text-blue-700">Teste A/B:</span> defina imagens <span className="font-bold">diferentes</span> para cada anúncio sem venda. Cole URLs ou use "Copiar do campeão" para começar a partir das fotos de referência e depois personalizar.
+                </div>
+
+                {/* Um card por anúncio-alvo */}
+                {trocaSku.targets.map((ad, idx) => {
+                  const letra = String.fromCharCode(65 + idx); // A, B, C...
+                  const urls = getUrlsAlvo(ad.id);
+                  const aplicado = alvosAplicados.has(ad.id);
+                  const enviando = aplicandoAlvo === ad.id;
+                  const urlsValidas = urls.filter(u => u.trim().startsWith('http'));
+
+                  const isFocused = focusedAlvo === ad.id;
+                  const uploadandoEsteAlvo = uploadandoAlvo === ad.id;
+
+                  return (
+                    <div
+                      key={ad.id}
+                      className={`bg-white rounded-xl border-2 p-3 flex flex-col gap-2.5 transition-colors ${aplicado ? 'border-green-400' : isFocused ? 'border-teal-400' : 'border-gray-200'}`}
+                      onClick={() => !aplicado && setFocusedAlvo(ad.id)}
+                    >
+                      {/* Header do card */}
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0 ${aplicado ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                          {aplicado ? '✓' : letra}
+                        </div>
+                        <img src={ad.thumbnail || ''} alt="" className="w-10 h-10 object-cover rounded border border-gray-200 flex-shrink-0" onError={e => { e.target.style.display = 'none'; }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold text-gray-700 truncate">{ad.titulo}</p>
+                          <p className="text-[10px] text-gray-400 font-mono">{ad.id} · {ad.conta?.nickname || ad.contaId}</p>
+                          {ad.permalink && <a href={ad.permalink} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Abrir no ML →</a>}
+                        </div>
+                        {aplicado && <span className="text-[10px] font-bold text-green-600 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full flex-shrink-0">Aplicado ✓</span>}
+                      </div>
+
+                      {/* Editor de URLs */}
+                      {!aplicado && (
+                        <>
+                          {/* Zona de Imgur (drop / paste / clique) */}
+                          <div
+                            onDrop={e => { e.preventDefault(); Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')).forEach(f => uploadParaImgurAlvo(ad.id, f)); }}
+                            onDragOver={e => e.preventDefault()}
+                            onPaste={e => { const items = Array.from(e.clipboardData?.items || []); const img = items.find(i => i.type.startsWith('image/')); if (img) { e.preventDefault(); uploadParaImgurAlvo(ad.id, img.getAsFile()); } }}
+                            onClick={() => { setFocusedAlvo(ad.id); const el = document.createElement('input'); el.type = 'file'; el.accept = 'image/*'; el.multiple = true; el.onchange = ev => Array.from(ev.target.files).forEach(f => uploadParaImgurAlvo(ad.id, f)); el.click(); }}
+                            className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-lg px-3 py-2 cursor-pointer text-xs transition-colors ${isFocused ? 'border-teal-400 bg-teal-50' : 'border-gray-200 bg-gray-50 hover:border-teal-300 hover:bg-teal-50/40'}`}
+                          >
+                            {uploadandoEsteAlvo
+                              ? <><span className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-teal-500 inline-block flex-shrink-0" /><span className="text-teal-600 font-semibold">Enviando para o Imgur...</span></>
+                              : <><span>🖼️</span><span className="text-gray-500">Clique, arraste ou <kbd className="bg-gray-200 px-1 rounded text-[10px]">Ctrl+V</kbd> para hospedar no Imgur{isFocused ? ' (card ativo)' : ''}</span></>
+                            }
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            {urls.map((url, i) => (
+                              <div key={i} className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-gray-400 w-5 text-center flex-shrink-0">{i + 1}</span>
+                                <input
+                                  type="text"
+                                  value={url}
+                                  onChange={e => {
+                                    const n = [...urls]; n[i] = e.target.value;
+                                    setUrlsAlvo(ad.id, n);
+                                  }}
+                                  placeholder={i === 0 ? 'URL da capa (https://...)' : 'URL adicional...'}
+                                  className="flex-1 text-[10px] px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-teal-400"
+                                />
+                                {urls.length > 1 && (
+                                  <button onClick={() => setUrlsAlvo(ad.id, urls.filter((_, j) => j !== i))} className="w-5 h-5 rounded-full bg-red-100 text-red-500 text-[10px] font-bold hover:bg-red-200 flex items-center justify-center flex-shrink-0">✕</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Prévia das imagens */}
+                          {urlsValidas.length > 0 && (
+                            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                              {urlsValidas.map((url, i) => (
+                                <img key={i} src={url} alt="" className="w-14 h-14 object-cover rounded border border-gray-200 flex-shrink-0" onError={e => { e.target.style.display = 'none'; }} />
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Ações do card */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {urls.length < 12 && (
+                              <button onClick={() => setUrlsAlvo(ad.id, [...urls, ''])} className="text-[10px] text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1 hover:bg-gray-50 transition">
+                                + URL
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setUrlsAlvo(ad.id, [...urlsDoador(trocaSku.doador), ...Array(Math.max(0, urls.length - urlsDoador(trocaSku.doador).length)).fill('')])}
+                              className="text-[10px] text-green-700 hover:text-green-800 border border-green-200 rounded px-2 py-1 hover:bg-green-50 transition"
+                            >
+                              Copiar do campeão
+                            </button>
+                            <div className="flex-1" />
+                            {canUseResource('imagens.otimizar') && (
+                              <button
+                                onClick={() => aplicarImagemAlvo(ad, urls)}
+                                disabled={enviando || urlsValidas.length === 0}
+                                className="px-3 py-1.5 text-xs font-bold text-white rounded-lg disabled:opacity-40 transition flex items-center gap-1.5"
+                                style={{ background: '#0d9488' }}
+                              >
+                                {enviando
+                                  ? <><span className="animate-spin rounded-full h-3 w-3 border-b-2 border-white inline-block" /> Enviando...</>
+                                  : <>Aplicar {urlsValidas.length > 0 ? `(${urlsValidas.length} img)` : ''}</>
+                                }
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Progresso geral */}
+                {trocaSku.targets.length > 1 && (
+                  <div className="text-xs text-gray-500 text-center py-1">
+                    {alvosAplicados.size} de {trocaSku.targets.length} anúncios com imagens aplicadas
+                    {alvosAplicados.size === trocaSku.targets.length && (
+                      <span className="ml-2 font-bold text-green-600">— Teste A/B completo! ✓</span>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

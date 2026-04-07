@@ -1970,7 +1970,6 @@ export default function GerenciadorAnuncios({ usuarioId }) {
 
 const fetchAnuncios = async () => {
     setIsLoading(true);
-    setSelectedIds(new Set());
     try {
       const idsPermitidos = contasML.map(c => c.id).join(',');
       if (!idsPermitidos) return setIsLoading(false);
@@ -1987,6 +1986,7 @@ const fetchAnuncios = async () => {
         precoMax: precoMax, prazo: prazoFilter, descontoMin: descontoMin,
         descontoMax: descontoMax, semSku: semSkuFilter, sortBy: sortBy,
         priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, produtoFull: produtoFullFilter, userId: usuarioId,
+        palavrasExcluir: palavrasExcluir.join(','),
       });
 
       const res = await fetch(`/api/ml/anuncios?${params.toString()}`);
@@ -2010,12 +2010,17 @@ const fetchAnuncios = async () => {
   useEffect(() => {
     if (contasML.length === 0) return; 
     fetchAnuncios();
-  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter, freteGratisFilter, produtoFullFilter]);
+  }, [currentPage, searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, contasML, agrupaPorSku, priceCheckFilter, freteGratisFilter, produtoFullFilter, palavrasExcluir]);
 
   useEffect(() => {
     if (contasML.length === 0) return;
     fetchAvailableTags();
   }, [contaFilter, contasML]);
+
+  // Limpa seleção quando filtros mudam (mas não quando apenas a página muda)
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [searchTerm, searchType, statusFilter, contaFilter, tagFilter, promoFilter, precoMin, precoMax, prazoFilter, descontoMin, descontoMax, semSkuFilter, sortBy, priceCheckFilter, freteGratisFilter, produtoFullFilter, palavrasExcluir]);
 
   // ✅ NOVO: Limpar todos os filtros adicionais de uma vez
   const limparFiltrosAdicionais = () => {
@@ -2044,6 +2049,7 @@ const handleSelectAllFiltered = async () => {
         tag: tagFilter, promo: promoFilter, precoMin, precoMax, prazo: prazoFilter,
         descontoMin, descontoMax, semSku: semSkuFilter,
         priceCheckStatus: priceCheckFilter, freteGratis: freteGratisFilter, produtoFull: produtoFullFilter, userId: usuarioId,
+        palavrasExcluir: palavrasExcluir.join(','),
       });
       const res = await fetch(`/api/ml/anuncios/ids?${params.toString()}`);
       const data = await res.json();
@@ -2603,13 +2609,8 @@ const handleFetchBySku = async () => {
     return Math.round(((precoOriginal - preco) / precoOriginal) * 100);
   };
 
-  // Filtragem client-side por palavras excluídas (price check filter é server-side)
-  const displayedAnuncios = anuncios
-    .filter(ad => {
-      if (palavrasExcluir.length === 0) return true;
-      const titulo = (ad.titulo || '').toLowerCase();
-      return !palavrasExcluir.some(p => titulo.includes(p.toLowerCase()));
-    });
+  // palavrasExcluir agora é filtrado no servidor — displayedAnuncios é apenas um alias
+  const displayedAnuncios = anuncios;
 
   // Agrupamento por SKU: soma visitas e vendas de todos os anúncios (pai + variações) com o mesmo SKU
   const skuGroups = React.useMemo(() => {
@@ -3231,6 +3232,7 @@ const handleFetchBySku = async () => {
                 )}
 
                 {/* Campanhas dropdown */}
+                {canUseResource('gerenciadorML.editarPreco') && (
                 <div className="relative" ref={dropdownCampanhasRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCampanhas(v => !v); }}
@@ -3267,6 +3269,7 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Status dropdown */}
                 {canUseResource('gerenciadorML.pausar') && (
@@ -3293,6 +3296,7 @@ const handleFetchBySku = async () => {
                 )}
 
                 {/* Flex / Turbo dropdown */}
+                {canUseResource('gerenciadorML.pausar') && (
                 <div className="relative" ref={dropdownFlexTurboRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownFlexTurbo(v => !v); }}
@@ -3317,8 +3321,10 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Alterar Produto dropdown */}
+                {canUseResource('gerenciadorML.editarPreco') && (
                 <div className="relative" ref={dropdownAlterarProdutoRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownAlterarProduto(v => !v); }}
@@ -3341,8 +3347,10 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Estoque dropdown */}
+                {canUseResource('gerenciadorML.editarPreco') && (
                 <div className="relative" ref={dropdownEstoqueRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownEstoque(v => !v); }}
@@ -3363,6 +3371,7 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+                )}
 
                 {canUseResource('gerenciadorML.excluir') && (
                 <button
@@ -3374,6 +3383,7 @@ const handleFetchBySku = async () => {
                 )}
 
                 {/* Compatibilidade dropdown */}
+                {canUseResource('compat.editarPerfil') && (
                 <div className="relative" ref={dropdownCompatRef}>
                   <button
                     onClick={() => { if (selectedIds.size === 0) return alert('Selecione ao menos um anúncio.'); setDropdownCompat(v => !v); }}
@@ -3409,6 +3419,7 @@ const handleFetchBySku = async () => {
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
           </div>
@@ -3872,22 +3883,65 @@ const handleFetchBySku = async () => {
         </table>
         
         {/* Paginação */}
-        <div className="flex items-center justify-between p-4 border-t bg-gray-50">
-          <span className="text-sm font-semibold text-gray-600">
-            {agrupaPorSku && skuGroups
-              ? <><span className="text-violet-700">{skuGroups.length} grupo(s) de SKU</span> · {displayedAnuncios.length} anúncio(s)</>
-              : <>Página {currentPage} — {total} anúncio(s)</>
-            }
-            {tagFilter !== 'Todas' && <span className="text-blue-600 ml-2">(filtrado por tag)</span>}
-            {activeAdvancedFiltersCount > 0 && <span className="text-purple-600 ml-2">(+{activeAdvancedFiltersCount} filtro(s) adicional(is))</span>}
-          </span>
-          {!agrupaPorSku && (
-            <div className="flex gap-2">
-              <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={currentPage <= 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>Anterior</button>
-              <button className="px-4 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 disabled:opacity-50 text-sm font-bold text-gray-700" disabled={anuncios.length < itemsPerPage} onClick={() => setCurrentPage(p => p + 1)}>Próxima</button>
+        {(() => {
+          const totalPages = Math.ceil(total / itemsPerPage) || 1;
+          const pageBtn = (label, page, disabled, active = false) => (
+            <button
+              key={label}
+              onClick={() => setCurrentPage(page)}
+              disabled={disabled}
+              className={`min-w-[36px] px-2 py-1.5 border rounded shadow-sm text-sm font-bold transition-colors
+                ${active ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}
+                disabled:opacity-40 disabled:cursor-not-allowed`}
+            >{label}</button>
+          );
+
+          const pages = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pages.push(pageBtn(i, i, false, i === currentPage));
+          } else {
+            pages.push(pageBtn(1, 1, false, currentPage === 1));
+            if (currentPage > 3) pages.push(<span key="e1" className="px-1 text-gray-400 text-sm self-center">…</span>);
+            const start = Math.max(2, currentPage - 1);
+            const end = Math.min(totalPages - 1, currentPage + 1);
+            for (let i = start; i <= end; i++) pages.push(pageBtn(i, i, false, i === currentPage));
+            if (currentPage < totalPages - 2) pages.push(<span key="e2" className="px-1 text-gray-400 text-sm self-center">…</span>);
+            pages.push(pageBtn(totalPages, totalPages, false, currentPage === totalPages));
+          }
+
+          return (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-4 border-t bg-gray-50">
+              <span className="text-sm font-semibold text-gray-600">
+                {agrupaPorSku && skuGroups
+                  ? <><span className="text-violet-700">{skuGroups.length} grupo(s) de SKU</span> · {displayedAnuncios.length} anúncio(s)</>
+                  : <>Página {currentPage} de {totalPages} — {total} anúncio(s)</>
+                }
+                {tagFilter !== 'Todas' && <span className="text-blue-600 ml-2">(filtrado por tag)</span>}
+                {activeAdvancedFiltersCount > 0 && <span className="text-purple-600 ml-2">(+{activeAdvancedFiltersCount} filtro(s) adicional(is))</span>}
+              </span>
+              {!agrupaPorSku && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {pageBtn('«', 1, currentPage <= 1)}
+                  {pageBtn('‹', currentPage - 1, currentPage <= 1)}
+                  {pages}
+                  {pageBtn('›', currentPage + 1, currentPage >= totalPages)}
+                  {pageBtn('»', totalPages, currentPage >= totalPages)}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const v = parseInt(e.target.pg.value, 10);
+                      if (!isNaN(v) && v >= 1 && v <= totalPages) { setCurrentPage(v); e.target.pg.value = ''; }
+                    }}
+                    className="flex items-center gap-1 ml-2"
+                  >
+                    <input name="pg" type="number" min={1} max={totalPages} placeholder="Ir..." className="w-16 px-2 py-1.5 border border-gray-300 rounded text-sm text-center shadow-sm" />
+                    <button type="submit" className="px-2 py-1.5 border border-gray-300 bg-white rounded shadow-sm hover:bg-gray-100 text-sm font-bold text-gray-700">Ir</button>
+                  </form>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
       </div>
     </div>
 

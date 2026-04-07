@@ -18,6 +18,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ModalCompatibilidade, ModalPosicao, getTagBadge } from './GerenciadorAnuncios.jsx';
 import { useContasML } from '../contexts/ContasMLContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const API_BASE = '/api/compat';
 
@@ -905,6 +906,7 @@ function PendentesCompatibilidade({ usuarioId, onAbrirNoEditor }) {
 // COMPONENTE PRINCIPAL
 // =====================================================================
 export default function CompatibilidadeAutopecas({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const { contas: contasMLCtx } = useContasML();
 
   // --- Sub-abas ---
@@ -1712,7 +1714,7 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={S.label}>Salvar Perfil:</span>
           <input type="text" value={nomePerfil} onChange={e => setNomePerfil(e.target.value)} style={{ ...S.input, width: 200 }} placeholder="nome-do-perfil" />
-          <button onClick={handleSalvarPerfil} style={S.btn} disabled={carregando}>💾 Salvar</button>
+          {canUseResource('compat.editarPerfil') && <button onClick={handleSalvarPerfil} style={S.btn} disabled={carregando}>💾 Salvar</button>}
 
           <div style={S.divider} />
 
@@ -1734,8 +1736,8 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
                 {perfis.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
               </select>
               <button onClick={() => handleCarregarPerfil()} style={S.btn} disabled={carregando || !perfilSelecionado}>Carregar</button>
-              <button onClick={handleIniciarRenomear} style={S.btn} disabled={!perfilSelecionado} title="Renomear perfil">✏️</button>
-              <button onClick={handleDeletarPerfil} style={S.btnDanger} disabled={!perfilSelecionado} title="Deletar perfil">✕</button>
+              {canUseResource('compat.editarPerfil') && <button onClick={handleIniciarRenomear} style={S.btn} disabled={!perfilSelecionado} title="Renomear perfil">✏️</button>}
+              {canUseResource('compat.excluirPerfil') && <button onClick={handleDeletarPerfil} style={S.btnDanger} disabled={!perfilSelecionado} title="Deletar perfil">✕</button>}
             </>
           )}
         </div>

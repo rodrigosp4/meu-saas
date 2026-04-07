@@ -19,6 +19,7 @@ import blingAuthRoutes from './routes/bling.auth.routes.js';
 import assinaturaRoutes from './routes/assinatura.routes.js';
 import tabelaMedidasRoutes from './routes/tabela-medidas.routes.js';
 import notificacoesRoutes from './routes/notificacoes.routes.js';
+import chamadosRoutes from './routes/chamados.routes.js';
 import { authMiddleware } from './middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,7 @@ app.use(blingAuthRoutes);
 app.use(assinaturaRoutes);
 app.use(tabelaMedidasRoutes);
 app.use(notificacoesRoutes);
+app.use(chamadosRoutes);
 
 // Serve o frontend buildado em produção
 if (process.env.NODE_ENV === 'production') {

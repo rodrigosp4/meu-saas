@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ModalPreenchimentoRapido } from './CompatibilidadeAutopecas';
 import { useDraftManager, formatarDataDraft } from '../hooks/useDraftManager';
+import { useAuth } from '../contexts/AuthContext';
 
 // Extrai o ID de um anúncio/produto ML a partir de uma URL ou ID direto
 // Retorna { tipo: 'item' | 'produto', id: 'MLB...' | 'MLBU...' , itemId?: 'MLB...' }
@@ -153,7 +154,34 @@ function ComboboxAttr({ attr, idx, atributos, setAtributos, inputStyle }) {
   );
 }
 
+// Busca dimensões do produto via ERP ativo (Tiny ou Bling) usando o endpoint unificado
+async function buscarDimensoesERP(sku, usuarioId, setters) {
+  const { setAltura, setLargura, setComprimento, setPesoG, vazio, alturaAtual, larguraAtual, comprimentoAtual, pesoGAtual } = setters;
+
+  // 1) Busca o produto no DB local pelo SKU para obter o ID do ERP
+  const dbRes = await fetch(`/api/produtos?userId=${usuarioId}&search=${encodeURIComponent(sku)}&limit=5`);
+  const dbJson = await dbRes.json();
+  const produto = (dbJson.produtos || []).find(p => p.sku === sku);
+  const erpId = produto?.dadosTiny?.id;
+  if (!erpId) return;
+
+  // 2) Busca detalhes frescos via endpoint unificado (Tiny e Bling)
+  const detRes = await fetch('/api/tiny-produto-detalhes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: erpId, userId: usuarioId }),
+  });
+  if (!detRes.ok) return;
+  const det = await detRes.json();
+
+  if (vazio(alturaAtual) && det.alturaEmbalagem) setAltura(String(det.alturaEmbalagem));
+  if (vazio(larguraAtual) && det.larguraEmbalagem) setLargura(String(det.larguraEmbalagem));
+  if (vazio(comprimentoAtual) && det.comprimentoEmbalagem) setComprimento(String(det.comprimentoEmbalagem));
+  if (vazio(pesoGAtual) && det.peso_bruto) setPesoG(String(Math.round(Number(det.peso_bruto) * 1000)));
+}
+
 export default function ReplicadorAnuncio({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const [urlAnuncio, setUrlAnuncio] = useState('');
   const [abaAtiva, setAbaAtiva] = useState('geral');
   const [loading, setLoading] = useState(false);
@@ -570,37 +598,10 @@ export default function ReplicadorAnuncio({ usuarioId }) {
 
     setLoadingDimTiny(true);
     try {
-      // 1) Resolve o ID Tiny: usa dadosTiny.id ou busca pelo SKU
-      let idTiny = produto.dadosTiny?.id;
-      if (!idTiny) {
-        const listRes = await fetch('/api/cliente-api/tiny', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: usuarioId, path: '/produtos', queryParams: { codigo: sku, limit: 1 } }),
-        });
-        const listJson = await listRes.json();
-        idTiny = listJson?.data?.itens?.[0]?.id;
-      }
-      if (!idTiny) return;
-
-      // 2) Busca detalhes do produto para obter dimensões
-      const detRes = await fetch('/api/cliente-api/tiny', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: usuarioId, path: `/produtos/${idTiny}` }),
+      await buscarDimensoesERP(sku, usuarioId, {
+        setAltura, setLargura, setComprimento, setPesoG, vazio,
+        alturaAtual: altura, larguraAtual: largura, comprimentoAtual: comprimento, pesoGAtual: pesoG,
       });
-      const detJson = await detRes.json();
-      const dim = detJson?.data?.dimensoes;
-      if (dim) {
-        if (vazio(altura) && dim.altura) setAltura(String(dim.altura));
-        if (vazio(largura) && dim.largura) setLargura(String(dim.largura));
-        if (vazio(comprimento) && dim.comprimento) setComprimento(String(dim.comprimento));
-        if (vazio(pesoG) && (dim.pesoBruto || dim.pesoLiquido)) {
-          // Tiny armazena em kg, ML espera gramas
-          const pesoKg = dim.pesoBruto || dim.pesoLiquido;
-          setPesoG(String(Math.round(pesoKg * 1000)));
-        }
-      }
     } catch {}
     finally { setLoadingDimTiny(false); }
 
@@ -681,32 +682,11 @@ export default function ReplicadorAnuncio({ usuarioId }) {
         setLoadingDimTiny(true);
         (async () => {
           try {
-            let idTiny = null;
-            const listRes = await fetch('/api/cliente-api/tiny', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: usuarioId, path: '/produtos', queryParams: { codigo: skuAnuncio, limit: 1 } }),
+            await buscarDimensoesERP(skuAnuncio, usuarioId, {
+              setAltura, setLargura, setComprimento, setPesoG, vazio,
+              alturaAtual: dims.altura, larguraAtual: dims.largura,
+              comprimentoAtual: dims.comprimento, pesoGAtual: dims.pesoG,
             });
-            const listJson = await listRes.json();
-            idTiny = listJson?.data?.itens?.[0]?.id;
-            if (idTiny) {
-              const detRes = await fetch('/api/cliente-api/tiny', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: usuarioId, path: `/produtos/${idTiny}` }),
-              });
-              const detJson = await detRes.json();
-              const dim = detJson?.data?.dimensoes;
-              if (dim) {
-                if (vazio(dims.altura) && dim.altura) setAltura(String(dim.altura));
-                if (vazio(dims.largura) && dim.largura) setLargura(String(dim.largura));
-                if (vazio(dims.comprimento) && dim.comprimento) setComprimento(String(dim.comprimento));
-                if (vazio(dims.pesoG) && (dim.pesoBruto || dim.pesoLiquido)) {
-                  const pesoKg = dim.pesoBruto || dim.pesoLiquido;
-                  setPesoG(String(Math.round(pesoKg * 1000)));
-                }
-              }
-            }
           } catch {}
           finally { setLoadingDimTiny(false); }
         })();
@@ -1337,18 +1317,22 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                       Salvo: {formatarDataDraft(d.updatedAt)}
                     </div>
                   </div>
+                  {canUseResource('replicador.replicar') && (
                   <button
                     onClick={() => carregarRascunhoReplicar(d)}
                     style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 600, fontSize: '0.79em', cursor: 'pointer' }}
                   >
                     Retomar
                   </button>
+                  )}
+                  {canUseResource('replicador.replicar') && (
                   <button
                     onClick={() => excluirDraft(d.id)}
                     style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: '0.79em', cursor: 'pointer' }}
                   >
                     Excluir
                   </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -1451,7 +1435,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                         {/* Contas que não têm esse anúncio */}
                         <div style={{ padding: '6px 12px 10px 68px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.73em', color: '#b45309', fontWeight: 600, marginRight: '2px' }}>Falta em:</span>
-                          {ad.contasAusentes.map(({ nickname, contaId }) => (
+                          {canUseResource('replicador.replicar') && ad.contasAusentes.map(({ nickname, contaId }) => (
                             <button
                               key={contaId}
                               onClick={() => usarAnuncioRecomendado(ad, contaId)}
@@ -1460,7 +1444,7 @@ export default function ReplicadorAnuncio({ usuarioId }) {
                               {nickname} →
                             </button>
                           ))}
-                          {ad.contasAusentes.length > 1 && (
+                          {canUseResource('replicador.replicar') && ad.contasAusentes.length > 1 && (
                             <button
                               onClick={() => usarAnuncioRecomendado(ad, ad.contasAusentes.map(c => c.contaId))}
                               style={{ padding: '3px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '5px', fontSize: '0.76em', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}

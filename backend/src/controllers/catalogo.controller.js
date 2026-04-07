@@ -62,14 +62,14 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async searchCatalog(req, res) {
     try {
-      const { userId, contaId, q, product_identifier, domain_id, status = 'active', offset = 0, limit = 10 } = req.query;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      const { contaId, q, product_identifier, domain_id, status = 'active', offset = 0, limit = 10 } = req.query;
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
       if (!q && !product_identifier) return res.status(400).json({ erro: 'Informe q ou product_identifier' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
 
       // Descobre o site_id a partir da conta
-      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId: req.userId } });
       const siteId = conta?.siteId || 'MLB';
 
       let url = `${ML_API}/products/search?status=${status}&site_id=${siteId}&offset=${offset}&limit=${limit}`;
@@ -90,11 +90,11 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getProductDetail(req, res) {
     try {
-      const { userId, contaId } = req.query;
+      const { contaId } = req.query;
       const { productId } = req.params;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/products/${productId}`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 15000
       });
@@ -109,11 +109,11 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async checkEligibility(req, res) {
     try {
-      const { userId, contaId } = req.query;
+      const { contaId } = req.query;
       const { itemId } = req.params;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/items/${itemId}/catalog_listing_eligibility`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 15000
       });
@@ -128,10 +128,10 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async checkMultipleEligibility(req, res) {
     try {
-      const { userId, contaId, ids } = req.query;
-      if (!userId || !contaId || !ids) return res.status(400).json({ erro: 'userId, contaId e ids são obrigatórios' });
+      const { contaId, ids } = req.query;
+      if (!contaId || !ids) return res.status(400).json({ erro: 'contaId e ids são obrigatórios' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/multiget/catalog_listing_eligibility?ids=${ids}`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 20000
       });
@@ -155,10 +155,10 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getDominios(req, res) {
     try {
-      const { userId, contaId, tipo = 'catalog_required' } = req.query;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      const { contaId, tipo = 'catalog_required' } = req.query;
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
+      const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId: req.userId } });
       const siteId = conta?.siteId || 'MLB';
 
       // Endpoint público, sem token
@@ -174,11 +174,11 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getCompetition(req, res) {
     try {
-      const { userId, contaId } = req.query;
+      const { contaId } = req.query;
       const { itemId } = req.params;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/items/${itemId}/price_to_win?version=v2`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 15000
       });
@@ -193,11 +193,11 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getProductItems(req, res) {
     try {
-      const { userId, contaId } = req.query;
+      const { contaId } = req.query;
       const { productId } = req.params;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/products/${productId}/items`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 15000
       });
@@ -212,10 +212,10 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getEligibleItemsLocal(req, res) {
     try {
-      const { userId, contaId, tipo = 'eligible' } = req.query;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      const { contaId, tipo = 'eligible' } = req.query;
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token, sellerId } = await getValidToken(contaId, userId);
+      const { token, sellerId } = await getValidToken(contaId, req.userId);
 
       // tipo: 'eligible' = catalog_listing_eligible, 'forewarning' = catalog_forewarning, 'catalog' = já em catálogo
       let tagParam;
@@ -246,14 +246,14 @@ export const catalogoController = {
   async publishDirect(req, res) {
     try {
       const {
-        userId, contaId, catalogProductId, categoryId,
+        contaId, catalogProductId, categoryId,
         price, listingTypeId, quantity, attributes, siteId, sku
       } = req.body;
-      if (!userId || !contaId || !catalogProductId || !price) {
-        return res.status(400).json({ erro: 'userId, contaId, catalogProductId e price são obrigatórios' });
+      if (!contaId || !catalogProductId || !price) {
+        return res.status(400).json({ erro: 'contaId, catalogProductId e price são obrigatórios' });
       }
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
 
       // category_id deve ser um ID numérico (ex: MLB1053), não um domain_id (MLB-AUDIO...).
       let finalCategoryId = categoryId && !categoryId.includes('-') ? categoryId : undefined;
@@ -459,12 +459,12 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async optinItem(req, res) {
     try {
-      const { userId, contaId, itemId, variationId, catalogProductId } = req.body;
-      if (!userId || !contaId || !itemId || !catalogProductId) {
-        return res.status(400).json({ erro: 'userId, contaId, itemId e catalogProductId são obrigatórios' });
+      const { contaId, itemId, variationId, catalogProductId } = req.body;
+      if (!contaId || !itemId || !catalogProductId) {
+        return res.status(400).json({ erro: 'contaId, itemId e catalogProductId são obrigatórios' });
       }
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
 
       const body = { item_id: itemId, catalog_product_id: catalogProductId };
       if (variationId) body.variation_id = variationId;
@@ -518,11 +518,11 @@ export const catalogoController = {
   // ──────────────────────────────────────────────────────────────────
   async getForewarningDate(req, res) {
     try {
-      const { userId, contaId } = req.query;
+      const { contaId } = req.query;
       const { itemId } = req.params;
-      if (!userId || !contaId) return res.status(400).json({ erro: 'userId e contaId são obrigatórios' });
+      if (!contaId) return res.status(400).json({ erro: 'contaId é obrigatório' });
 
-      const { token } = await getValidToken(contaId, userId);
+      const { token } = await getValidToken(contaId, req.userId);
       const resp = await axios.get(`${ML_API}/items/${itemId}/catalog_forewarning/date`, {
         headers: { Authorization: `Bearer ${token}` }, timeout: 10000
       });

@@ -62,6 +62,8 @@ export default function Configuracoes({ usuarioId }) {
   const [subRole, setSubRole] = useState('OPERATOR');
   const [subPermissoesCustom, setSubPermissoesCustom] = useState([]);
   const [salvandoSub, setSalvandoSub] = useState(false);
+  const [confirmandoOperador, setConfirmandoOperador] = useState(false);
+  const [precoOperadorMensal, setPrecoOperadorMensal] = useState(50);
 
   // ===== REGRA POR CONTA =====
   const [regrasPorContaMap, setRegrasPorContaMap] = useState({}); // { contaId: regraId }
@@ -551,6 +553,46 @@ export default function Configuracoes({ usuarioId }) {
     if (role === 'OWNER') {
       carregarSubUsuarios();
       carregarStatusSuporte();
+      fetch('/api/assinatura/status')
+        .then(r => r.json())
+        .then(d => { if (d.precoOperador != null) setPrecoOperadorMensal(d.precoOperador); })
+        .catch(() => {});
+
+      // Verifica retorno do MercadoPago após pagamento de operador
+      const params = new URLSearchParams(window.location.search);
+      const statusOp = params.get('operador');
+      const paymentId = params.get('payment_id');
+      if (statusOp === 'success' && paymentId) {
+        window.history.replaceState({}, '', window.location.pathname);
+        fetch('/api/sub-usuarios/verificar-pagamento-operador', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paymentId }),
+        })
+          .then(r => r.json())
+          .then(d => {
+            if (d.ativo && d.sub) {
+              setSubUsuarios(prev => {
+                const existe = prev.find(s => s.id === d.sub.id);
+                if (existe) return prev.map(s => s.id === d.sub.id ? d.sub : s);
+                return [...prev, d.sub];
+              });
+              alert(`Usuário operador "${d.sub.email}" criado e ativado com sucesso!`);
+            } else {
+              alert('Pagamento ainda não confirmado. O usuário será ativado automaticamente quando o pagamento for processado.');
+            }
+          })
+          .catch(() => {});
+      } else if (statusOp === 'failure') {
+        window.history.replaceState({}, '', window.location.pathname);
+        alert('Pagamento não aprovado. O usuário operador não foi ativado.');
+        // Recarrega para refletir usuários pendentes
+        carregarSubUsuarios();
+      } else if (statusOp === 'pending') {
+        window.history.replaceState({}, '', window.location.pathname);
+        alert('Pagamento em processamento. O usuário operador será ativado automaticamente quando confirmado.');
+        carregarSubUsuarios();
+      }
     }
   }, [role]);
 
@@ -565,10 +607,41 @@ export default function Configuracoes({ usuarioId }) {
     setModalSubUser(sub);
   };
 
-  const fecharModal = () => setModalSubUser(null);
+  const fecharModal = () => { setModalSubUser(null); setConfirmandoOperador(false); };
+
+  const iniciarSalvarSubUsuario = () => {
+    // Criando operador: exige confirmação antes de redirecionar para pagamento
+    if (modalSubUser === 'criar' && subRole === 'OPERATOR') {
+      setConfirmandoOperador(true);
+      return;
+    }
+    salvarSubUsuario();
+  };
+
+  const pagarECriarOperador = async () => {
+    setSalvandoSub(true);
+    try {
+      const res = await fetch('/api/sub-usuarios/iniciar-pagamento-operador', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: subEmail,
+          password: subSenha,
+          permissoesCustom: subPermissoesCustom.length > 0 ? subPermissoesCustom : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.erro); setSalvandoSub(false); return; }
+      window.location.href = data.initPoint;
+    } catch (err) {
+      alert('Erro ao iniciar pagamento. Tente novamente.');
+      setSalvandoSub(false);
+    }
+  };
 
   const salvarSubUsuario = async () => {
     setSalvandoSub(true);
+    setConfirmandoOperador(false);
     try {
       if (modalSubUser === 'criar') {
         const res = await fetch('/api/sub-usuarios', {
@@ -1530,7 +1603,10 @@ export default function Configuracoes({ usuarioId }) {
                       {sub.role === 'OPERATOR' ? 'Operador' : 'Visualizador'}
                     </span>
                     <span className="text-sm font-medium" style={{ color: c.headingSub }}>{sub.email}</span>
-                    {!sub.ativo && (
+                    {!sub.ativo && sub.role === 'OPERATOR' && (
+                      <span style={{ fontSize: '0.7em', color: '#e67e22', fontWeight: 700, padding: '2px 6px', backgroundColor: '#fef9ec', borderRadius: '4px', border: '1px solid #f39c1240' }}>Aguardando pagamento</span>
+                    )}
+                    {!sub.ativo && sub.role !== 'OPERATOR' && (
                       <span style={{ fontSize: '0.7em', color: '#c0392b', fontWeight: 700 }}>INATIVO</span>
                     )}
                   </div>
@@ -1657,23 +1733,64 @@ export default function Configuracoes({ usuarioId }) {
             </select>
           </div>
 
-          <div className="flex justify-end gap-3">
-            <button
-              onClick={fecharModal}
-              className="px-4 py-2 text-sm font-bold rounded"
-              style={{ color: c.muted, border: `1px solid ${c.border}` }}
-            >
-              Cancelar
-            </button>
-            <button
-              onClick={salvarSubUsuario}
-              disabled={salvandoSub}
-              className="px-5 py-2 text-white text-sm font-bold rounded disabled:opacity-60"
-              style={{ backgroundColor: c.orange }}
-            >
-              {salvandoSub ? 'Salvando...' : 'Salvar'}
-            </button>
-          </div>
+          {/* Tela de confirmação de cobrança para novo Operador */}
+          {confirmandoOperador ? (
+            <div style={{ marginTop: '4px' }}>
+              <div style={{ padding: '16px', backgroundColor: '#fff8e1', border: '1px solid #ffe082', borderRadius: '8px', marginBottom: '16px' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.95em', color: '#795548', marginBottom: '8px' }}>
+                  Pagamento necessário para criar Operador
+                </div>
+                <p style={{ fontSize: '0.87em', color: '#5d4037', lineHeight: 1.5, margin: 0 }}>
+                  O usuário <strong>{subEmail}</strong> será criado com perfil <strong>Operador</strong> após a confirmação do pagamento.
+                </p>
+                <div style={{ marginTop: '12px', padding: '10px 14px', backgroundColor: '#fff3e0', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '0.85em', color: '#5d4037' }}>Cobrança mensal por este operador</span>
+                  <strong style={{ fontSize: '1.1em', color: '#e65100' }}>
+                    R$ {precoOperadorMensal.toFixed(2).replace('.', ',')}
+                  </strong>
+                </div>
+                <p style={{ fontSize: '0.78em', color: '#a0826d', marginTop: '8px', marginBottom: 0 }}>
+                  Você será redirecionado ao MercadoPago. O usuário é ativado automaticamente após o pagamento.
+                </p>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setConfirmandoOperador(false)}
+                  disabled={salvandoSub}
+                  className="px-4 py-2 text-sm font-bold rounded"
+                  style={{ color: c.muted, border: `1px solid ${c.border}` }}
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={pagarECriarOperador}
+                  disabled={salvandoSub}
+                  className="px-5 py-2 text-white text-sm font-bold rounded disabled:opacity-60"
+                  style={{ backgroundColor: '#27ae60' }}
+                >
+                  {salvandoSub ? 'Aguarde...' : `Pagar R$ ${precoOperadorMensal.toFixed(2).replace('.', ',')} com MercadoPago →`}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={fecharModal}
+                className="px-4 py-2 text-sm font-bold rounded"
+                style={{ color: c.muted, border: `1px solid ${c.border}` }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={iniciarSalvarSubUsuario}
+                disabled={salvandoSub}
+                className="px-5 py-2 text-white text-sm font-bold rounded disabled:opacity-60"
+                style={{ backgroundColor: c.orange }}
+              >
+                {salvandoSub ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     )}

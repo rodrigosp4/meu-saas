@@ -17,10 +17,17 @@ async function getMPClient() {
   return new MercadoPagoConfig({ accessToken: config.mpAccessToken });
 }
 
-function calcularValor(precoMensal, planoKey) {
+function calcularValor(precoMensal, planoKey, precoOperador = 0, numOperadores = 0) {
   const plano = PLANOS[planoKey];
   if (!plano) throw new Error('Plano inválido');
-  return parseFloat((precoMensal * plano.meses * (1 - plano.desconto)).toFixed(2));
+  const precoBase = precoMensal + precoOperador * numOperadores;
+  return parseFloat((precoBase * plano.meses * (1 - plano.desconto)).toFixed(2));
+}
+
+async function contarOperadores(userId) {
+  return prisma.user.count({
+    where: { parentUserId: userId, role: 'OPERATOR', ativo: true },
+  });
 }
 
 // Resolve o userId "pai" (OWNER) para verificação de assinatura
@@ -35,6 +42,32 @@ async function resolverUserPai(userId) {
     });
   }
   return { id: userId, acessoLivre: user.acessoLivre, role: user.role };
+}
+
+// Valida um cupom e retorna os dados ou lança erro
+async function validarCupom(codigo, userId) {
+  const cupom = await prisma.cupom.findUnique({ where: { codigo: codigo.toUpperCase() } });
+  if (!cupom) throw new Error('Cupom não encontrado.');
+  if (!cupom.ativo) throw new Error('Este cupom não está mais ativo.');
+  if (cupom.expiraEm && new Date(cupom.expiraEm) < new Date()) throw new Error('Este cupom está expirado.');
+  if (cupom.usoMaximo !== null && cupom.usoAtual >= cupom.usoMaximo) throw new Error('Este cupom atingiu o limite de usos.');
+
+  const jaUsou = await prisma.cupomResgate.findUnique({ where: { cupomId_userId: { cupomId: cupom.id, userId } } });
+  if (jaUsou) throw new Error('Você já utilizou este cupom.');
+
+  return cupom;
+}
+
+// Aplica desconto do cupom sobre o valor base
+function aplicarDesconto(valorBase, cupom) {
+  if (cupom.tipo === 'percentual') {
+    return parseFloat((valorBase * (1 - cupom.valor / 100)).toFixed(2));
+  }
+  if (cupom.tipo === 'fixo') {
+    return Math.max(0, parseFloat((valorBase - cupom.valor).toFixed(2)));
+  }
+  // dias_gratis: sem cobrança
+  return 0;
 }
 
 // GET /api/assinatura/planos  (público — sem auth, usado na landing page)
@@ -63,6 +96,7 @@ router.get('/api/assinatura/planos', async (req, res) => {
     });
   }
 });
+
 
 // GET /api/assinatura/status
 router.get('/api/assinatura/status', async (req, res) => {
@@ -94,7 +128,13 @@ router.get('/api/assinatura/status', async (req, res) => {
     });
 
     if (assinatura) {
-      return res.json({ ativo: true, motivo: 'assinatura', assinatura });
+      const configAtiva = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+      return res.json({
+        ativo: true,
+        motivo: 'assinatura',
+        assinatura,
+        precoOperador: configAtiva?.precoOperador ?? 50,
+      });
     }
 
     // Última assinatura (pendente ou expirada)
@@ -106,24 +146,72 @@ router.get('/api/assinatura/status', async (req, res) => {
     // Busca config para mostrar preços
     const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
     const precoMensal = config?.precoMensal ?? 299;
+    const precoOperador = config?.precoOperador ?? 50;
+    const numOperadores = await contarOperadores(userPai.id);
     const planos = Object.entries(PLANOS).map(([key, p]) => ({
       key,
       label: p.label,
       dias: p.dias,
       desconto: p.desconto,
-      valor: calcularValor(precoMensal, key),
+      valor: calcularValor(precoMensal, key, precoOperador, numOperadores),
     }));
 
-    return res.json({ ativo: false, motivo: 'sem_assinatura', assinatura: ultimaAssinatura, planos, mpPublicKey: config?.mpPublicKey || null });
+    return res.json({
+      ativo: false,
+      motivo: 'sem_assinatura',
+      assinatura: ultimaAssinatura,
+      planos,
+      mpPublicKey: config?.mpPublicKey || null,
+      numOperadores,
+      precoOperador,
+    });
   } catch (err) {
     res.status(500).json({ erro: err.message });
+  }
+});
+
+// POST /api/assinatura/validar-cupom
+router.post('/api/assinatura/validar-cupom', async (req, res) => {
+  try {
+    const { codigo, planoKey } = req.body;
+    if (!codigo) return res.status(400).json({ erro: 'Código do cupom é obrigatório.' });
+    if (!PLANOS[planoKey]) return res.status(400).json({ erro: 'Plano inválido.' });
+
+    const userId = req.userId;
+    const userPai = await resolverUserPai(userId);
+    if (!userPai) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
+    const cupom = await validarCupom(codigo, userPai.id);
+
+    const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+    const precoMensal = config?.precoMensal ?? 299;
+    const precoOperador = config?.precoOperador ?? 50;
+    const numOperadores = await contarOperadores(userPai.id);
+    const valorBase = calcularValor(precoMensal, planoKey, precoOperador, numOperadores);
+    const valorFinal = aplicarDesconto(valorBase, cupom);
+
+    return res.json({
+      valido: true,
+      cupom: {
+        id: cupom.id,
+        codigo: cupom.codigo,
+        tipo: cupom.tipo,
+        valor: cupom.valor,
+        descricao: cupom.descricao,
+      },
+      valorBase,
+      valorFinal,
+      diasGratis: cupom.tipo === 'dias_gratis' ? cupom.valor : null,
+    });
+  } catch (err) {
+    return res.status(400).json({ erro: err.message });
   }
 });
 
 // POST /api/assinatura/criar-preferencia
 router.post('/api/assinatura/criar-preferencia', async (req, res) => {
   try {
-    const { planoKey } = req.body;
+    const { planoKey, cupomCodigo } = req.body;
     if (!PLANOS[planoKey]) return res.status(400).json({ erro: 'Plano inválido.' });
 
     const userId = req.userId;
@@ -132,8 +220,46 @@ router.post('/api/assinatura/criar-preferencia', async (req, res) => {
 
     const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
     const precoMensal = config?.precoMensal ?? 299;
-    const valor = calcularValor(precoMensal, planoKey);
+    const precoOperador = config?.precoOperador ?? 50;
+    const numOperadores = await contarOperadores(userPai.id);
+    let valor = calcularValor(precoMensal, planoKey, precoOperador, numOperadores);
     const plano = PLANOS[planoKey];
+
+    let cupom = null;
+    if (cupomCodigo) {
+      cupom = await validarCupom(cupomCodigo, userPai.id);
+      valor = aplicarDesconto(valor, cupom);
+    }
+
+    // Cupom de dias grátis: libera acesso sem pagamento
+    if (cupom && cupom.tipo === 'dias_gratis') {
+      const agora = new Date();
+      const expiraEm = new Date(agora.getTime() + cupom.valor * 24 * 60 * 60 * 1000);
+
+      const assinatura = await prisma.assinatura.create({
+        data: {
+          userId: userPai.id,
+          plano: planoKey,
+          valor: 0,
+          status: 'approved',
+          iniciaEm: agora,
+          expiraEm,
+          cupomId: cupom.id,
+        },
+      });
+
+      await prisma.$transaction([
+        prisma.cupomResgate.create({
+          data: { cupomId: cupom.id, userId: userPai.id, assinaturaId: assinatura.id },
+        }),
+        prisma.cupom.update({
+          where: { id: cupom.id },
+          data: { usoAtual: { increment: 1 } },
+        }),
+      ]);
+
+      return res.json({ gratis: true, assinaturaId: assinatura.id });
+    }
 
     const mpClient = await getMPClient();
     const preference = new Preference(mpClient);
@@ -155,7 +281,7 @@ router.post('/api/assinatura/criar-preferencia', async (req, res) => {
         },
         auto_return: 'approved',
         notification_url: `${process.env.BACKEND_URL || frontendUrl}/api/assinatura/webhook`,
-        external_reference: `${userPai.id}:${planoKey}`,
+        external_reference: `${userPai.id}:${planoKey}${cupom ? `:${cupom.id}` : ''}`,
         expires: false,
       },
     });
@@ -168,6 +294,7 @@ router.post('/api/assinatura/criar-preferencia', async (req, res) => {
         valor,
         status: 'pending',
         mpPreferenceId: result.id,
+        cupomId: cupom?.id || null,
       },
     });
 
@@ -197,7 +324,26 @@ router.post('/api/assinatura/webhook', async (req, res) => {
 
     if (!payment?.external_reference) return res.sendStatus(200);
 
-    const [userId, planoKey] = payment.external_reference.split(':');
+    // Pagamento de operador: "op:parentId:subId"
+    if (payment.external_reference.startsWith('op:')) {
+      if (payment.status === 'approved') {
+        const parts = payment.external_reference.split(':');
+        const subId = parts[2];
+        if (subId) {
+          await prisma.user.updateMany({
+            where: { id: subId, ativo: false },
+            data: { ativo: true },
+          });
+        }
+      }
+      return res.sendStatus(200);
+    }
+
+    // external_reference pode ser "userId:planoKey" ou "userId:planoKey:cupomId"
+    const parts = payment.external_reference.split(':');
+    const userId = parts[0];
+    const planoKey = parts[1];
+    const cupomId = parts[2] || null;
     if (!userId || !planoKey) return res.sendStatus(200);
 
     const status = payment.status; // 'approved', 'pending', 'rejected', etc.
@@ -208,7 +354,7 @@ router.post('/api/assinatura/webhook', async (req, res) => {
       const expiraEm = new Date(agora.getTime() + plano.dias * 24 * 60 * 60 * 1000);
 
       // Atualiza ou cria a assinatura como aprovada
-      await prisma.assinatura.updateMany({
+      const updated = await prisma.assinatura.updateMany({
         where: { userId, mpPreferenceId: payment.preference_id },
         data: {
           status: 'approved',
@@ -224,18 +370,42 @@ router.post('/api/assinatura/webhook', async (req, res) => {
       });
       if (!existente) {
         const config2 = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+        const numOps2 = await contarOperadores(userId);
         await prisma.assinatura.create({
           data: {
             userId,
             plano: planoKey,
-            valor: calcularValor(config2?.precoMensal ?? 299, planoKey),
+            valor: calcularValor(config2?.precoMensal ?? 299, planoKey, config2?.precoOperador ?? 50, numOps2),
             status: 'approved',
             mpPaymentId: String(payment.id),
             mpPreferenceId: payment.preference_id,
             iniciaEm: agora,
             expiraEm,
+            cupomId: cupomId || null,
           },
         });
+      }
+
+      // Registra resgate do cupom (se houver) — ignora duplicata silenciosamente
+      if (cupomId) {
+        try {
+          const assinaturaAprovada = await prisma.assinatura.findFirst({
+            where: { userId, mpPaymentId: String(payment.id) },
+          });
+          await prisma.$transaction([
+            prisma.cupomResgate.upsert({
+              where: { cupomId_userId: { cupomId, userId } },
+              create: { cupomId, userId, assinaturaId: assinaturaAprovada?.id },
+              update: {},
+            }),
+            prisma.cupom.update({
+              where: { id: cupomId },
+              data: { usoAtual: { increment: updated.count > 0 ? 1 : 0 } },
+            }),
+          ]);
+        } catch {
+          // não bloqueia o webhook por isso
+        }
       }
     } else if (['cancelled', 'rejected', 'refunded', 'charged_back'].includes(status)) {
       await prisma.assinatura.updateMany({
@@ -278,7 +448,9 @@ router.post('/api/assinatura/verificar-pagamento', async (req, res) => {
     const payment = await paymentAPI.get({ id: String(paymentId) });
 
     if (payment?.status === 'approved' && payment.external_reference) {
-      const [pUserId, planoKey] = payment.external_reference.split(':');
+      const parts = payment.external_reference.split(':');
+      const pUserId = parts[0];
+      const planoKey = parts[1];
       if (pUserId === userPai.id) {
         const plano = PLANOS[planoKey];
         const agora = new Date();

@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "ConfigAssinatura" ADD COLUMN "precoOperador" DOUBLE PRECISION NOT NULL DEFAULT 50.00;

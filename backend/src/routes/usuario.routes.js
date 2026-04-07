@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
+import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import prisma from '../config/prisma.js';
 
 const router = Router();
@@ -581,6 +582,104 @@ router.post('/api/sub-usuarios', async (req, res) => {
     res.status(201).json(sub);
   } catch (error) {
     res.status(500).json({ erro: error.message });
+  }
+});
+
+// Iniciar pagamento imediato para criar sub-usuário Operador
+router.post('/api/sub-usuarios/iniciar-pagamento-operador', async (req, res) => {
+  try {
+    if (req.userRole !== 'OWNER') {
+      return res.status(403).json({ erro: 'Apenas o dono da conta pode criar sub-usuários.' });
+    }
+    const { email, password, permissoesCustom } = req.body;
+    if (!email || !password || password.length < 6) {
+      return res.status(400).json({ erro: 'E-mail e senha (mínimo 6 caracteres) são obrigatórios.' });
+    }
+
+    const exists = await prisma.user.findUnique({ where: { email } });
+    if (exists) return res.status(409).json({ erro: 'E-mail já cadastrado.' });
+
+    const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+    if (!config?.mpAccessToken) return res.status(400).json({ erro: 'MercadoPago não configurado. Configure o Access Token no painel admin.' });
+
+    const precoOperador = config.precoOperador ?? 50;
+
+    // Cria o sub-usuário com ativo: false (pendente de pagamento)
+    const hash = await bcrypt.hash(password, 10);
+    const sub = await prisma.user.create({
+      data: {
+        email,
+        senha: hash,
+        role: 'OPERATOR',
+        parentUserId: req.userId,
+        ativo: false,
+        permissoesCustom: permissoesCustom || null,
+      },
+      select: { id: true, email: true, role: true, ativo: true },
+    });
+
+    const mpClient = new MercadoPagoConfig({ accessToken: config.mpAccessToken });
+    const preference = new Preference(mpClient);
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    const result = await preference.create({
+      body: {
+        items: [{
+          title: `Usuário Operador — ${email}`,
+          quantity: 1,
+          unit_price: precoOperador,
+          currency_id: 'BRL',
+        }],
+        back_urls: {
+          success: `${frontendUrl}/?operador=success`,
+          failure: `${frontendUrl}/?operador=failure`,
+          pending: `${frontendUrl}/?operador=pending`,
+        },
+        auto_return: 'approved',
+        notification_url: `${process.env.BACKEND_URL || frontendUrl}/api/assinatura/webhook`,
+        external_reference: `op:${req.userId}:${sub.id}`,
+        expires: false,
+      },
+    });
+
+    res.json({ initPoint: result.init_point, subId: sub.id });
+  } catch (err) {
+    console.error('[sub-usuarios] erro iniciar-pagamento-operador:', err);
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// Verificar pagamento do operador após retorno do MercadoPago
+router.post('/api/sub-usuarios/verificar-pagamento-operador', async (req, res) => {
+  try {
+    if (req.userRole !== 'OWNER') {
+      return res.status(403).json({ erro: 'Acesso negado.' });
+    }
+    const { paymentId } = req.body;
+    if (!paymentId) return res.status(400).json({ erro: 'paymentId obrigatório.' });
+
+    const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
+    if (!config?.mpAccessToken) return res.status(400).json({ erro: 'MercadoPago não configurado.' });
+
+    const mpClient = new MercadoPagoConfig({ accessToken: config.mpAccessToken });
+    const paymentAPI = new Payment(mpClient);
+    const payment = await paymentAPI.get({ id: String(paymentId) });
+
+    if (payment?.status === 'approved' && payment.external_reference?.startsWith('op:')) {
+      const parts = payment.external_reference.split(':');
+      const subId = parts[2];
+
+      const sub = await prisma.user.update({
+        where: { id: subId, parentUserId: req.userId },
+        data: { ativo: true },
+        select: { id: true, email: true, role: true, ativo: true, permissoesCustom: true, createdAt: true },
+      });
+      return res.json({ ativo: true, sub });
+    }
+
+    res.json({ ativo: false });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
   }
 });
 

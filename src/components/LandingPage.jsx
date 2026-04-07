@@ -12,78 +12,141 @@ function useIsMobile(breakpoint = 640) {
 }
 
 // ── Dados ──────────────────────────────────────────────────────────────────
+const INTEGRACOES = [
+  {
+    nome: 'olist tiny',
+    bgColor: '#0518FF',
+    textColor: '#fff',
+    tipo: 'ERP',
+    desc: 'Sincronização de produtos, estoque e preços',
+  },
+  {
+    nome: 'bling',
+    bgColor: '#3AAA4A',
+    textColor: '#fff',
+    tipo: 'ERP',
+    desc: 'Integração completa com o ERP Bling',
+  },
+  {
+    nome: 'Mercado Livre',
+    bgColor: '#FFE600',
+    textColor: '#1a1a4e',
+    tipo: 'Marketplace',
+    desc: 'Gestão completa de anúncios e vendas',
+  },
+];
+
 const FEATURES = [
   {
-    icon: '📋',
-    title: 'Gerenciador de Anúncios',
-    desc: 'Visualize, edite e gerencie todos os seus anúncios do Mercado Livre em um só lugar. Filtros avançados e ações em massa.',
-    color: '#3498db',
+    icon: '✨',
+    title: 'Criação de Anúncios Inteligente',
+    desc: 'Crie anúncios completos com: remoção de fundo via Remove.bg com 1 clique, sugestão automática de categoria, preenchimento de ficha técnica por IA, envio de compatibilidade e posição de autopeças já na criação.',
+    color: '#F5C518',
+    badge: 'DESTAQUE',
   },
   {
-    icon: '🔁',
-    title: 'Replicador de Anúncios',
-    desc: 'Replique anúncios entre contas com um clique. Economize horas de trabalho manual mantendo consistência total.',
-    color: '#9b59b6',
-  },
-  {
-    icon: '🏷️',
-    title: 'Central de Promoções',
-    desc: 'Crie e gerencie promoções, descontos e ofertas relâmpago para aumentar suas vendas nos momentos certos.',
+    icon: '💰',
+    title: 'Regra de Preço Avançada',
+    desc: 'Crie sua estratégia de preço do jeito que quiser: infle o preço para margem de publicidade, reduza automaticamente para fugir do frete grátis (R$ 78,99), envie preço de atacado B2B automaticamente na criação ou edição.',
     color: '#e67e22',
   },
   {
-    icon: '🕵️',
-    title: 'Monitor de Concorrentes',
-    desc: 'Acompanhe os preços dos seus concorrentes em tempo real e tome decisões estratégicas com dados precisos.',
-    color: '#e74c3c',
-  },
-  {
-    icon: '💬',
-    title: 'Perguntas Pré-Venda',
-    desc: 'Responda perguntas de compradores automaticamente com inteligência artificial. Nunca perca uma venda por falta de resposta.',
-    color: '#1abc9c',
-  },
-  {
-    icon: '📦',
-    title: 'Catálogo ML',
-    desc: 'Gerencie sua participação no catálogo do Mercado Livre, analise oportunidades e otimize suas posições.',
-    color: '#f39c12',
-  },
-  {
-    icon: '✅',
-    title: 'Qualidade de Publicações',
-    desc: 'Identifique e corrija problemas nos seus anúncios automaticamente. Melhore seu ranking e visibilidade.',
+    icon: '🏪',
+    title: 'Publicação Multi-conta Simultânea',
+    desc: 'Crie o anúncio simultaneamente em todas as suas contas ML — Clássico + Premium, com preço correto para cada conta. O sistema ativa as promoções automaticamente dentro da margem adicional que você definiu.',
     color: '#27ae60',
-  },
-  {
-    icon: '🖼️',
-    title: 'Otimizador de Imagens',
-    desc: 'Otimize as imagens dos seus anúncios para melhor desempenho. Redimensionamento e melhoria automática.',
-    color: '#2980b9',
-  },
-  {
-    icon: '🚗',
-    title: 'Compatibilidade Autopeças',
-    desc: 'Gerencie tabelas de compatibilidade para peças automotivas de forma rápida e precisa.',
-    color: '#8e44ad',
-  },
-  {
-    icon: '📬',
-    title: 'Pós-Venda',
-    desc: 'Gerencie reclamações, avaliações e atendimento pós-venda para manter sua reputação impecável.',
-    color: '#16a085',
-  },
-  {
-    icon: '📏',
-    title: 'Dimensões de Embalagem',
-    desc: 'Cadastre e gerencie dimensões de embalagem em massa para reduzir custos de frete.',
-    color: '#d35400',
+    badge: 'EXCLUSIVO',
   },
   {
     icon: '🚀',
     title: 'Cadastramento em Massa',
-    desc: 'Publique centenas de anúncios de uma vez através de planilhas. Agilize seu processo de catalogação.',
+    desc: 'Crie milhares de anúncios em um dia via planilha. Importe seus produtos do ERP e publique em lote no Mercado Livre com todas as configurações aplicadas automaticamente.',
     color: '#c0392b',
+  },
+  {
+    icon: '📋',
+    title: 'Edição em Massa de Anúncios',
+    desc: 'Corrija preço, estoque, descrição, SKU de centenas de anúncios de uma vez. Ative ou exclua campanhas em lote, altere tipo de anúncio e muito mais — tudo em poucos cliques.',
+    color: '#3498db',
+  },
+  {
+    icon: '🚗',
+    title: 'Compatibilidade Autopeças Avançada',
+    desc: 'A tela de compatibilidade mais avançada do mercado. Cadastre seus perfis de compatibilidade previamente e depois apenas selecione os anúncios e envie com 1 clique. Suporte completo a posição de montagem.',
+    color: '#8e44ad',
+    badge: 'MAIS AVANÇADO',
+  },
+  {
+    icon: '🏷️',
+    title: 'Central de Promoções',
+    desc: 'Ative ou remova campanhas de promoção de forma automática ou manual. O sistema monitora seus anúncios e ativa as promoções dentro da margem que você configurou, sem nenhum esforço.',
+    color: '#e74c3c',
+  },
+  {
+    icon: '🕵️',
+    title: 'Monitor de Concorrentes',
+    desc: 'Monitore os preços dos seus concorrentes em tempo real. Crie grupos de monitoramento, adicione lojas concorrentes e receba alertas quando os preços mudarem para tomar decisões estratégicas.',
+    color: '#e67e22',
+  },
+  {
+    icon: '💬',
+    title: 'Perguntas Pré-Venda',
+    desc: 'Responda perguntas de compradores automaticamente com inteligência artificial. Configure respostas personalizadas e nunca perca uma venda por demora no atendimento.',
+    color: '#1abc9c',
+  },
+  {
+    icon: '📬',
+    title: 'Mensagens Pós-Venda',
+    desc: 'Automatize o envio de mensagens após a venda: agradecimento, instruções de uso, pedido de avaliação. Mantenha sua reputação alta e fidelize clientes com comunicação profissional.',
+    color: '#16a085',
+  },
+  {
+    icon: '📦',
+    title: 'Gerenciador de Catálogo ML',
+    desc: 'Entre em todos os anúncios possíveis de catálogo disponíveis no Mercado Livre. Gerencie sua participação no catálogo, faça opt-in em produtos estratégicos e otimize suas posições.',
+    color: '#f39c12',
+  },
+  {
+    icon: '🔁',
+    title: 'Replicador de Anúncios',
+    desc: 'Replique anúncios entre contas com um clique. Salve rascunhos, gerencie variações e mantenha consistência total entre suas lojas sem trabalho manual.',
+    color: '#9b59b6',
+  },
+  {
+    icon: '✅',
+    title: 'Qualidade da Publicação',
+    desc: 'Melhore seus anúncios com a ajuda de IA. O sistema identifica problemas, sugere melhorias de título, descrição e imagens, e usa prompts inteligentes para elevar o score de qualidade.',
+    color: '#27ae60',
+  },
+  {
+    icon: '📏',
+    title: 'Tabela de Medidas',
+    desc: 'Para vendedores de vestuário: cadastre tabelas de medidas completas (P, M, G, GG, etc.) e associe a seus anúncios. Reduza trocas e reclamações com informações precisas para o comprador.',
+    color: '#d35400',
+  },
+  {
+    icon: '📐',
+    title: 'Dimensões do Pacote',
+    desc: 'Envie as dimensões e peso corretos do pacote para seus anúncios em massa. Garanta que o cálculo de frete seja preciso e evite cobranças extras por divergência de medidas.',
+    color: '#2c3e50',
+  },
+  {
+    icon: '📊',
+    title: 'Corretor de Preço com Excel',
+    desc: 'Importe uma planilha Excel com seus SKUs e novos preços e aplique atualizações em massa com um clique. Ideal para reajustes periódicos de toda a carteira de produtos.',
+    color: '#27ae60',
+  },
+  {
+    icon: '⚖️',
+    title: 'Concorrência de Preço',
+    desc: 'Configure regras automáticas de precificação baseadas nos concorrentes. Mantenha seus preços competitivos de forma inteligente, com margens mínimas protegidas.',
+    color: '#e74c3c',
+  },
+  {
+    icon: '🖼️',
+    title: 'Otimizador de Imagens',
+    desc: 'Otimize as imagens de todos os seus anúncios: aplique imagens melhores em lote, ignore itens específicos, e use o Remove.bg integrado para remover fundos com qualidade profissional.',
+    color: '#2980b9',
   },
 ];
 
@@ -414,16 +477,30 @@ function FeatureCard({ feature, index }) {
         boxShadow: hover ? `0 8px 30px rgba(${hexToRgb(feature.color)}, 0.15)` : 'none',
       }}
     >
-      <div style={{
-        width: 48, height: 48, borderRadius: 12,
-        background: `rgba(${hexToRgb(feature.color)}, 0.15)`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '1.5em', marginBottom: 14,
-        border: `1px solid rgba(${hexToRgb(feature.color)}, 0.25)`,
-        transition: 'transform 0.3s',
-        transform: hover ? 'scale(1.1) rotate(3deg)' : 'scale(1)',
-      }}>
-        {feature.icon}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12,
+          background: `rgba(${hexToRgb(feature.color)}, 0.15)`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '1.5em',
+          border: `1px solid rgba(${hexToRgb(feature.color)}, 0.25)`,
+          transition: 'transform 0.3s',
+          transform: hover ? 'scale(1.1) rotate(3deg)' : 'scale(1)',
+          flexShrink: 0,
+        }}>
+          {feature.icon}
+        </div>
+        {feature.badge && (
+          <div style={{
+            background: `rgba(${hexToRgb(feature.color)}, 0.15)`,
+            border: `1px solid rgba(${hexToRgb(feature.color)}, 0.35)`,
+            borderRadius: 8, padding: '3px 8px',
+            fontSize: '0.62em', fontWeight: 800, color: feature.color,
+            letterSpacing: '0.06em', whiteSpace: 'nowrap',
+          }}>
+            {feature.badge}
+          </div>
+        )}
       </div>
       <h3 style={{
         margin: '0 0 8px', fontSize: '0.95em', fontWeight: 700,
@@ -444,6 +521,149 @@ function hexToRgb(hex) {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `${r},${g},${b}`;
+}
+
+function IntegracaoSection() {
+  const isMobile = useIsMobile();
+  return (
+    <section style={{
+      background: '#060d1a',
+      padding: isMobile ? '48px 16px' : '72px 24px',
+      position: 'relative',
+    }}>
+      <div style={{
+        position: 'absolute', top: 0, left: '10%', right: '10%', height: 1,
+        background: 'linear-gradient(90deg, transparent, rgba(241,196,15,0.2), transparent)',
+      }} />
+      <div style={{ maxWidth: 1100, margin: '0 auto' }}>
+        <div style={{ textAlign: 'center', marginBottom: isMobile ? 32 : 48 }}>
+          <div style={{
+            display: 'inline-block',
+            background: 'rgba(41,128,185,0.08)', border: '1px solid rgba(41,128,185,0.2)',
+            borderRadius: 20, padding: '5px 16px', marginBottom: 14,
+          }}>
+            <span style={{ fontSize: '0.78em', color: '#3498db', fontWeight: 700, letterSpacing: '0.12em' }}>
+              INTEGRAÇÕES
+            </span>
+          </div>
+          <h2 style={{
+            margin: '0 0 12px', fontSize: 'clamp(1.5em, 3vw, 2.2em)',
+            fontWeight: 900, color: '#fff',
+          }}>
+            Conectado aos principais{' '}
+            <span style={{
+              background: 'linear-gradient(135deg, #F5C518, #e6aa00)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            }}>
+              ERPs e Marketplaces
+            </span>
+          </h2>
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.4)', fontSize: '0.95em' }}>
+            Sincronize produtos, estoque e preços automaticamente
+          </p>
+        </div>
+
+        <div style={{
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          gap: isMobile ? 16 : 24,
+          justifyContent: 'center',
+          alignItems: 'stretch',
+        }}>
+          {INTEGRACOES.map((integ, i) => (
+            <div key={i} style={{
+              flex: 1, maxWidth: isMobile ? '100%' : 320,
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 18,
+              padding: isMobile ? '24px 20px' : '32px 28px',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              gap: 16, textAlign: 'center',
+              transition: 'all 0.3s',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.border = '1px solid rgba(241,196,15,0.25)'; e.currentTarget.style.background = 'rgba(241,196,15,0.04)'; e.currentTarget.style.transform = 'translateY(-4px)'; }}
+              onMouseLeave={e => { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.08)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.transform = 'none'; }}
+            >
+              {/* Logo estilizado */}
+              <div style={{
+                width: isMobile ? 140 : 160,
+                height: isMobile ? 70 : 80,
+                borderRadius: 14,
+                background: integ.bgColor,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: `0 8px 24px ${integ.bgColor}55`,
+                flexShrink: 0,
+              }}>
+                {integ.nome === 'olist tiny' ? (
+                  <div style={{ textAlign: 'center', lineHeight: 1.2 }}>
+                    <div style={{ color: '#fff', fontWeight: 900, fontSize: '1.4em', letterSpacing: '-0.03em' }}>olist</div>
+                    <div style={{ color: 'rgba(255,255,255,0.9)', fontWeight: 600, fontSize: '0.85em', letterSpacing: '0.1em' }}>tiny</div>
+                  </div>
+                ) : integ.nome === 'bling' ? (
+                  <div style={{ color: '#fff', fontWeight: 900, fontSize: '1.8em', letterSpacing: '-0.02em' }}>
+                    bling<span style={{ color: '#fff' }}>!</span>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: 'center', lineHeight: 1.2, padding: '0 12px' }}>
+                    <div style={{ fontSize: '1.4em', marginBottom: 2 }}>💪</div>
+                    <div style={{ color: integ.textColor, fontWeight: 900, fontSize: '0.85em', letterSpacing: '-0.01em' }}>
+                      mercado livre
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Badge de tipo */}
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                background: integ.tipo === 'ERP' ? 'rgba(52,152,219,0.12)' : 'rgba(241,196,15,0.12)',
+                border: `1px solid ${integ.tipo === 'ERP' ? 'rgba(52,152,219,0.3)' : 'rgba(241,196,15,0.3)'}`,
+                borderRadius: 20, padding: '3px 12px',
+              }}>
+                <span style={{
+                  fontSize: '0.72em', fontWeight: 700,
+                  color: integ.tipo === 'ERP' ? '#3498db' : '#F5C518',
+                  letterSpacing: '0.08em',
+                }}>
+                  {integ.tipo === 'ERP' ? '🔗 INTEGRAÇÃO ERP' : '🛒 MARKETPLACE'}
+                </span>
+              </div>
+
+              <p style={{ margin: 0, color: 'rgba(255,255,255,0.5)', fontSize: '0.85em', lineHeight: 1.6 }}>
+                {integ.desc}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        {/* Linha de destaque */}
+        <div style={{
+          marginTop: isMobile ? 32 : 48,
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(241,196,15,0.15)',
+          borderRadius: 14,
+          padding: isMobile ? '18px 16px' : '20px 32px',
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: isMobile ? 12 : 32,
+          textAlign: 'center',
+        }}>
+          {[
+            { icon: '⚡', text: 'Sincronização automática de produtos' },
+            { icon: '📦', text: 'Estoque e preço sempre atualizados' },
+            { icon: '🔄', text: 'Integração via API oficial' },
+          ].map((item, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.1em' }}>{item.icon}</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85em' }}>{item.text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function FeaturesSection() {
@@ -485,8 +705,8 @@ function FeaturesSection() {
               vender mais
             </span>
           </h2>
-          <p style={{ margin: 0, color: 'rgba(255,255,255,0.45)', fontSize: '1em', maxWidth: 480, margin: '0 auto' }}>
-            Mais de 15 ferramentas integradas para você dominar o Mercado Livre
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.45)', fontSize: '1em', maxWidth: 560, margin: '0 auto' }}>
+            Mais de 18 ferramentas integradas para você dominar o Mercado Livre — desde a criação do anúncio até a pós-venda
           </p>
         </div>
 
@@ -933,6 +1153,7 @@ export default function LandingPage({ onLoginClick }) {
     }}>
       <NavBar onLoginClick={onLoginClick} onAssinarClick={irParaPlanos} />
       <HeroSection onLoginClick={onLoginClick} />
+      <IntegracaoSection />
       <FeaturesSection />
       <HowItWorksSection />
       <PricingSection onAssinarClick={onLoginClick} />

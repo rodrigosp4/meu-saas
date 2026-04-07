@@ -433,7 +433,7 @@ function ModalTrocarSenha({ usuario, onClose }) {
 
 // ── Seção de Assinaturas ──────────────────────────────────────────────────────
 function SecaoAssinaturas() {
-  const [config, setConfig] = useState({ precoMensal: 299, mpAccessToken: '', mpPublicKey: '' });
+  const [config, setConfig] = useState({ precoMensal: 299, precoOperador: 50, mpAccessToken: '', mpPublicKey: '' });
   const [assinaturas, setAssinaturas] = useState([]);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [loadingAss, setLoadingAss] = useState(true);
@@ -444,7 +444,7 @@ function SecaoAssinaturas() {
   useEffect(() => {
     fetch('/api/admin/config-assinatura')
       .then(r => r.json())
-      .then(d => setConfig({ precoMensal: d.precoMensal, mpAccessToken: d.mpAccessToken || '', mpPublicKey: d.mpPublicKey || '' }))
+      .then(d => setConfig({ precoMensal: d.precoMensal, precoOperador: d.precoOperador ?? 50, mpAccessToken: d.mpAccessToken || '', mpPublicKey: d.mpPublicKey || '' }))
       .finally(() => setLoadingConfig(false));
 
     fetch('/api/admin/assinaturas')
@@ -484,6 +484,11 @@ function SecaoAssinaturas() {
     { key: '90d',  meses: 3, desconto: 0.10 },
     { key: '180d', meses: 6, desconto: 0.15 },
   ].map(p => ({ ...p, valor: parseFloat((config.precoMensal * p.meses * (1 - p.desconto)).toFixed(2)) }));
+  // Preço com 1 operador (para exemplo)
+  const planosComOperador = planos.map(p => ({
+    ...p,
+    valorComOperador: parseFloat(((config.precoMensal + config.precoOperador) * p.meses * (1 - p.desconto)).toFixed(2)),
+  }));
 
   return (
     <div>
@@ -499,18 +504,38 @@ function SecaoAssinaturas() {
           <div style={{ padding: '20px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
               <div>
-                <label style={labelStyle}>Preço Mensal (R$)</label>
+                <label style={labelStyle}>Preço Mensal Base (R$)</label>
                 <input type="number" value={config.precoMensal} min="1" step="0.01"
                   onChange={e => setConfig(c => ({ ...c, precoMensal: parseFloat(e.target.value) || 0 }))}
                   style={fieldStyle}
                 />
+                <div style={{ marginTop: '10px' }}>
+                  <label style={labelStyle}>Adicional por Usuário Operador (R$/mês)</label>
+                  <input type="number" value={config.precoOperador} min="0" step="0.01"
+                    onChange={e => setConfig(c => ({ ...c, precoOperador: parseFloat(e.target.value) || 0 }))}
+                    style={fieldStyle}
+                  />
+                  <div style={{ fontSize: '0.75em', color: '#7f8c8d', marginTop: '3px' }}>
+                    Cobrado por cada sub-usuário com perfil Operador ativo.
+                  </div>
+                </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', gap: '8px' }}>
                 <div style={{ padding: '8px 12px', background: '#f0f9f4', borderRadius: '6px', fontSize: '0.82em', color: '#2c3e50' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px', color: '#7f8c8d' }}>Sem operadores</div>
                   {planos.map(p => (
                     <div key={p.key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
                       <span style={{ color: '#7f8c8d' }}>{PLANO_LABEL[p.key]}</span>
                       <strong>{formatarMoeda(p.valor)}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ padding: '8px 12px', background: '#fef9ec', borderRadius: '6px', fontSize: '0.82em', color: '#2c3e50' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px', color: '#7f8c8d' }}>Com 1 operador (+{formatarMoeda(config.precoOperador)}/mês)</div>
+                  {planosComOperador.map(p => (
+                    <div key={p.key} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                      <span style={{ color: '#7f8c8d' }}>{PLANO_LABEL[p.key]}</span>
+                      <strong>{formatarMoeda(p.valorComOperador)}</strong>
                     </div>
                   ))}
                 </div>
@@ -589,6 +614,199 @@ function SecaoAssinaturas() {
   );
 }
 
+// ── Seção de Cupons ───────────────────────────────────────────────────────────
+function SecaoCupons() {
+  const [cupons, setCupons] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState('');
+  const [form, setForm] = useState({ codigo: '', tipo: 'percentual', valor: '', usoMaximo: '', expiraEm: '', descricao: '' });
+
+  const fieldStyle = { width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9em', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: '0.83em', color: '#495057', display: 'block', marginBottom: '4px', fontWeight: 600 };
+
+  const carregar = () => {
+    setLoading(true);
+    fetch('/api/admin/cupons')
+      .then(r => r.json())
+      .then(d => Array.isArray(d) ? setCupons(d) : setCupons([]))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const salvar = async () => {
+    setErro('');
+    if (!form.codigo.trim()) return setErro('Código obrigatório.');
+    if (!form.valor || isNaN(Number(form.valor)) || Number(form.valor) <= 0) return setErro('Valor inválido.');
+    setSalvando(true);
+    const res = await fetch('/api/admin/cupons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        codigo: form.codigo.trim(),
+        tipo: form.tipo,
+        valor: Number(form.valor),
+        usoMaximo: form.usoMaximo ? Number(form.usoMaximo) : null,
+        expiraEm: form.expiraEm || null,
+        descricao: form.descricao || null,
+      }),
+    });
+    setSalvando(false);
+    if (res.ok) {
+      setShowForm(false);
+      setForm({ codigo: '', tipo: 'percentual', valor: '', usoMaximo: '', expiraEm: '', descricao: '' });
+      carregar();
+    } else {
+      const d = await res.json();
+      setErro(d.erro || 'Erro ao criar cupom.');
+    }
+  };
+
+  const toggleAtivo = async (cupom) => {
+    await fetch(`/api/admin/cupons/${cupom.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !cupom.ativo }),
+    });
+    carregar();
+  };
+
+  const deletar = async (cupom) => {
+    if (!window.confirm(`Excluir o cupom "${cupom.codigo}"? Esta ação não pode ser desfeita.`)) return;
+    await fetch(`/api/admin/cupons/${cupom.id}`, { method: 'DELETE' });
+    carregar();
+  };
+
+  const TIPO_LABEL = { percentual: '% desconto', fixo: 'R$ fixo', dias_gratis: 'Dias grátis' };
+  const TIPO_COR = { percentual: '#3498db', fixo: '#27ae60', dias_gratis: '#e67e22' };
+
+  const formatarValor = (c) => {
+    if (c.tipo === 'percentual') return `${c.valor}%`;
+    if (c.tipo === 'fixo') return `R$ ${Number(c.valor).toFixed(2).replace('.', ',')}`;
+    if (c.tipo === 'dias_gratis') return `${c.valor} dias`;
+    return c.valor;
+  };
+
+  const formatarData = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+
+  return (
+    <div>
+      <div style={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0f0', backgroundColor: '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '0.95em', color: '#2c3e50' }}>Cupons de Desconto</div>
+            <div style={{ fontSize: '0.8em', color: '#7f8c8d', marginTop: '2px' }}>Crie cupons de desconto percentual, valor fixo ou dias grátis.</div>
+          </div>
+          <button onClick={() => { setShowForm(f => !f); setErro(''); }} style={{ padding: '8px 16px', border: 'none', borderRadius: '6px', cursor: 'pointer', background: '#3498db', color: '#fff', fontWeight: 600, fontSize: '0.88em' }}>
+            {showForm ? 'Cancelar' : '+ Novo cupom'}
+          </button>
+        </div>
+
+        {showForm && (
+          <div style={{ padding: '20px', borderBottom: '1px solid #f0f0f0', background: '#fafbfc' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+              <div>
+                <label style={labelStyle}>Código do cupom</label>
+                <input type="text" value={form.codigo} onChange={e => setForm(f => ({ ...f, codigo: e.target.value.toUpperCase() }))}
+                  placeholder="EX: PROMO10" style={fieldStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Tipo</label>
+                <select value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value, valor: '' }))} style={fieldStyle}>
+                  <option value="percentual">% de desconto na mensalidade</option>
+                  <option value="fixo">R$ fixo de desconto</option>
+                  <option value="dias_gratis">Dias grátis de acesso</option>
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>
+                  {form.tipo === 'percentual' ? 'Desconto (%)' : form.tipo === 'fixo' ? 'Desconto (R$)' : 'Quantidade de dias'}
+                </label>
+                <input type="number" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value }))}
+                  min="0" step={form.tipo === 'percentual' ? '1' : '0.01'} placeholder={form.tipo === 'percentual' ? 'Ex: 20' : form.tipo === 'fixo' ? 'Ex: 50.00' : 'Ex: 7'}
+                  style={fieldStyle} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '16px' }}>
+              <div>
+                <label style={labelStyle}>Uso máximo (vazio = ilimitado)</label>
+                <input type="number" value={form.usoMaximo} onChange={e => setForm(f => ({ ...f, usoMaximo: e.target.value }))}
+                  min="1" placeholder="Ilimitado" style={fieldStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Válido até (vazio = sem expiração)</label>
+                <input type="date" value={form.expiraEm} onChange={e => setForm(f => ({ ...f, expiraEm: e.target.value }))} style={fieldStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Descrição (opcional)</label>
+                <input type="text" value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))}
+                  placeholder="Ex: Cupom de lançamento" style={fieldStyle} />
+              </div>
+            </div>
+            {erro && <div style={{ color: '#e74c3c', fontSize: '0.84em', marginBottom: '10px' }}>{erro}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={salvar} disabled={salvando} style={{ padding: '8px 24px', border: 'none', borderRadius: '6px', cursor: 'pointer', background: '#27ae60', color: '#fff', fontWeight: 600, fontSize: '0.9em', opacity: salvando ? 0.7 : 1 }}>
+                {salvando ? 'Salvando...' : 'Criar cupom'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ padding: '30px', textAlign: 'center', color: '#999' }}>Carregando...</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #e9ecef' }}>
+                <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600, color: '#495057' }}>Código</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Tipo</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Benefício</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Usos</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Expira em</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Status</th>
+                <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#495057' }}>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cupons.map((c, i) => (
+                <tr key={c.id} style={{ borderBottom: '1px solid #f0f0f0', backgroundColor: i % 2 === 0 ? '#fff' : '#fafafa', opacity: c.ativo ? 1 : 0.55 }}>
+                  <td style={{ padding: '9px 14px', fontWeight: 700, color: '#2c3e50', letterSpacing: '0.04em' }}>
+                    {c.codigo}
+                    {c.descricao && <div style={{ fontWeight: 400, fontSize: '0.82em', color: '#7f8c8d', marginTop: '1px' }}>{c.descricao}</div>}
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center' }}>
+                    <span style={{ background: (TIPO_COR[c.tipo] || '#aaa') + '22', color: TIPO_COR[c.tipo] || '#aaa', padding: '2px 10px', borderRadius: '10px', fontSize: '0.82em', fontWeight: 600 }}>
+                      {TIPO_LABEL[c.tipo] || c.tipo}
+                    </span>
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', fontWeight: 700, color: TIPO_COR[c.tipo] || '#333' }}>{formatarValor(c)}</td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', color: '#7f8c8d' }}>
+                    {c.usoAtual}{c.usoMaximo !== null ? ` / ${c.usoMaximo}` : ''}
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center', color: c.expiraEm && new Date(c.expiraEm) < new Date() ? '#e74c3c' : '#7f8c8d' }}>
+                    {formatarData(c.expiraEm)}
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center' }}>
+                    <Toggle checked={c.ativo} onChange={() => toggleAtivo(c)} />
+                  </td>
+                  <td style={{ padding: '9px 14px', textAlign: 'center' }}>
+                    <button onClick={() => deletar(c)} style={btn('#e74c3c')}>Excluir</button>
+                  </td>
+                </tr>
+              ))}
+              {cupons.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: '32px', textAlign: 'center', color: '#bbb' }}>Nenhum cupom criado ainda.</td></tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 function ModalCriarUsuario({ onClose, onCriado }) {
   const [email, setEmail] = useState('');
@@ -643,6 +861,336 @@ function ModalCriarUsuario({ onClose, onCriado }) {
       </div>
     </div>
   );
+}
+
+// ── Seção de Banner de Avisos ─────────────────────────────────────────────────
+function SecaoBanner() {
+  const [visivel, setVisivel] = useState(false);
+  const [mensagens, setMensagens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [novoTexto, setNovoTexto] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const [editandoId, setEditandoId] = useState(null);
+  const [editTexto, setEditTexto] = useState('');
+  const [erro, setErro] = useState('');
+
+  const carregar = () => {
+    setLoading(true);
+    fetch('/api/admin/banner/config')
+      .then(r => r.json())
+      .then(d => {
+        setVisivel(!!d.visivel);
+        setMensagens(Array.isArray(d.mensagens) ? d.mensagens : []);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const toggleVisivel = async (v) => {
+    setVisivel(v);
+    await fetch('/api/admin/banner/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visivel: v }),
+    });
+  };
+
+  const adicionarMensagem = async () => {
+    if (!novoTexto.trim()) return;
+    setSalvando(true);
+    setErro('');
+    try {
+      const r = await fetch('/api/admin/banner/mensagens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texto: novoTexto.trim(), ordem: mensagens.length }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setErro(data.erro || 'Erro ao adicionar'); return; }
+      setMensagens(prev => [...prev, data]);
+      setNovoTexto('');
+    } catch {
+      setErro('Erro de conexão');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const toggleAtivo = async (msg) => {
+    const r = await fetch(`/api/admin/banner/mensagens/${msg.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !msg.ativo }),
+    });
+    if (r.ok) {
+      setMensagens(prev => prev.map(m => m.id === msg.id ? { ...m, ativo: !m.ativo } : m));
+    }
+  };
+
+  const salvarEdicao = async (id) => {
+    if (!editTexto.trim()) return;
+    const r = await fetch(`/api/admin/banner/mensagens/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto: editTexto.trim() }),
+    });
+    if (r.ok) {
+      setMensagens(prev => prev.map(m => m.id === id ? { ...m, texto: editTexto.trim() } : m));
+      setEditandoId(null);
+    }
+  };
+
+  const excluir = async (id) => {
+    if (!confirm('Excluir esta mensagem?')) return;
+    const r = await fetch(`/api/admin/banner/mensagens/${id}`, { method: 'DELETE' });
+    if (r.ok) setMensagens(prev => prev.filter(m => m.id !== id));
+  };
+
+  const inputStyle = { width: '100%', padding: '8px 12px', border: '1px solid #ddd', borderRadius: '7px', fontSize: '0.9em', boxSizing: 'border-box', fontFamily: 'inherit' };
+
+  return (
+    <div>
+      {/* Toggle global */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '24px', padding: '16px 20px', background: visivel ? '#eafaf1' : '#fff8f0', border: `1px solid ${visivel ? '#27ae6055' : '#e67e2244'}`, borderRadius: '10px' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, color: '#2c3e50', marginBottom: '2px' }}>Banner de avisos</div>
+          <div style={{ fontSize: '0.83em', color: '#7f8c8d' }}>
+            {visivel ? 'Visível para todos os usuários' : 'Oculto — os usuários não veem o banner'}
+          </div>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', gap: '8px' }}>
+          <input type="checkbox" checked={visivel} onChange={e => toggleVisivel(e.target.checked)} style={{ display: 'none' }} />
+          <div style={{ width: '46px', height: '24px', borderRadius: '12px', position: 'relative', backgroundColor: visivel ? '#27ae60' : '#ccc', transition: 'background .2s', cursor: 'pointer' }}>
+            <div style={{ width: '18px', height: '18px', borderRadius: '50%', backgroundColor: '#fff', position: 'absolute', top: '3px', left: visivel ? '25px' : '3px', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.3)' }} />
+          </div>
+          <span style={{ fontSize: '0.88em', fontWeight: 600, color: visivel ? '#27ae60' : '#95a5a6' }}>{visivel ? 'Ativo' : 'Inativo'}</span>
+        </label>
+      </div>
+
+      {/* Adicionar mensagem */}
+      <div style={{ marginBottom: '20px' }}>
+        <div style={{ fontWeight: 600, color: '#34495e', marginBottom: '8px', fontSize: '0.92em' }}>Adicionar mensagem</div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            value={novoTexto}
+            onChange={e => setNovoTexto(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && adicionarMensagem()}
+            placeholder="Texto do aviso que aparecerá no banner..."
+            style={{ ...inputStyle, flex: 1 }}
+            maxLength={300}
+          />
+          <button
+            onClick={adicionarMensagem}
+            disabled={salvando || !novoTexto.trim()}
+            style={{ padding: '8px 18px', background: '#3498db', color: '#fff', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9em', opacity: (salvando || !novoTexto.trim()) ? 0.6 : 1, whiteSpace: 'nowrap' }}
+          >
+            {salvando ? '...' : '+ Adicionar'}
+          </button>
+        </div>
+        {erro && <div style={{ color: '#e74c3c', fontSize: '0.83em', marginTop: '5px' }}>{erro}</div>}
+      </div>
+
+      {/* Lista de mensagens */}
+      <div style={{ fontWeight: 600, color: '#34495e', marginBottom: '10px', fontSize: '0.92em' }}>
+        Mensagens ({mensagens.length})
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '24px', textAlign: 'center', color: '#999' }}>Carregando...</div>
+      ) : mensagens.length === 0 ? (
+        <div style={{ padding: '24px', textAlign: 'center', color: '#bbb', background: '#fafafa', borderRadius: '8px', border: '1px dashed #e0e0e0', fontSize: '0.88em' }}>
+          Nenhuma mensagem cadastrada. Adicione uma acima.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {mensagens.map((m, i) => (
+            <div key={m.id} style={{ padding: '12px 14px', background: m.ativo ? '#fff' : '#f9f9f9', border: `1px solid ${m.ativo ? '#e0e8f0' : '#e8e8e8'}`, borderRadius: '8px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+              {/* Ordem */}
+              <div style={{ fontSize: '0.75em', color: '#bbb', minWidth: '20px', paddingTop: '2px', textAlign: 'center' }}>#{i + 1}</div>
+
+              {/* Texto ou input de edição */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {editandoId === m.id ? (
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <input
+                      value={editTexto}
+                      onChange={e => setEditTexto(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') salvarEdicao(m.id); if (e.key === 'Escape') setEditandoId(null); }}
+                      autoFocus
+                      maxLength={300}
+                      style={{ ...inputStyle, flex: 1 }}
+                    />
+                    <button onClick={() => salvarEdicao(m.id)} style={{ padding: '4px 10px', background: '#27ae60', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82em' }}>Salvar</button>
+                    <button onClick={() => setEditandoId(null)} style={{ padding: '4px 10px', background: '#f4f6f8', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82em' }}>×</button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.9em', color: m.ativo ? '#2c3e50' : '#aaa', lineHeight: 1.4 }}>{m.texto}</div>
+                )}
+              </div>
+
+              {/* Ações */}
+              {editandoId !== m.id && (
+                <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
+                  {/* Toggle ativo */}
+                  <button
+                    onClick={() => toggleAtivo(m)}
+                    title={m.ativo ? 'Ocultar esta mensagem' : 'Exibir esta mensagem'}
+                    style={{ padding: '3px 8px', fontSize: '0.78em', fontWeight: 600, borderRadius: '5px', border: '1px solid', cursor: 'pointer', background: m.ativo ? '#eafaf1' : '#f9f9f9', color: m.ativo ? '#27ae60' : '#95a5a6', borderColor: m.ativo ? '#27ae6055' : '#ddd' }}
+                  >
+                    {m.ativo ? 'Ativo' : 'Inativo'}
+                  </button>
+                  <button
+                    onClick={() => { setEditandoId(m.id); setEditTexto(m.texto); }}
+                    style={{ padding: '3px 8px', fontSize: '0.78em', borderRadius: '5px', border: '1px solid #ddd', cursor: 'pointer', background: '#f4f6f8', color: '#3498db' }}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => excluir(m.id)}
+                    style={{ padding: '3px 8px', fontSize: '0.78em', borderRadius: '5px', border: '1px solid #e74c3c44', cursor: 'pointer', background: '#fff5f5', color: '#e74c3c' }}
+                  >
+                    Excluir
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Preview */}
+      {mensagens.some(m => m.ativo) && (
+        <div style={{ marginTop: '24px' }}>
+          <div style={{ fontWeight: 600, color: '#34495e', marginBottom: '8px', fontSize: '0.88em' }}>Preview do banner</div>
+          <div style={{ position: 'relative', background: '#1a1a2e', height: '32px', borderRadius: '6px', overflow: 'hidden', display: 'flex', alignItems: 'center' }}>
+            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center', padding: '0 10px', background: '#e67e22', color: '#fff', fontSize: '0.72em', fontWeight: 700, textTransform: 'uppercase', gap: '4px', zIndex: 2 }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              AVISO
+            </div>
+            <div style={{ flex: 1, paddingLeft: '80px', paddingRight: '10px', color: '#f1c40f', fontSize: '0.8em', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+              {mensagens.filter(m => m.ativo).map(m => m.texto).join('    ★    ')}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Seção de Chamados (Admin) ─────────────────────────────────────────────────
+function SecaoChamados() {
+  const [chamados, setChamados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [chamadoAberto, setChamadoAberto] = useState(null);
+  const [filtroStatus, setFiltroStatus] = useState('todos');
+
+  const STATUS_LABEL = {
+    ABERTO:             { label: 'Aberto',              color: '#3498db', bg: '#eaf4fb' },
+    EM_ANDAMENTO:       { label: 'Em Andamento',         color: '#e67e22', bg: '#fef9f0' },
+    AGUARDANDO_USUARIO: { label: 'Aguardando usuário',   color: '#8e44ad', bg: '#f5eef8' },
+    RESOLVIDO:          { label: 'Resolvido',            color: '#27ae60', bg: '#eafaf1' },
+    FECHADO:            { label: 'Fechado',              color: '#95a5a6', bg: '#f4f6f7' },
+  };
+
+  const carregar = () => {
+    setLoading(true);
+    fetch('/api/chamados')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setChamados(d); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const filtrados = filtroStatus === 'todos' ? chamados : chamados.filter(c => c.status === filtroStatus);
+  const abertos = chamados.filter(c => c.status === 'ABERTO' || c.status === 'AGUARDANDO_USUARIO').length;
+
+  const formatData = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  if (chamadoAberto) {
+    // Importação dinâmica do DetalheChamado — usamos lazy import via componente inline
+    return <AdminDetalheChamado chamadoId={chamadoAberto} onVoltar={() => { setChamadoAberto(null); carregar(); }} onAtualizado={carregar} />;
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ fontWeight: 700, fontSize: '1em', color: '#2c3e50' }}>
+          Chamados de Suporte
+          {abertos > 0 && (
+            <span style={{ marginLeft: '8px', background: '#e74c3c', color: '#fff', borderRadius: '10px', padding: '2px 8px', fontSize: '0.75em' }}>{abertos} aberto(s)</span>
+          )}
+        </div>
+        <button onClick={carregar} style={{ padding: '5px 14px', background: '#f4f6f8', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85em' }}>Atualizar</button>
+      </div>
+
+      {/* Filtro por status */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+        {[{ id: 'todos', label: 'Todos' }, ...Object.entries(STATUS_LABEL).map(([id, s]) => ({ id, label: s.label }))].map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFiltroStatus(f.id)}
+            style={{
+              padding: '3px 10px', borderRadius: '14px', border: '1px solid',
+              fontSize: '0.8em', cursor: 'pointer', fontWeight: filtroStatus === f.id ? 700 : 400,
+              borderColor: filtroStatus === f.id ? '#3498db' : '#ddd',
+              background: filtroStatus === f.id ? '#3498db' : '#f4f6f8',
+              color: filtroStatus === f.id ? '#fff' : '#555',
+            }}
+          >
+            {f.label}
+            {f.id !== 'todos' && <span style={{ marginLeft: '3px', opacity: 0.7 }}>({chamados.filter(c => c.status === f.id).length})</span>}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '32px', textAlign: 'center', color: '#999' }}>Carregando...</div>
+      ) : filtrados.length === 0 ? (
+        <div style={{ padding: '32px', textAlign: 'center', color: '#bbb', background: '#fafafa', borderRadius: '8px', border: '1px dashed #e0e0e0' }}>
+          Nenhum chamado encontrado.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {filtrados.map((c) => {
+            const si = STATUS_LABEL[c.status] || STATUS_LABEL.ABERTO;
+            return (
+              <div
+                key={c.id}
+                onClick={() => setChamadoAberto(c.id)}
+                style={{ padding: '12px 16px', background: '#fff', borderRadius: '8px', border: '1px solid #e8ecf0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px' }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.09)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: '#2c3e50', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.titulo}</div>
+                  <div style={{ fontSize: '0.78em', color: '#95a5a6' }}>{c.usuario?.email} · {c._count.mensagens} msg · {formatData(c.atualizadoEm)}</div>
+                </div>
+                <span style={{ padding: '2px 9px', borderRadius: '11px', fontSize: '0.76em', fontWeight: 600, color: si.color, background: si.bg, whiteSpace: 'nowrap' }}>{si.label}</span>
+                <span style={{ color: '#bbb' }}>›</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Wrapper do DetalheChamado importado do Chamados.jsx para uso no AdminPanel
+function AdminDetalheChamado({ chamadoId, onVoltar, onAtualizado }) {
+  const [Comp, setComp] = useState(null);
+  useEffect(() => {
+    import('./Chamados.jsx').then(m => setComp(() => m.DetalheChamado));
+  }, []);
+  if (!Comp) return <div style={{ padding: '32px', textAlign: 'center', color: '#999' }}>Carregando...</div>;
+  return <Comp chamadoId={chamadoId} onVoltar={onVoltar} onAtualizado={onAtualizado} isAdmin={true} />;
 }
 
 export default function AdminPanel({ setActivePage }) {
@@ -779,6 +1327,9 @@ export default function AdminPanel({ setActivePage }) {
       <div style={{ display: 'flex', borderBottom: '2px solid #e9ecef', marginBottom: '20px', gap: '4px' }}>
         <button style={abaMainStyle('clientes')} onClick={() => setAbaMain('clientes')}>Clientes</button>
         <button style={abaMainStyle('assinaturas')} onClick={() => setAbaMain('assinaturas')}>Assinaturas</button>
+        <button style={abaMainStyle('cupons')} onClick={() => setAbaMain('cupons')}>Cupons</button>
+        <button style={abaMainStyle('banner')} onClick={() => setAbaMain('banner')}>Banner</button>
+        <button style={abaMainStyle('chamados')} onClick={() => setAbaMain('chamados')}>Chamados</button>
         <button style={abaMainStyle('padroes')} onClick={() => setAbaMain('padroes')}>Padrões por Tipo</button>
       </div>
 
@@ -884,6 +1435,15 @@ export default function AdminPanel({ setActivePage }) {
 
       {/* ── ABA: ASSINATURAS ── */}
       {abaMain === 'assinaturas' && <SecaoAssinaturas />}
+
+      {/* ── ABA: CUPONS ── */}
+      {abaMain === 'cupons' && <SecaoCupons />}
+
+      {/* ── ABA: BANNER ── */}
+      {abaMain === 'banner' && <SecaoBanner />}
+
+      {/* ── ABA: CHAMADOS ── */}
+      {abaMain === 'chamados' && <SecaoChamados />}
 
       {/* ── ABA: PADRÕES POR TIPO ── */}
       {abaMain === 'padroes' && (

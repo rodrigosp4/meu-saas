@@ -74,6 +74,8 @@ model User {
   assinaturas          Assinatura[]
   notificacaoCache     NotificacaoCache?
   conversasLidas       ConversaLida[]
+  chamados             Chamado[]
+  mensagensChamado     MensagemChamado[]   @relation("MensagensChamado")
 }
 
 model Assinatura {
@@ -86,18 +88,49 @@ model Assinatura {
   mpPreferenceId  String?
   iniciaEm        DateTime?
   expiraEm        DateTime?
+  cupomId         String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cupom           Cupom?    @relation(fields: [cupomId], references: [id])
 
   @@index([userId])
   @@index([status])
   @@index([expiraEm])
 }
 
+model Cupom {
+  id          String         @id @default(uuid())
+  codigo      String         @unique
+  tipo        String         // "percentual" | "fixo" | "dias_gratis"
+  valor       Float          // % (0–100), R$, ou nº de dias
+  ativo       Boolean        @default(true)
+  usoMaximo   Int?           // null = ilimitado
+  usoAtual    Int            @default(0)
+  expiraEm    DateTime?
+  descricao   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  assinaturas Assinatura[]
+  resgates    CupomResgate[]
+}
+
+model CupomResgate {
+  id           String   @id @default(uuid())
+  cupomId      String
+  userId       String
+  assinaturaId String?
+  createdAt    DateTime @default(now())
+  cupom        Cupom    @relation(fields: [cupomId], references: [id])
+
+  @@unique([cupomId, userId])
+  @@index([userId])
+}
+
 model ConfigAssinatura {
   id             String   @id @default("global")
   precoMensal    Float    @default(299.00)
+  precoOperador  Float    @default(50.00)
   mpAccessToken  String?
   mpPublicKey    String?
   updatedAt      DateTime @updatedAt
@@ -175,6 +208,7 @@ model AnuncioML {
   tagPrincipal      String?
   margemPromocional Boolean  @default(false)
   inflarPct         Float    @default(0)
+  toleranciaPromo   Float    @default(0)
   conta             ContaML  @relation(fields: [contaId], references: [id], onDelete: Cascade)
 
   @@index([contaId])
@@ -398,6 +432,75 @@ model ConversaLida {
 
   @@unique([userId, contaId, packId])
   @@index([userId])
+}
+
+// ── Banner de Notificações ────────────────────────────────────────────────────
+
+model ConfigBanner {
+  id      String  @id @default("global")
+  visivel Boolean @default(false)
+}
+
+model BannerNotificacao {
+  id        String   @id @default(uuid())
+  texto     String
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ativo, ordem])
+}
+
+// ── Chamados de Suporte ───────────────────────────────────────────────────────
+
+enum ChamadoStatus {
+  ABERTO
+  EM_ANDAMENTO
+  AGUARDANDO_USUARIO
+  RESOLVIDO
+  FECHADO
+}
+
+model Chamado {
+  id           String          @id @default(uuid())
+  titulo       String
+  userId       String
+  status       ChamadoStatus   @default(ABERTO)
+  criadoEm    DateTime        @default(now())
+  atualizadoEm DateTime       @updatedAt
+  usuario      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mensagens    MensagemChamado[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model MensagemChamado {
+  id         String         @id @default(uuid())
+  chamadoId  String
+  autorId    String
+  conteudo   String
+  isAdmin    Boolean        @default(false)
+  criadoEm  DateTime       @default(now())
+  chamado    Chamado        @relation(fields: [chamadoId], references: [id], onDelete: Cascade)
+  autor      User           @relation("MensagensChamado", fields: [autorId], references: [id])
+  anexos     AnexoChamado[]
+
+  @@index([chamadoId])
+}
+
+model AnexoChamado {
+  id         String          @id @default(uuid())
+  mensagemId String
+  nome       String
+  tipo       String
+  tamanho    Int
+  dados      String          // base64
+  criadoEm  DateTime        @default(now())
+  mensagem   MensagemChamado @relation(fields: [mensagemId], references: [id], onDelete: Cascade)
+
+  @@index([mensagemId])
 }
 
 // ── Cache de Notificações ─────────────────────────────────────────────────────

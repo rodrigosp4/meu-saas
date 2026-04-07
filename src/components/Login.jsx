@@ -205,6 +205,7 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [cupom, setCupom] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -244,9 +245,12 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
+      if (cupom.trim()) {
+        localStorage.setItem('cupomPendente', cupom.trim().toUpperCase());
+      }
       setMessage('Conta criada! Faça login.');
       switchMode('login');
-      setPassword(''); setConfirmPassword('');
+      setPassword(''); setConfirmPassword(''); setCupom('');
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -450,6 +454,40 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
                   placeholder="Mínimo 6 caracteres" icon="🔑" />
                 <InputField label="Confirmar senha" type="password" value={confirmPassword} onChange={setConfirmPassword}
                   placeholder="Repita a senha" icon="🔑" />
+                <div style={{ marginBottom: 18 }}>
+                  <label style={{
+                    display: 'block', marginBottom: 6,
+                    fontSize: '0.82em', fontWeight: 600,
+                    color: 'rgba(255,255,255,0.6)',
+                    textTransform: 'uppercase', letterSpacing: '0.08em',
+                  }}>
+                    Cupom (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={cupom}
+                    onChange={e => setCupom(e.target.value.toUpperCase())}
+                    placeholder="Tem um cupom? Digite aqui"
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      background: cupom ? 'rgba(39,174,96,0.07)' : 'rgba(255,255,255,0.05)',
+                      border: `1.5px solid ${cupom ? 'rgba(39,174,96,0.5)' : 'rgba(255,255,255,0.12)'}`,
+                      borderRadius: 10,
+                      color: '#fff',
+                      fontSize: '0.95em',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                      letterSpacing: '0.06em',
+                      transition: 'all 0.3s ease',
+                    }}
+                  />
+                  {cupom && (
+                    <div style={{ marginTop: 6, fontSize: '0.8em', color: 'rgba(39,174,96,0.8)' }}>
+                      ✓ Cupom será aplicado após o login
+                    </div>
+                  )}
+                </div>
                 <PrimaryButton loading={loading}>Criar minha conta</PrimaryButton>
                 <div style={{ textAlign: 'center', marginTop: 18 }}>
                   <LinkButton onClick={() => switchMode('login')}>Já tenho conta → Entrar</LinkButton>

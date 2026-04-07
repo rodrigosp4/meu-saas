@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 // ─── constants ────────────────────────────────────────────────────────────────
 const TIPO_LABELS = {
@@ -51,6 +52,7 @@ function fmt(d) {
 
 // ─── Expandable items row ─────────────────────────────────────────────────────
 function PromoRow({ promo, usuarioId, onRefresh, itemSearch }) {
+  const { canUseResource } = useAuth();
   const searchTerm = itemSearch?.trim().toLowerCase() || '';
   const [expanded, setExpanded] = useState(false);
   const [itemActions, setItemActions] = useState({}); // { [itemId]: { loading, done, removed, error, dealPrice, topDealPrice, stock } }
@@ -245,7 +247,7 @@ function PromoRow({ promo, usuarioId, onRefresh, itemSearch }) {
               {activeItems.length > 0 && <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-[11px] font-semibold">{activeItems.length} ativo(s)</span>}
               {pendingItems.length > 0 && <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full text-[11px] font-semibold">{pendingItems.length} pendente(s)</span>}
 
-              {!needsPrice && candidateItems.length > 0 && (
+              {canUseResource('promocoes.aplicar') && !needsPrice && candidateItems.length > 0 && (
                 <button
                   onClick={handleBulkActivate}
                   disabled={bulkLoading}
@@ -389,7 +391,7 @@ function PromoRow({ promo, usuarioId, onRefresh, itemSearch }) {
                               {st.error && (
                                 <span className="text-red-600 text-[10px] max-w-[140px] truncate" title={st.error}>❌ {st.error}</span>
                               )}
-                              {!st.done && isCandidate && (
+                              {canUseResource('promocoes.aplicar') && !st.done && isCandidate && (
                                 <button
                                   onClick={() => handleActivate(item)}
                                   disabled={st.loading || (needsPrice && !st.dealPrice && !suggestedPrice)}
@@ -402,7 +404,7 @@ function PromoRow({ promo, usuarioId, onRefresh, itemSearch }) {
                                   {st.loading ? '' : 'Ativar'}
                                 </button>
                               )}
-                              {!st.done && isRemovable && (
+                              {canUseResource('promocoes.aplicar') && !st.done && isRemovable && (
                                 <button
                                   onClick={() => handleRemove(item)}
                                   disabled={st.loading}

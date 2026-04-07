@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { TAG_DISPLAY_MAP } from './GerenciadorAnuncios';
 import { useContasML } from '../contexts/ContasMLContext';
+import { useAuth } from '../contexts/AuthContext';
 
 // Tags que indicam problema de qualidade
 const QUALITY_TAGS = [
@@ -23,6 +24,7 @@ function healthColor(pct) {
 
 // ===== MODAL FICHA TÉCNICA =====
 function ModalFichaTecnica({ skuData, usuarioId, onClose }) {
+  const { canUseResource } = useAuth();
   const [aba, setAba] = useState('atributos'); // 'atributos' | 'descricao' | 'titulo'
   const [attrs, setAttrs] = useState([]);
   const [valores, setValores] = useState({});
@@ -695,6 +697,7 @@ ${jsonTemplate}
             <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition">
               Cancelar
             </button>
+            {canUseResource('gerenciadorML.editarPreco') && (
             <button
               onClick={handleEnviar}
               disabled={enviando || (aba === 'atributos' && loading)}
@@ -702,6 +705,7 @@ ${jsonTemplate}
             >
               {enviando ? '⏳ Enviando...' : '✅ Salvar e Enfileirar'}
             </button>
+            )}
           </div>
         </div>
       </div>

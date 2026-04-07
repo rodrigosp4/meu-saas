@@ -12,10 +12,11 @@ const PERMISSIONS_BY_ROLE = {
     'centralPromocoes', 'monitorConcorrentes', 'perguntasPreVenda',
     'posVenda', 'catalogo', 'qualidadePublicacoes', 'otimizadorImagens',
     'dimensoesEmbalagem', 'corretorPrecoPlanilha', 'planejadorProductAds',
+    'chamados',
   ],
   VIEWER: [
     'home', 'produtosErp', 'gerenciadorML', 'fila', 'catalogo',
-    'qualidadePublicacoes', 'monitorConcorrentes',
+    'qualidadePublicacoes', 'monitorConcorrentes', 'chamados',
   ],
 };
 
@@ -143,9 +144,18 @@ export function AuthProvider({ children }) {
     const recurso = RECURSOS_SISTEMA.find(r => r.id === resourceId);
     if (recurso?.modulo && !canAccess(recurso.modulo)) return false;
 
+    const role = impersonating ? 'SUPPORT' : auth?.user?.role;
     const resourceFlags = impersonating
       ? impersonating.targetUser?.resourceFlags
       : auth?.user?.resourceFlags;
+
+    // VIEWER: nega todos os recursos de ação por padrão.
+    // Só permite se houver um resourceFlag explicitamente habilitando (=== true).
+    if (role === 'VIEWER') {
+      return resourceFlags?.[resourceId] === true;
+    }
+
+    // OWNER / OPERATOR / SUPPORT: permite por padrão, bloqueia se flag explícita = false
     if (resourceFlags && resourceFlags[resourceId] === false) return false;
 
     return true;

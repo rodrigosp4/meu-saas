@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import SeletorCategoria from './CriarAnuncio/SeletorCategoria';
 import { stripHtml } from '../utils/formatters';
 
@@ -86,6 +87,7 @@ const parseCSV = (csvText) => {
 };
 
 export default function CadastramentoMassa({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -938,9 +940,11 @@ export default function CadastramentoMassa({ usuarioId }) {
           </div>
 
           <div className="flex justify-end pt-6 border-t border-gray-200 mt-4">
+            {canUseResource('massa.gerar') && (
             <button onClick={processarLote} className="px-8 py-3 bg-orange-500 text-white font-black rounded-lg shadow-lg hover:bg-orange-600 transition-all text-lg">
               Processar Lote e Buscar Ficha Técnica ➔
             </button>
+            )}
           </div>
         </div>
       )}

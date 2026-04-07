@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 const PLANOS_LABEL = {
-  '30d':  { titulo: '30 Dias',   subtitulo: 'Mensal',        cor: '#3498db' },
-  '60d':  { titulo: '60 Dias',   subtitulo: '5% de desconto', cor: '#27ae60' },
+  '30d':  { titulo: '30 Dias',   subtitulo: 'Mensal',          cor: '#3498db' },
+  '60d':  { titulo: '60 Dias',   subtitulo: '5% de desconto',  cor: '#27ae60' },
   '90d':  { titulo: '90 Dias',   subtitulo: '10% de desconto', cor: '#8e44ad' },
   '180d': { titulo: '6 Meses',   subtitulo: '15% de desconto', cor: '#e67e22' },
 };
@@ -16,9 +16,24 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
   const [loading, setLoading] = useState(true);
   const [processando, setProcessando] = useState(false);
   const [erro, setErro] = useState('');
+  const [numOperadores, setNumOperadores] = useState(0);
+  const [precoOperador, setPrecoOperador] = useState(50);
+
+  // Cupom
+  const [cupomInput, setCupomInput] = useState('');
+  const [cupomValidando, setCupomValidando] = useState(false);
+  const [cupomAplicado, setCupomAplicado] = useState(null); // { codigo, tipo, valor, descricao, valorBase, valorFinal, diasGratis }
+  const [cupomErro, setCupomErro] = useState('');
 
   useEffect(() => {
-    carregarStatus();
+    // Cupom pendente salvo no cadastro
+    const cupomSalvo = localStorage.getItem('cupomPendente');
+    if (cupomSalvo) {
+      localStorage.removeItem('cupomPendente');
+      carregarStatusComCupom(cupomSalvo);
+    } else {
+      carregarStatus();
+    }
 
     // Verifica retorno do MercadoPago via query string
     const params = new URLSearchParams(window.location.search);
@@ -48,6 +63,72 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
       }
       setPlanos(data.planos || []);
       setAssinaturaAtual(data.assinatura);
+      if (data.numOperadores != null) setNumOperadores(data.numOperadores);
+      if (data.precoOperador != null) setPrecoOperador(data.precoOperador);
+    } catch {
+      setErro('Erro ao carregar informações de assinatura.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Carrega planos e já aplica o cupom automaticamente (usado quando vem do cadastro)
+  async function carregarStatusComCupom(codigo) {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/assinatura/status');
+      const data = await res.json();
+      if (data.ativo) {
+        onAssinaturaAtivada?.();
+        return;
+      }
+
+      const planosCarregados = data.planos || [];
+      setPlanos(planosCarregados);
+      setAssinaturaAtual(data.assinatura);
+      if (data.numOperadores != null) setNumOperadores(data.numOperadores);
+      if (data.precoOperador != null) setPrecoOperador(data.precoOperador);
+
+      if (!planosCarregados.length) return;
+
+      // Auto-seleciona o plano 30d e valida o cupom
+      const planoAuto = '30d';
+      setPlanoSelecionado(planoAuto);
+      setCupomInput(codigo);
+
+      const resC = await fetch('/api/assinatura/validar-cupom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo, planoKey: planoAuto }),
+      });
+      const dataC = await resC.json();
+
+      if (resC.ok) {
+        // Cupom de dias grátis: ativa direto sem precisar clicar no botão
+        if (dataC.diasGratis) {
+          const resAtiv = await fetch('/api/assinatura/criar-preferencia', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ planoKey: planoAuto, cupomCodigo: dataC.cupom.codigo }),
+          });
+          const dataAtiv = await resAtiv.json();
+          if (resAtiv.ok && dataAtiv.gratis) {
+            onAssinaturaAtivada?.();
+            return;
+          }
+        }
+        setCupomAplicado({
+          codigo: dataC.cupom.codigo,
+          tipo: dataC.cupom.tipo,
+          valor: dataC.cupom.valor,
+          descricao: dataC.cupom.descricao,
+          valorBase: dataC.valorBase,
+          valorFinal: dataC.valorFinal,
+          diasGratis: dataC.diasGratis,
+        });
+      } else {
+        setCupomErro(dataC.erro || 'Cupom inválido.');
+      }
     } catch {
       setErro('Erro ao carregar informações de assinatura.');
     } finally {
@@ -76,6 +157,72 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
     }
   }
 
+  async function aplicarCupom() {
+    if (!cupomInput.trim()) return;
+    if (!planoSelecionado) { setCupomErro('Selecione um plano antes de aplicar o cupom.'); return; }
+    setCupomErro('');
+    setCupomAplicado(null);
+    setCupomValidando(true);
+    try {
+      const res = await fetch('/api/assinatura/validar-cupom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo: cupomInput.trim(), planoKey: planoSelecionado }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setCupomErro(data.erro || 'Cupom inválido.'); return; }
+      setCupomAplicado({
+        codigo: data.cupom.codigo,
+        tipo: data.cupom.tipo,
+        valor: data.cupom.valor,
+        descricao: data.cupom.descricao,
+        valorBase: data.valorBase,
+        valorFinal: data.valorFinal,
+        diasGratis: data.diasGratis,
+      });
+    } catch {
+      setCupomErro('Erro ao validar cupom.');
+    } finally {
+      setCupomValidando(false);
+    }
+  }
+
+  function removerCupom() {
+    setCupomAplicado(null);
+    setCupomInput('');
+    setCupomErro('');
+  }
+
+  // Quando muda o plano, re-valida o cupom se houver um aplicado
+  async function selecionarPlano(key) {
+    setPlanoSelecionado(key);
+    if (cupomAplicado) {
+      setCupomAplicado(null);
+      // re-aplica automaticamente
+      if (cupomInput.trim()) {
+        setCupomValidando(true);
+        try {
+          const res = await fetch('/api/assinatura/validar-cupom', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codigo: cupomInput.trim(), planoKey: key }),
+          });
+          const data = await res.json();
+          if (res.ok) setCupomAplicado({
+            codigo: data.cupom.codigo,
+            tipo: data.cupom.tipo,
+            valor: data.cupom.valor,
+            descricao: data.cupom.descricao,
+            valorBase: data.valorBase,
+            valorFinal: data.valorFinal,
+            diasGratis: data.diasGratis,
+          });
+        } catch { /* silencioso */ }
+        setCupomValidando(false);
+      }
+    }
+  }
+
   async function assinar() {
     if (!planoSelecionado) {
       setErro('Selecione um plano para continuar.');
@@ -84,13 +231,23 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
     setErro('');
     setProcessando(true);
     try {
+      const body = { planoKey: planoSelecionado };
+      if (cupomAplicado) body.cupomCodigo = cupomAplicado.codigo;
+
       const res = await fetch('/api/assinatura/criar-preferencia', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planoKey: planoSelecionado }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro || 'Erro ao criar preferência.');
+
+      // Cupom de dias grátis: acesso liberado direto
+      if (data.gratis) {
+        onAssinaturaAtivada?.();
+        return;
+      }
+
       // Redireciona para o checkout do MercadoPago
       window.location.href = data.initPoint;
     } catch (err) {
@@ -101,6 +258,13 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
 
   const formatarData = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '-';
   const formatarMoeda = (v) => v != null ? `R$ ${Number(v).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}` : '-';
+
+  const descricaoCupom = (c) => {
+    if (c.tipo === 'percentual') return `${c.valor}% de desconto`;
+    if (c.tipo === 'fixo') return `R$ ${Number(c.valor).toFixed(2).replace('.', ',')} de desconto`;
+    if (c.tipo === 'dias_gratis') return `${c.valor} dias grátis`;
+    return '';
+  };
 
   if (loading || processando) {
     return (
@@ -115,6 +279,9 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
       </div>
     );
   }
+
+  const planoAtual = planos.find(p => p.key === planoSelecionado);
+  const valorExibir = cupomAplicado ? cupomAplicado.valorFinal : planoAtual?.valor;
 
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)', display: 'flex', flexDirection: 'column' }}>
@@ -147,6 +314,13 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
           Para acessar todas as funcionalidades da plataforma, escolha um plano abaixo.
         </p>
 
+        {numOperadores > 0 && (
+          <div style={{ marginBottom: '16px', padding: '10px 20px', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.35)', borderRadius: '8px', color: '#f1c40f', fontSize: '0.88rem', textAlign: 'center', maxWidth: '500px' }}>
+            Você tem <strong>{numOperadores}</strong> usuário{numOperadores > 1 ? 's' : ''} Operador{numOperadores > 1 ? 'es' : ''} ativo{numOperadores > 1 ? 's' : ''} — acréscimo de{' '}
+            <strong>{formatarMoeda(precoOperador * numOperadores)}/mês</strong> já incluído nos valores abaixo.
+          </div>
+        )}
+
         {assinaturaAtual && (
           <div style={{ marginBottom: '16px', padding: '10px 20px', background: 'rgba(231,76,60,0.15)', border: '1px solid rgba(231,76,60,0.4)', borderRadius: '8px', color: '#e74c3c', fontSize: '0.9rem' }}>
             {assinaturaAtual.status === 'expired' || (assinaturaAtual.expiraEm && new Date(assinaturaAtual.expiraEm) < new Date())
@@ -162,7 +336,7 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
         )}
 
         {/* Cards de planos */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', width: '100%', maxWidth: '860px', marginBottom: '28px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', width: '100%', maxWidth: '860px', marginBottom: '24px' }}>
           {planos.map((plano) => {
             const meta = PLANOS_LABEL[plano.key] || {};
             const selecionado = planoSelecionado === plano.key;
@@ -172,7 +346,7 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
             return (
               <div
                 key={plano.key}
-                onClick={() => setPlanoSelecionado(plano.key)}
+                onClick={() => selecionarPlano(plano.key)}
                 style={{
                   cursor: 'pointer',
                   borderRadius: '14px',
@@ -211,6 +385,86 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
           })}
         </div>
 
+        {/* Campo de cupom */}
+        <div style={{ width: '100%', maxWidth: '440px', marginBottom: '20px' }}>
+          {cupomAplicado ? (
+            <div style={{ padding: '12px 16px', background: 'rgba(39,174,96,0.15)', border: '1px solid rgba(39,174,96,0.4)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+              <div>
+                <div style={{ color: '#27ae60', fontWeight: 700, fontSize: '0.9rem' }}>
+                  Cupom <strong>{cupomAplicado.codigo}</strong> aplicado!
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.82rem', marginTop: '2px' }}>
+                  {descricaoCupom(cupomAplicado)}
+                  {cupomAplicado.descricao && ` — ${cupomAplicado.descricao}`}
+                </div>
+                {cupomAplicado.tipo !== 'dias_gratis' && (
+                  <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem', marginTop: '2px' }}>
+                    De {formatarMoeda(cupomAplicado.valorBase)} por{' '}
+                    <strong style={{ color: '#27ae60' }}>{formatarMoeda(cupomAplicado.valorFinal)}</strong>
+                  </div>
+                )}
+                {cupomAplicado.tipo === 'dias_gratis' && (
+                  <div style={{ color: '#27ae60', fontSize: '0.82rem', marginTop: '2px', fontWeight: 600 }}>
+                    Acesso gratuito por {cupomAplicado.diasGratis} dias — sem cobrança!
+                  </div>
+                )}
+              </div>
+              <button onClick={removerCupom} style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.6)', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                Remover
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                type="text"
+                value={cupomInput}
+                onChange={e => { setCupomInput(e.target.value.toUpperCase()); setCupomErro(''); }}
+                onKeyDown={e => e.key === 'Enter' && aplicarCupom()}
+                placeholder="Tem um cupom? Digite aqui"
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: cupomErro ? '1px solid rgba(231,76,60,0.6)' : '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.07)',
+                  color: '#fff',
+                  fontSize: '0.9rem',
+                  outline: 'none',
+                  letterSpacing: '0.05em',
+                }}
+              />
+              <button
+                onClick={aplicarCupom}
+                disabled={cupomValidando || !cupomInput.trim()}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: cupomInput.trim() ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)',
+                  color: cupomInput.trim() ? '#fff' : 'rgba(255,255,255,0.3)',
+                  cursor: cupomInput.trim() ? 'pointer' : 'not-allowed',
+                  fontSize: '0.88rem',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {cupomValidando ? '...' : 'Aplicar'}
+              </button>
+            </div>
+          )}
+          {cupomErro && (
+            <div style={{ marginTop: '6px', color: '#e74c3c', fontSize: '0.82rem' }}>{cupomErro}</div>
+          )}
+        </div>
+
+        {/* Resumo do valor com cupom */}
+        {cupomAplicado && planoSelecionado && cupomAplicado.tipo !== 'dias_gratis' && (
+          <div style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.6)', fontSize: '0.88rem', textAlign: 'center' }}>
+            Total com desconto:{' '}
+            <strong style={{ color: '#27ae60', fontSize: '1.1rem' }}>{formatarMoeda(cupomAplicado.valorFinal)}</strong>
+          </div>
+        )}
+
         {/* Botão de assinar */}
         <button
           onClick={assinar}
@@ -222,7 +476,11 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
             borderRadius: '10px',
             border: 'none',
             cursor: planoSelecionado ? 'pointer' : 'not-allowed',
-            background: planoSelecionado ? 'linear-gradient(135deg, #667eea, #764ba2)' : 'rgba(255,255,255,0.15)',
+            background: planoSelecionado
+              ? cupomAplicado?.tipo === 'dias_gratis'
+                ? 'linear-gradient(135deg, #27ae60, #2ecc71)'
+                : 'linear-gradient(135deg, #667eea, #764ba2)'
+              : 'rgba(255,255,255,0.15)',
             color: '#fff',
             transition: 'opacity 0.2s',
             opacity: planoSelecionado ? 1 : 0.6,
@@ -230,11 +488,17 @@ export default function TelaAssinatura({ onAssinaturaAtivada }) {
             minWidth: '260px',
           }}
         >
-          {processando ? 'Redirecionando...' : 'Pagar com MercadoPago →'}
+          {processando
+            ? 'Redirecionando...'
+            : cupomAplicado?.tipo === 'dias_gratis'
+              ? `Ativar ${cupomAplicado.diasGratis} dias grátis →`
+              : 'Pagar com MercadoPago →'}
         </button>
 
         <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.78rem', textAlign: 'center' }}>
-          Pagamento seguro processado pelo MercadoPago. Após confirmação, o acesso é liberado automaticamente.
+          {cupomAplicado?.tipo === 'dias_gratis'
+            ? 'Acesso liberado gratuitamente pelo cupom. Sem necessidade de pagamento.'
+            : 'Pagamento seguro processado pelo MercadoPago. Após confirmação, o acesso é liberado automaticamente.'}
         </p>
       </div>
     </div>

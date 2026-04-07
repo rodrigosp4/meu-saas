@@ -47,6 +47,67 @@ Este arquivo define regras e padrões que devem ser seguidos em **todas** as mod
 - Sub-usuários herdam dados do `parentUserId` — nunca quebrar essa herança
 - A impersonação (suporte impersonando cliente) usa flags `isImpersonating`, `targetUserId` no token JWT — não remover essas flags
 
+### Frontend — Controle de Acesso em Componentes (OBRIGATÓRIO)
+
+**Todo componente que renderiza botões de ação (criar, editar, excluir, sincronizar, ativar, pausar, aplicar, publicar, importar, etc.) DEVE protegê-los com `canUseResource`.**
+
+O papel VIEWER só pode visualizar dados — nunca acionar ações. O papel OPERATOR pode ter restrições granulares configuradas pelo OWNER. Botões desprotegidos violam ambos os casos.
+
+**Regra:** ao adicionar qualquer botão de ação em uma tela, envolva-o com o recurso correspondente de `RECURSOS_SISTEMA` (`src/constants/recursos.js`):
+
+```jsx
+import { useAuth } from '../contexts/AuthContext';
+
+export default function MeuComponente() {
+  const { canUseResource } = useAuth();
+
+  return (
+    <>
+      {/* Botão de visualização — sem guard, ok */}
+      <button onClick={verDetalhes}>Ver</button>
+
+      {/* Botão de ação — SEMPRE com guard */}
+      {canUseResource('modulo.acao') && (
+        <button onClick={salvar}>Salvar</button>
+      )}
+    </>
+  );
+}
+```
+
+**Mapeamento de recursos por tela** (consulte `src/constants/recursos.js` para lista completa):
+
+| Tela | Ação | Recurso |
+|---|---|---|
+| Produtos ERP (Anuncios) | Sincronizar com Tiny | `produtosErp.sincronizar` |
+| Produtos ERP (Anuncios) | Criar anúncio no ML | `produtosErp.anunciar` |
+| Gerenciador ML | Editar preço, campanhas, estoque, alterar produto | `gerenciadorML.editarPreco` |
+| Gerenciador ML | Pausar / ativar, Flex/Turbo | `gerenciadorML.pausar` |
+| Gerenciador ML | Sincronizar, importar | `gerenciadorML.sincronizar` |
+| Gerenciador ML | Excluir anúncio | `gerenciadorML.excluir` |
+| Catálogo | Criar/editar produto | `catalogo.criar` / `catalogo.editar` |
+| Catálogo | Excluir produto | `catalogo.excluir` |
+| Catálogo | Opt-in | `catalogo.optin` |
+| Compatibilidade | Salvar / renomear perfil | `compat.editarPerfil` |
+| Compatibilidade | Excluir perfil | `compat.excluirPerfil` |
+| Compatibilidade | Aplicar compatibilidade a anúncios | `compat.editarPerfil` |
+| Central de Promoções | Ativar / remover campanhas | `promocoes.aplicar` |
+| Monitor Concorrentes | Criar grupo | `monitor.criarGrupo` |
+| Monitor Concorrentes | Excluir grupo | `monitor.excluirGrupo` |
+| Monitor Concorrentes | Adicionar loja | `monitor.adicionarLoja` |
+| Fila | Retomar / reprocessar erros | `fila.reprocessar` |
+| Fila | Limpar histórico / forçar limpar | `fila.limpar` |
+| Cadastramento em Massa | Processar lote | `massa.gerar` |
+| Replicador | Replicar anúncio, gerenciar rascunhos | `replicador.replicar` |
+| Otimizador de Imagens | Aplicar imagens, ignorar item | `imagens.otimizar` |
+| Otimizador de Imagens | Remover fundo (RemoveBG) | `imagens.removerFundo` |
+
+**Ao criar uma nova tela ou novo recurso:**
+1. Adicione o módulo em `MODULOS` em `src/constants/recursos.js`
+2. Adicione os recursos granulares em `RECURSOS_SISTEMA` com `deps` corretos
+3. Registre a tela em `PERMISSIONS_BY_ROLE` no `AuthContext.jsx` (VIEWER só recebe se for só leitura)
+4. Proteja todos os botões de ação com `canUseResource` no componente
+
 ---
 
 ## Padrões de código obrigatórios

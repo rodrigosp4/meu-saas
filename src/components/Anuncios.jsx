@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { useContasML } from '../contexts/ContasMLContext';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── Parsers de planilha (CSV/XLS/XLSX) ─────────────────────────────────────
 function parseCsvLine(line) {
@@ -71,6 +72,7 @@ function extrairProdutosDaPlanilha(rows) {
 }
 
 export default function Anuncios({ onAnunciar, usuarioId }) {
+  const { canUseResource } = useAuth();
   const { erpConectado, nomeErp } = useContasML();
   const [produtos, setProdutos] = useState([]);
   const [totalProdutos, setTotalProdutos] = useState(0);
@@ -401,7 +403,8 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
               </div>
             )}
         </div>
-        <button 
+        {canUseResource('produtosErp.sincronizar') && (
+        <button
           onClick={() => {
             if (selectedTinyIds.size > 0) {
               if (window.confirm(`Deseja sincronizar os ${selectedTinyIds.size} produtos selecionados do ${nomeErp} ERP?`)) {
@@ -419,6 +422,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
         >
           {syncProgress !== null ? 'Sincronizando...' : selectedTinyIds.size > 0 ? `Sincronizar ${selectedTinyIds.size} Selecionado(s)` : `🔄 Sincronizar com ${nomeErp}`}
         </button>
+        )}
       </div>
 
       {/* ── Importar via Planilha ─────────────────────────────────────────── */}
@@ -575,19 +579,20 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-right text-sm font-medium" onClick={e => e.stopPropagation()}>
+                        {canUseResource('produtosErp.anunciar') && (
                         <button onClick={(e) => {
                             e.stopPropagation();
                             const idCorreto = produto.dadosTiny?.id || produto.idTiny;
                             if (!idCorreto) return alert("Erro: Produto sem ID do ERP salvo.");
-                            
+
                             onAnunciar({
-                              id: idCorreto, 
+                              id: idCorreto,
                               sku: produto.sku,
                               nome: produto.nome,
                               preco: produto.preco,
                               dadosTiny: produto.dadosTiny
                             });
-                          }} 
+                          }}
                           className="text-white px-3 py-1.5 rounded-md text-xs font-bold shadow-sm transition-colors"
                           style={{ backgroundColor: '#e67e22' }}
                           onMouseOver={e => e.target.style.backgroundColor = '#d35400'}
@@ -595,6 +600,7 @@ export default function Anuncios({ onAnunciar, usuarioId }) {
                         >
                           Criar Anúncio
                         </button>
+                        )}
                       </td>
                     </tr>
                     {isExpanded && (

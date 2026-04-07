@@ -313,6 +313,7 @@ router.get('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) =
     const config = await prisma.configAssinatura.findUnique({ where: { id: 'global' } });
     res.json({
       precoMensal: config?.precoMensal ?? 299,
+      precoOperador: config?.precoOperador ?? 50,
       mpAccessToken: config?.mpAccessToken ?? '',
       mpPublicKey: config?.mpPublicKey ?? '',
     });
@@ -324,12 +325,17 @@ router.get('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) =
 // PUT /api/admin/config-assinatura
 router.put('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) => {
   try {
-    const { precoMensal, mpAccessToken, mpPublicKey } = req.body;
+    const { precoMensal, precoOperador, mpAccessToken, mpPublicKey } = req.body;
     const data = {};
     if (precoMensal !== undefined) {
       const preco = parseFloat(precoMensal);
       if (isNaN(preco) || preco <= 0) return res.status(400).json({ erro: 'Preço inválido.' });
       data.precoMensal = preco;
+    }
+    if (precoOperador !== undefined) {
+      const preco = parseFloat(precoOperador);
+      if (isNaN(preco) || preco < 0) return res.status(400).json({ erro: 'Preço de operador inválido.' });
+      data.precoOperador = preco;
     }
     if (mpAccessToken !== undefined) data.mpAccessToken = mpAccessToken;
     if (mpPublicKey !== undefined) data.mpPublicKey = mpPublicKey;
@@ -337,9 +343,9 @@ router.put('/api/admin/config-assinatura', requireSuperAdmin, async (req, res) =
     const config = await prisma.configAssinatura.upsert({
       where: { id: 'global' },
       update: data,
-      create: { id: 'global', precoMensal: data.precoMensal ?? 299, ...data },
+      create: { id: 'global', precoMensal: data.precoMensal ?? 299, precoOperador: data.precoOperador ?? 50, ...data },
     });
-    res.json({ precoMensal: config.precoMensal, mpAccessToken: config.mpAccessToken, mpPublicKey: config.mpPublicKey });
+    res.json({ precoMensal: config.precoMensal, precoOperador: config.precoOperador, mpAccessToken: config.mpAccessToken, mpPublicKey: config.mpPublicKey });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
@@ -371,6 +377,173 @@ router.get('/api/admin/assinaturas', requireSuperAdmin, async (req, res) => {
       take: 200,
     });
     res.json(assinaturas);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── Cupons ────────────────────────────────────────────────────────────────────
+
+// GET /api/admin/cupons
+router.get('/api/admin/cupons', requireSuperAdmin, async (req, res) => {
+  try {
+    const cupons = await prisma.cupom.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { resgates: true } } },
+    });
+    res.json(cupons);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// POST /api/admin/cupons
+router.post('/api/admin/cupons', requireSuperAdmin, async (req, res) => {
+  try {
+    const { codigo, tipo, valor, usoMaximo, expiraEm, descricao } = req.body;
+
+    if (!codigo || !codigo.trim()) return res.status(400).json({ erro: 'Código é obrigatório.' });
+    if (!['percentual', 'fixo', 'dias_gratis'].includes(tipo)) return res.status(400).json({ erro: 'Tipo inválido.' });
+    if (valor === undefined || valor === null || isNaN(Number(valor)) || Number(valor) <= 0) {
+      return res.status(400).json({ erro: 'Valor inválido.' });
+    }
+    if (tipo === 'percentual' && Number(valor) > 100) {
+      return res.status(400).json({ erro: 'Percentual não pode ser maior que 100.' });
+    }
+
+    const cupom = await prisma.cupom.create({
+      data: {
+        codigo: codigo.trim().toUpperCase(),
+        tipo,
+        valor: Number(valor),
+        usoMaximo: usoMaximo ? Number(usoMaximo) : null,
+        expiraEm: expiraEm ? new Date(expiraEm) : null,
+        descricao: descricao?.trim() || null,
+      },
+    });
+    res.status(201).json(cupom);
+  } catch (err) {
+    if (err.code === 'P2002') return res.status(409).json({ erro: 'Já existe um cupom com este código.' });
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/cupons/:id
+router.put('/api/admin/cupons/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { ativo, usoMaximo, expiraEm, descricao } = req.body;
+    const data = {};
+    if (ativo !== undefined) data.ativo = ativo;
+    if (usoMaximo !== undefined) data.usoMaximo = usoMaximo === null ? null : Number(usoMaximo);
+    if (expiraEm !== undefined) data.expiraEm = expiraEm ? new Date(expiraEm) : null;
+    if (descricao !== undefined) data.descricao = descricao?.trim() || null;
+
+    const cupom = await prisma.cupom.update({ where: { id }, data });
+    res.json(cupom);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// DELETE /api/admin/cupons/:id
+router.delete('/api/admin/cupons/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.cupomResgate.deleteMany({ where: { cupomId: id } });
+    // Remove cupomId das assinaturas vinculadas antes de deletar
+    await prisma.assinatura.updateMany({ where: { cupomId: id }, data: { cupomId: null } });
+    await prisma.cupom.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── Banner de Notificações ────────────────────────────────────────────────────
+
+// GET /api/admin/banner/config — retorna config + mensagens
+router.get('/api/admin/banner/config', requireSuperAdmin, async (req, res) => {
+  try {
+    const [config, mensagens] = await Promise.all([
+      prisma.configBanner.upsert({
+        where: { id: 'global' },
+        update: {},
+        create: { id: 'global', visivel: false },
+      }),
+      prisma.bannerNotificacao.findMany({ orderBy: [{ ordem: 'asc' }, { createdAt: 'asc' }] }),
+    ]);
+    res.json({ visivel: config.visivel, mensagens });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/banner/config — atualiza visibilidade global
+router.put('/api/admin/banner/config', requireSuperAdmin, async (req, res) => {
+  try {
+    const { visivel } = req.body;
+    const config = await prisma.configBanner.upsert({
+      where: { id: 'global' },
+      update: { visivel: !!visivel },
+      create: { id: 'global', visivel: !!visivel },
+    });
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// POST /api/admin/banner/mensagens — cria mensagem
+router.post('/api/admin/banner/mensagens', requireSuperAdmin, async (req, res) => {
+  try {
+    const { texto, ordem } = req.body;
+    if (!texto?.trim()) return res.status(400).json({ erro: 'Texto obrigatório' });
+    const msg = await prisma.bannerNotificacao.create({
+      data: { texto: texto.trim(), ordem: ordem ?? 0, ativo: true },
+    });
+    res.status(201).json(msg);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/banner/mensagens/:id — edita mensagem
+router.put('/api/admin/banner/mensagens/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { texto, ativo, ordem } = req.body;
+    const data = {};
+    if (texto !== undefined) data.texto = texto.trim();
+    if (ativo !== undefined) data.ativo = !!ativo;
+    if (ordem !== undefined) data.ordem = Number(ordem);
+    const msg = await prisma.bannerNotificacao.update({ where: { id: req.params.id }, data });
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// DELETE /api/admin/banner/mensagens/:id — remove mensagem
+router.delete('/api/admin/banner/mensagens/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    await prisma.bannerNotificacao.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// GET /api/banner — endpoint para usuários (retorna mensagens ativas se banner visível)
+router.get('/api/banner', async (req, res) => {
+  try {
+    const config = await prisma.configBanner.findUnique({ where: { id: 'global' } });
+    if (!config?.visivel) return res.json({ visivel: false, mensagens: [] });
+    const mensagens = await prisma.bannerNotificacao.findMany({
+      where: { ativo: true },
+      orderBy: [{ ordem: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, texto: true },
+    });
+    res.json({ visivel: true, mensagens });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }

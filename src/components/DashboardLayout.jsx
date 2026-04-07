@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDraftManager } from '../hooks/useDraftManager';
+import BannerTicker from './BannerTicker.jsx';
 
 // ── Responsividade ─────────────────────────────────────────────────────────
 function useIsMobile(bp = 768) {
@@ -182,6 +183,13 @@ const icons = {
       <polyline points="17 6 23 6 23 12" />
     </svg>
   ),
+  chamados: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <line x1="9" y1="10" x2="15" y2="10" />
+      <line x1="9" y1="14" x2="13" y2="14" />
+    </svg>
+  ),
 };
 
 // ── Labels de página ───────────────────────────────────────────────────────
@@ -211,6 +219,7 @@ const pageTitles = {
   otimizadorImagens: 'Otimizador de Imagens',
   clienteAPI: 'Cliente API (ML & Tiny)',
   rascunhos: 'Rascunhos de Cadastro',
+  chamados: 'Chamados de Suporte',
 };
 
 // ── Componente principal ───────────────────────────────────────────────────
@@ -303,6 +312,7 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
     { id: 'clienteAPI',          label: 'Cliente API',            icon: icons.apiClient },
     { id: 'configuracoes',       label: 'Configurações API',      icon: icons.settings },
     { id: 'fila',                label: 'Gerenciador de Fila',    icon: icons.queue },
+    { id: 'chamados',            label: 'Chamados de Suporte',    icon: icons.chamados },
     ...(drafts.length > 0 ? [{ id: 'rascunhos', label: `Rascunhos (${drafts.length})`, icon: icons.draft }] : []),
   ];
 
@@ -551,6 +561,9 @@ export default function DashboardLayout({ children, setActivePage, activePage, o
           </button>
         </div>
       )}
+
+      {/* Banner de avisos do administrador */}
+      <BannerTicker isSuperAdmin={isSuperAdmin} impersonating={impersonating} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0, position: 'relative' }}>
 

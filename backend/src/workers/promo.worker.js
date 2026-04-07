@@ -24,8 +24,19 @@ export const promoWorker = new Worker('promo-queue', async (job) => {
 
   await prisma.tarefaFila.update({ where: { id: tarefaId }, data: { status: 'PROCESSANDO' } });
 
+  // Carrega gordura + excedente de todos os itens do job em uma única query
+  const itemIds = [...new Set(itens.map(i => i.itemId).filter(Boolean))];
+  const anunciosLimite = await prisma.anuncioML.findMany({
+    where: { id: { in: itemIds } },
+    select: { id: true, inflarPct: true, toleranciaPromo: true },
+  }).catch(() => []);
+  const limiteMap = Object.fromEntries(
+    anunciosLimite.map(a => [a.id, { inflarPct: a.inflarPct || 0, toleranciaPromo: a.toleranciaPromo || 0 }])
+  );
+
   let sucessos = 0;
   let falhas = 0;
+  let removidosPosVerificacao = 0;
   let detalhesLogs = [];
   let processedCount = 0;
   const contasCache = {};
@@ -102,6 +113,49 @@ export const promoWorker = new Worker('promo-queue', async (job) => {
       }
 
       sucessos++;
+
+      // ── Verificação pós-ativação ─────────────────────────────────────────────
+      // Consulta a API do ML para confirmar que o desconto efetivamente aplicado não excede
+      // a gordura + excedente definidos para o item. Só verifica tipos que usam deal_price.
+      const limiteItem = limiteMap[item.itemId];
+      if (acao === 'ATIVAR' && TIPOS_COM_PRECO.has(item.promoTipo) && limiteItem && limiteItem.inflarPct > 0) {
+        const limiteMax = limiteItem.inflarPct + limiteItem.toleranciaPromo;
+        try {
+          await new Promise(r => setTimeout(r, 300)); // aguarda ML processar
+          const checkRes = await axios.get(
+            `https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?app_version=v2`,
+            { headers, timeout: 8000 }
+          );
+          const promos = Array.isArray(checkRes.data) ? checkRes.data : (checkRes.data ? [checkRes.data] : []);
+          const promoData = item.promoId
+            ? promos.find(p => (p.id || p.promotion_id) === item.promoId)
+            : promos.find(p => (p.type || p.promotion_type) === item.promoTipo);
+
+          if (promoData) {
+            const appliedPrice = promoData.deal_price ?? promoData.price ?? null;
+            const origPrice = promoData.original_price ?? null;
+            if (appliedPrice && origPrice > 0) {
+              const pctAplicado = (1 - appliedPrice / origPrice) * 100;
+              if (pctAplicado > limiteMax) {
+                // Desconto efetivo ultrapassou gordura + excedente — remove a promoção
+                const delParams = new URLSearchParams({ promotion_type: item.promoTipo, app_version: 'v2' });
+                if (item.promoId) delParams.set('promotion_id', item.promoId);
+                await axios.delete(
+                  `https://api.mercadolibre.com/seller-promotions/items/${item.itemId}?${delParams}`,
+                  { headers }
+                );
+                logDesteItem += ` ⚠️ REMOVIDO pós-verificação: ${pctAplicado.toFixed(1)}% > limite ${limiteMax}% (gordura ${limiteItem.inflarPct}% + excedente ${limiteItem.toleranciaPromo}%)`;
+                sucessos--;
+                removidosPosVerificacao++;
+              }
+            }
+          }
+        } catch (checkErr) {
+          logDesteItem += ` [verificação pós-ativação falhou: ${checkErr.message}]`;
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────────
+
       detalhesLogs.push(logDesteItem);
     } catch (err) {
       const errMsg = err.response?.data?.message || err.response?.data?.cause?.[0]?.error_message || err.message || '';
@@ -147,15 +201,21 @@ export const promoWorker = new Worker('promo-queue', async (job) => {
     await new Promise(r => setTimeout(r, 400));
   }
 
+  const resumo = [
+    `✅ Ativados: ${sucessos}`,
+    falhas > 0 ? `❌ Erros: ${falhas}` : null,
+    removidosPosVerificacao > 0 ? `⚠️ Removidos pós-verificação (acima do limite): ${removidosPosVerificacao}` : null,
+  ].filter(Boolean).join('\n');
+
   await prisma.tarefaFila.update({
     where: { id: tarefaId },
     data: {
-      status: falhas === 0 ? 'CONCLUIDO' : (sucessos === 0 ? 'FALHA' : 'CONCLUIDO'),
-      detalhes: `Resumo:\n✅ Sucessos: ${sucessos}\n❌ Erros: ${falhas}\n\nLogs:\n${detalhesLogs.join('\n')}`
+      status: sucessos === 0 && falhas > 0 ? 'FALHA' : 'CONCLUIDO',
+      detalhes: `Resumo:\n${resumo}\n\nLogs:\n${detalhesLogs.join('\n')}`
     }
   });
 
-  return { sucessos, falhas };
+  return { sucessos, falhas, removidosPosVerificacao };
 }, { connection, concurrency: 1 });
 
 promoWorker.on('error', (err) => console.error('❌ Erro no Worker promo-queue:', err.message));

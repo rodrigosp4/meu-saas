@@ -732,8 +732,10 @@ async syncAds(req, res) {
         semSku = 'false',
         sortBy = 'padrao',
         priceCheckStatus = 'Todos', freteGratis = 'Todos', produtoFull = 'Todos', userId = '',
-        page = 1, limit = 50
+        page = 1, limit = 50,
+        palavrasExcluir: palavrasExcluirRaw = '',
       } = req.query;
+      const palavrasExcluir = palavrasExcluirRaw ? palavrasExcluirRaw.split(',').map(p => p.trim().toLowerCase()).filter(Boolean) : [];
       const skip = (Number(page) - 1) * Number(limit);
       
       const SORT_MAP = {
@@ -838,7 +840,8 @@ async syncAds(req, res) {
         promo === 'com_desconto' || prazo !== 'Todos' ||
         descontoMin !== '' || descontoMax !== '' ||
         freteGratis !== 'Todos' || produtoFull !== 'Todos' ||
-        sortBy === 'desconto_desc' || sortBy === 'desconto_asc';
+        sortBy === 'desconto_desc' || sortBy === 'desconto_asc' ||
+        palavrasExcluir.length > 0;
 
       let anuncios, total;
 
@@ -898,6 +901,13 @@ async syncAds(req, res) {
             const descA = (a.precoOriginal && a.precoOriginal > a.preco) ? ((a.precoOriginal - a.preco) / a.precoOriginal) : 0;
             const descB = (b.precoOriginal && b.precoOriginal > b.preco) ? ((b.precoOriginal - b.preco) / b.precoOriginal) : 0;
             return sortBy === 'desconto_desc' ? descB - descA : descA - descB;
+          });
+        }
+
+        if (palavrasExcluir.length > 0) {
+          anuncios = anuncios.filter(ad => {
+            const titulo = (ad.titulo || '').toLowerCase();
+            return !palavrasExcluir.some(p => titulo.includes(p));
           });
         }
 
@@ -1076,7 +1086,9 @@ async syncAds(req, res) {
         descontoMin = '', descontoMax = '', prazo = 'Todos',
         semSku = 'false',
         priceCheckStatus = 'Todos', freteGratis = 'Todos', produtoFull = 'Todos', userId = '',
+        palavrasExcluir: palavrasExcluirRaw2 = '',
       } = req.query;
+      const palavrasExcluirIds = palavrasExcluirRaw2 ? palavrasExcluirRaw2.split(',').map(p => p.trim().toLowerCase()).filter(Boolean) : [];
 
       const where = {};
       if (contasIds) where.contaId = { in: contasIds.split(',') };
@@ -1182,6 +1194,13 @@ async syncAds(req, res) {
         anunciosFiltrados = anunciosFiltrados.filter(ad => {
           const isFull = ad.dadosML?.shipping?.logistic_type === 'fulfillment';
           return produtoFull === 'sim' ? isFull : !isFull;
+        });
+      }
+
+      if (palavrasExcluirIds.length > 0) {
+        anunciosFiltrados = anunciosFiltrados.filter(ad => {
+          const titulo = (ad.titulo || '').toLowerCase();
+          return !palavrasExcluirIds.some(p => titulo.includes(p));
         });
       }
 

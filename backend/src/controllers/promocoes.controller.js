@@ -6,6 +6,24 @@ import { promoQueue } from '../workers/queue.js';
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Verifica se dealPrice viola o limite do item: gordura (inflarPct) + excedente (toleranciaPromo).
+// Só bloqueia se o item tiver gordura configurada (inflarPct > 0).
+// Retorna mensagem de erro ou null se estiver dentro do limite / sem dados suficientes.
+async function verificarLimiteDescontoItem(itemId, dealPrice, originalPrice) {
+  if (dealPrice == null || !originalPrice || originalPrice <= 0) return null;
+  const anuncio = await prisma.anuncioML.findFirst({
+    where: { id: itemId },
+    select: { inflarPct: true, toleranciaPromo: true },
+  });
+  if (!anuncio || (anuncio.inflarPct || 0) === 0) return null; // sem gordura definida, não bloqueia
+  const limiteItem = (anuncio.inflarPct || 0) + (anuncio.toleranciaPromo || 0);
+  const pct = (1 - parseFloat(dealPrice) / parseFloat(originalPrice)) * 100;
+  if (pct > limiteItem) {
+    return `Desconto de ${pct.toFixed(1)}% excede o limite do item (gordura ${anuncio.inflarPct}% + excedente ${anuncio.toleranciaPromo}% = ${limiteItem}%)`;
+  }
+  return null;
+}
+
 async function refreshContaToken(conta) {
   try {
     const res = await axios.post('https://api.mercadolibre.com/oauth/token', new URLSearchParams({
@@ -436,6 +454,14 @@ export const promocoesController = {
       const conta = await prisma.contaML.findFirst({ where: { id: contaId, userId } });
       if (!conta) return res.status(404).json({ erro: 'Conta não encontrada' });
 
+      // Verifica se dealPrice ultrapassa a gordura + excedente definidos por item
+      if (dealPrice != null) {
+        const promoRecord = await prisma.promoML.findFirst({ where: { id: promoId, contaId } });
+        const itemData = Array.isArray(promoRecord?.itens) ? promoRecord.itens.find(i => i.id === itemId) : null;
+        const erroLimite = await verificarLimiteDescontoItem(itemId, dealPrice, itemData?.original_price);
+        if (erroLimite) return res.status(400).json({ erro: erroLimite });
+      }
+
       const token = await refreshContaToken(conta);
       const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
@@ -571,23 +597,63 @@ export const promocoesController = {
         return res.status(400).json({ erro: 'userId e array de itens são obrigatórios' });
       }
 
+      // Filtra itens que violam gordura + excedente definidos por item (somente ATIVAR com dealPrice)
+      let itensFiltrados = itens;
+      let bloqueados = 0;
+      if (acao === 'ATIVAR') {
+        const itemIdsComPreco = itens.filter(i => i.dealPrice != null).map(i => i.itemId);
+        if (itemIdsComPreco.length > 0) {
+          const anuncios = await prisma.anuncioML.findMany({
+            where: { id: { in: itemIdsComPreco } },
+            select: { id: true, inflarPct: true, toleranciaPromo: true },
+          });
+          const anuncioMap = Object.fromEntries(anuncios.map(a => [a.id, a]));
+
+          const promoIds = [...new Set(itens.map(i => i.promoId).filter(Boolean))];
+          const promos = await prisma.promoML.findMany({ where: { id: { in: promoIds } } });
+          const promoItensMap = {};
+          for (const p of promos) {
+            if (Array.isArray(p.itens)) {
+              for (const it of p.itens) promoItensMap[`${p.id}:${it.id}`] = it;
+            }
+          }
+
+          itensFiltrados = itens.filter(item => {
+            if (item.dealPrice == null) return true;
+            const anuncio = anuncioMap[item.itemId];
+            if (!anuncio || (anuncio.inflarPct || 0) === 0) return true; // sem gordura, não bloqueia
+            const limiteItem = (anuncio.inflarPct || 0) + (anuncio.toleranciaPromo || 0);
+            const promoData = promoItensMap[`${item.promoId}:${item.itemId}`];
+            const originalPrice = promoData?.original_price;
+            if (!originalPrice || originalPrice <= 0) return true; // sem preço original, não bloqueia
+            const pct = (1 - item.dealPrice / originalPrice) * 100;
+            if (pct > limiteItem) { bloqueados++; return false; }
+            return true;
+          });
+        }
+      }
+
+      if (itensFiltrados.length === 0 && bloqueados > 0) {
+        return res.status(400).json({ erro: `Todos os ${bloqueados} item(ns) bloqueados: desconto excede a gordura + excedente definidos.` });
+      }
+
       const tarefa = await prisma.tarefaFila.create({
         data: {
           userId,
           tipo: acao === 'ATIVAR' ? 'PROMO_ATIVAR' : 'PROMO_REMOVER',
           status: 'PENDENTE',
-          detalhes: `Aguardando processamento de ${itens.length} itens...`,
+          detalhes: `Aguardando processamento de ${itensFiltrados.length} itens...${bloqueados > 0 ? ` (${bloqueados} bloqueado(s) pelo limite global)` : ''}`,
         },
       });
 
       await promoQueue.add('processar-massa', {
         tarefaId: tarefa.id,
         userId,
-        itens,
+        itens: itensFiltrados,
         acao
       }, { removeOnComplete: true, removeOnFail: true });
 
-      res.json({ ok: true, tarefaId: tarefa.id, message: 'Enviado para a fila de processamento.' });
+      res.json({ ok: true, tarefaId: tarefa.id, bloqueados, message: `Enviado para a fila de processamento.${bloqueados > 0 ? ` ${bloqueados} item(ns) bloqueado(s) pelo limite global de desconto.` : ''}` });
     } catch (err) {
       console.error(err);
       res.status(500).json({ erro: 'Erro ao enviar para fila', detalhes: err.message });
@@ -1014,10 +1080,17 @@ export const promocoesController = {
   async saveMonitorConfig(req, res) {
     try {
       const { userId, ativo, maxSellerPct, autoAtivar, tiposIgnorar, usarDescontoDinamico } = req.body;
+      const data = {
+        ativo: ativo ?? true,
+        maxSellerPct: maxSellerPct ?? 20,
+        autoAtivar: autoAtivar ?? false,
+        tiposIgnorar: tiposIgnorar ?? [],
+        usarDescontoDinamico: usarDescontoDinamico ?? false,
+      };
       const config = await prisma.monitorPromoConfig.upsert({
         where: { userId },
-        create: { userId, ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [], usarDescontoDinamico: usarDescontoDinamico ?? false },
-        update: { ativo: ativo ?? true, maxSellerPct: maxSellerPct ?? 20, autoAtivar: autoAtivar ?? false, tiposIgnorar: tiposIgnorar ?? [], usarDescontoDinamico: usarDescontoDinamico ?? false },
+        create: { userId, ...data },
+        update: data,
       });
       res.json({ ok: true, config });
     } catch (err) {

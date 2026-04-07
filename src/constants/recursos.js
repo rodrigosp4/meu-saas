@@ -19,6 +19,7 @@ export const MODULOS = [
   { id: 'corretorPrecoPlanilha',label: 'Corretor de Preço (Planilha)' },
   { id: 'planejadorProductAds', label: 'Planejador de Product Ads' },
   { id: 'concorrenciaPreco',    label: 'Concorrência de Preço' },
+  { id: 'chamados',             label: 'Chamados de Suporte' },
 ];
 
 // Recursos granulares (ações dentro dos módulos)
@@ -87,6 +88,10 @@ export const RECURSOS_SISTEMA = [
   { id: 'config.integracoes',        label: 'Configurar Imgur / Remove.bg',       grupo: 'Configurações',         modulo: 'configuracoes',      deps: [] },
   { id: 'config.subUsuarios',        label: 'Gerenciar sub-usuários',             grupo: 'Configurações',         modulo: 'configuracoes',      deps: [] },
   { id: 'config.suporte',            label: 'Gerenciar acesso de suporte',        grupo: 'Configurações',         modulo: 'configuracoes',      deps: [] },
+
+  // ── Chamados ─────────────────────────────────────────────────────────────────
+  { id: 'chamados.visualizar',       label: 'Visualizar chamados',                grupo: 'Chamados',              modulo: 'chamados',           deps: [] },
+  { id: 'chamados.criar',            label: 'Abrir novo chamado',                 grupo: 'Chamados',              modulo: 'chamados',           deps: ['chamados.visualizar'] },
 ];
 
 /**

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 // Detecta atributos obrigatórios faltando no texto do log
 function extrairAtributosObrigatorios(texto) {
@@ -201,6 +202,7 @@ function ReprocessForm({ usuarioId, tarefaId, erros, onClose, onReprocessed }) {
 }
 
 function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '' }) {
+  const { canUseResource } = useAuth();
   const [detalhes, setDetalhes] = useState(tarefa.detalhes || '');
   const [status, setStatus] = useState(tarefa.status);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -337,7 +339,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
             )}
           </div>
           <div className="flex items-center gap-2">
-            {(status === 'PROCESSANDO' || status === 'PENDENTE') && tarefa.payload && (
+            {canUseResource('fila.reprocessar') && (status === 'PROCESSANDO' || status === 'PENDENTE') && tarefa.payload && (
               <button
                 onClick={retomar}
                 disabled={retomando}
@@ -347,7 +349,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
                 {retomando ? '...' : '▶ Retomar'}
               </button>
             )}
-            {acoesErros > 0 && status !== 'PROCESSANDO' && (
+            {canUseResource('fila.reprocessar') && acoesErros > 0 && status !== 'PROCESSANDO' && (
               <button
                 onClick={retentarAcoes}
                 disabled={retentando}
@@ -356,7 +358,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
                 {retentando ? '...' : `↺ Tentar de Novo (${acoesErros})`}
               </button>
             )}
-            {!isAcoesTarefa && erros > 0 && status !== 'PROCESSANDO' && (
+            {canUseResource('fila.reprocessar') && !isAcoesTarefa && erros > 0 && status !== 'PROCESSANDO' && (
               <button
                 onClick={reprocessarErros}
                 className="text-xs px-3 py-1 bg-orange-600 text-white rounded hover:bg-orange-500 transition font-semibold"
@@ -475,6 +477,7 @@ function LogModal({ tarefa, usuarioId, onClose, onReprocessed, initialSearch = '
 }
 
 export default function GerenciadorFila({ usuarioId }) {
+  const { canUseResource } = useAuth();
   const [tarefas, setTarefas] = useState([]);
   const [total, setTotal] = useState(0);
   const [filtroStatus, setFiltroStatus] = useState('Todos');
@@ -606,12 +609,16 @@ export default function GerenciadorFila({ usuarioId }) {
               <option value="FALHA">Falhas</option>
             </select>
           </div>
+          {canUseResource('fila.limpar') && (
           <button onClick={limparFila} className="px-4 py-2 bg-gray-200 text-gray-800 font-bold rounded hover:bg-gray-300 transition text-sm">
             Limpar Histórico
           </button>
+          )}
+          {canUseResource('fila.limpar') && (
           <button onClick={forcarLimparFila} className="px-4 py-2 bg-red-100 text-red-700 font-bold rounded hover:bg-red-200 transition text-sm border border-red-300">
             Forçar Limpar Fila
           </button>
+          )}
         </div>
       </div>
 

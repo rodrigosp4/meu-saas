@@ -1398,14 +1398,19 @@ function AbaEmails() {
   async function enviarTeste() {
     if (!emailTeste) return alert('Informe um e-mail de destino.');
     setEnviandoTeste(true);
-    const r = await fetch(`/api/admin/email-templates/${editando.id}/preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ para: emailTeste }),
-    });
-    setEnviandoTeste(false);
-    if (r.ok) alert('E-mail de teste enviado!');
-    else { const d = await r.json(); alert(d.erro || 'Erro ao enviar.'); }
+    try {
+      const r = await fetch(`/api/admin/email-templates/${editando.id}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ para: emailTeste }),
+      });
+      if (r.ok) alert('E-mail de teste enviado!');
+      else { const d = await r.json(); alert(d.erro || 'Erro ao enviar.'); }
+    } catch (e) {
+      alert('Erro de conexão ao enviar e-mail de teste.');
+    } finally {
+      setEnviandoTeste(false);
+    }
   }
 
   const corHeader = { 'welcome': '#7c3aed', 'reset-password': '#d97706', 'password-changed': '#059669' };

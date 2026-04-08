@@ -969,7 +969,7 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
   // --- UI ---
   const [carregando, setCarregando] = useState(false);
   const [camposCarregados, setCamposCarregados] = useState(false);
-  const [statusMsg, setStatusMsg] = useState({ text: 'Selecione uma conta ML e carregue os campos de veículo para começar.', type: 'info' });
+  const [statusMsg, setStatusMsg] = useState({ text: 'Carregue os campos de veículo para começar.', type: 'info' });
 
   const setStatus = useCallback((text, type = 'info') => setStatusMsg({ text, type }), []);
   const getContaAtiva = useCallback(() => contasML.find(c => c.id === contaSelecionada), [contasML, contaSelecionada]);
@@ -990,10 +990,7 @@ export default function CompatibilidadeAutopecas({ usuarioId }) {
   // 1. CARREGAR CONFIG DO DOMÍNIO + PRIMEIRO ATRIBUTO
   // =================================================================
   const handleCarregarCamposVeiculo = async () => {
-    if (!contaSelecionada || !usuarioId) {
-      setStatus('Selecione uma conta ML primeiro.', 'warning');
-      return;
-    }
+    if (!contaSelecionada || !usuarioId) return;
     setCarregando(true);
     setStatus('Carregando campos de veículo via API...', 'info');
     setCamposCarregados(false);

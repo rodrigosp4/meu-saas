@@ -203,6 +203,7 @@ function LinkButton({ children, onClick }) {
 export default function Login({ onLogin, initialToken, onShowLanding }) {
   const [mode, setMode] = useState(initialToken ? 'reset' : 'login');
   const [email, setEmail] = useState('');
+  const [nome, setNome] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [cupom, setCupom] = useState('');
@@ -241,7 +242,7 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
     try {
       const res = await fetch('/api/register', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, nome: nome.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.erro);
@@ -448,6 +449,8 @@ export default function Login({ onLogin, initialToken, onShowLanding }) {
 
             {mode === 'register' && (
               <form onSubmit={handleRegister}>
+                <InputField label="Nome completo" type="text" value={nome} onChange={setNome}
+                  placeholder="Seu nome completo" icon="👤" />
                 <InputField label="E-mail" type="email" value={email} onChange={setEmail}
                   placeholder="seu@email.com" icon="✉" />
                 <InputField label="Senha" type="password" value={password} onChange={setPassword}

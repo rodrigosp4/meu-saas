@@ -27,7 +27,7 @@ function gerarToken(user, sessionId) {
 
 // 1. REGISTRAR
 router.post('/api/register', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, nome } = req.body;
 
   if (!email || !password || password.length < 6) {
     return res.status(400).json({ erro: 'E-mail e senha (mínimo 6 caracteres) são obrigatórios.' });
@@ -52,6 +52,7 @@ router.post('/api/register', async (req, res) => {
     const user = await prisma.user.create({
       data: {
         email,
+        nome: nome?.trim() || null,
         senha: hash,
         featureFlags: defaultFeatureFlags,
         resourceFlags: defaultResourceFlags,
@@ -100,6 +101,7 @@ router.post('/api/login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
+        nome: user.nome || null,
         role: user.role,
         parentUserId: user.parentUserId,
         tinyConectado: !!user.tinyAccessToken,
@@ -195,6 +197,7 @@ router.get('/api/usuario/:id/config', async (req, res) => {
     }));
 
     res.json({
+      nome: user.nome || null,
       tinyConectado: !!user.tinyAccessToken,
       tinyPlano: user.tinyPlano || 'descontinuado',
       tinyClientId: user.tinyClientId || null,
@@ -217,7 +220,23 @@ router.get('/api/usuario/:id/config', async (req, res) => {
 });
 
 
-// 5b. SALVAR REGRA POR CONTA ML
+// 5b. ATUALIZAR PERFIL (nome)
+router.put('/api/usuario/perfil', async (req, res) => {
+  try {
+    const { nome } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório.' });
+    const updated = await prisma.user.update({
+      where: { id: req.userId },
+      data: { nome: nome.trim() },
+      select: { nome: true },
+    });
+    res.json({ nome: updated.nome });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// 5c. SALVAR REGRA POR CONTA ML
 router.post('/api/usuario/:id/contas-ml/regras', async (req, res) => {
   try {
     const userId = req.userId;

@@ -261,6 +261,8 @@ router.post('/api/assinatura/criar-preferencia', async (req, res) => {
       return res.json({ gratis: true, assinaturaId: assinatura.id });
     }
 
+    const userEmail = await prisma.user.findUnique({ where: { id: userPai.id }, select: { email: true, nome: true } });
+
     const mpClient = await getMPClient();
     const preference = new Preference(mpClient);
 
@@ -269,11 +271,21 @@ router.post('/api/assinatura/criar-preferencia', async (req, res) => {
     const result = await preference.create({
       body: {
         items: [{
-          title: `Assinatura ${plano.label} - SaaS ML`,
+          id: `assinatura-${planoKey}`,
+          title: `Assinatura ${plano.label} - MeliUnlocker`,
+          description: `Acesso à plataforma MeliUnlocker por ${plano.dias} dias`,
+          category_id: 'services',
           quantity: 1,
           unit_price: valor,
           currency_id: 'BRL',
         }],
+        payer: {
+          email: userEmail?.email || '',
+          ...(userEmail?.nome ? (() => {
+            const parts = userEmail.nome.trim().split(/\s+/);
+            return { first_name: parts[0], last_name: parts.slice(1).join(' ') || parts[0] };
+          })() : {}),
+        },
         back_urls: {
           success: `${frontendUrl}/?assinatura=success`,
           failure: `${frontendUrl}/?assinatura=failure`,
@@ -461,7 +473,7 @@ router.post('/api/assinatura/verificar-pagamento', async (req, res) => {
         const expiraEm = new Date(agora.getTime() + plano.dias * 24 * 60 * 60 * 1000);
 
         await prisma.assinatura.updateMany({
-          where: { userId: pUserId, status: { not: 'approved' } },
+          where: { userId: pUserId, mpPreferenceId: payment.preference_id, status: { not: 'approved' } },
           data: { status: 'approved', mpPaymentId: String(payment.id), iniciaEm: agora, expiraEm },
         });
 

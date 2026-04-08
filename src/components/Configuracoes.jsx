@@ -76,6 +76,10 @@ export default function Configuracoes({ usuarioId }) {
   const [salvandoSuporteToggle, setSalvandoSuporteToggle] = useState(false);
   const [abaConfig, setAbaConfig] = useState('integracoes');
 
+  // ===== PERFIL =====
+  const [nomeUsuario, setNomeUsuario] = useState('');
+  const [salvandoNome, setSalvandoNome] = useState(false);
+
 // 1. CARREGA TUDO DO BANCO DE DADOS
   const carregarConfig = (id) => {
     // O Date.now() impede que a Vercel entregue dados cacheados (antigos)
@@ -118,6 +122,7 @@ export default function Configuracoes({ usuarioId }) {
           setRemoveBgApiKey(data.removeBgApiKey);
           setRemoveBgSalvo(true);
         }
+        if (data.nome) setNomeUsuario(data.nome);
       });
   };
 
@@ -775,6 +780,51 @@ export default function Configuracoes({ usuarioId }) {
 
       {/* ===== ABA: INTEGRAÇÕES & APIs ===== */}
       {abaConfig === 'integracoes' && <>
+
+      {/* 0. PERFIL */}
+      <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>
+        <h4 className="text-lg font-bold" style={{ color: c.orange }}>Perfil</h4>
+        <p className="text-xs mt-1 mb-4" style={{ color: c.muted }}>
+          Seu nome é utilizado no processamento de pagamentos para melhorar a taxa de aprovação.
+        </p>
+        <div className="flex gap-3 items-end flex-wrap">
+          <div className="flex-1 min-w-48">
+            <label className="block text-xs font-semibold mb-1" style={{ color: c.muted }}>Nome completo</label>
+            <input
+              type="text"
+              placeholder="Seu nome completo"
+              value={nomeUsuario}
+              onChange={e => setNomeUsuario(e.target.value)}
+              className="w-full px-3 py-2 border rounded-md text-sm"
+              style={{ borderColor: c.border }}
+            />
+          </div>
+          <button
+            onClick={async () => {
+              if (!nomeUsuario.trim()) return alert('Informe seu nome.');
+              setSalvandoNome(true);
+              try {
+                const res = await fetch('/api/usuario/perfil', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ nome: nomeUsuario.trim() }),
+                });
+                if (!res.ok) throw new Error((await res.json()).erro);
+                alert('Nome salvo com sucesso!');
+              } catch (err) {
+                alert('Erro ao salvar nome: ' + err.message);
+              } finally {
+                setSalvandoNome(false);
+              }
+            }}
+            disabled={salvandoNome}
+            className="px-4 py-2 rounded-md text-sm font-semibold text-white"
+            style={{ backgroundColor: c.orange, opacity: salvandoNome ? 0.7 : 1 }}
+          >
+            {salvandoNome ? 'Salvando...' : 'Salvar nome'}
+          </button>
+        </div>
+      </div>
 
       {/* 1. TINY ERP */}
       <div className="p-6 rounded-lg shadow-sm" style={{ backgroundColor: c.cardBg, border: `1px solid ${c.border}` }}>

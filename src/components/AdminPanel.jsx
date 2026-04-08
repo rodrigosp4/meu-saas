@@ -1407,7 +1407,7 @@ function AbaEmails() {
       if (r.ok) alert('E-mail de teste enviado!');
       else { const d = await r.json(); alert(d.erro || 'Erro ao enviar.'); }
     } catch (e) {
-      alert('Erro de conexão ao enviar e-mail de teste.');
+      alert('Erro: ' + (e.message || e));
     } finally {
       setEnviandoTeste(false);
     }

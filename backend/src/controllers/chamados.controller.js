@@ -1,4 +1,5 @@
 import prisma from '../config/prisma.js';
+import { enviarEmail } from '../services/email.service.js';
 
 const MAX_ANEXO_BYTES = 5 * 1024 * 1024; // 5 MB por arquivo (base64 ~33% overhead)
 const MAX_ANEXOS_POR_MSG = 3;
@@ -143,7 +144,10 @@ const responder = async (req, res) => {
   if (erroAnexo) return res.status(400).json({ erro: erroAnexo });
 
   try {
-    const chamado = await prisma.chamado.findUnique({ where: { id } });
+    const chamado = await prisma.chamado.findUnique({
+      where: { id },
+      include: { usuario: { select: { email: true } } },
+    });
     if (!chamado) return res.status(404).json({ erro: 'Chamado não encontrado' });
 
     const isAdmin = role === 'SUPER_ADMIN';
@@ -178,6 +182,20 @@ const responder = async (req, res) => {
         data: { status: novoStatus },
       }),
     ]);
+
+    // Notifica o cliente por email quando o admin responde
+    if (isAdmin && chamado.usuario?.email) {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const snippet = conteudo.trim().slice(0, 400) + (conteudo.trim().length > 400 ? '...' : '');
+      enviarEmail('ticket-resposta', chamado.usuario.email, {
+        nome: chamado.usuario.email,
+        email: chamado.usuario.email,
+        numero: chamado.numero,
+        titulo: chamado.titulo,
+        mensagem: snippet,
+        link: frontendUrl,
+      }).catch(err => console.error('[email] Erro ao notificar resposta de chamado:', err.message));
+    }
 
     return res.json(mensagemCriada);
   } catch (err) {

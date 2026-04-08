@@ -1170,7 +1170,12 @@ function SecaoChamados() {
                 onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: '#2c3e50', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.titulo}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+                    <span style={{ fontSize: '0.72em', fontWeight: 700, color: '#7c3aed', background: '#f5f3ff', borderRadius: '4px', padding: '1px 6px', whiteSpace: 'nowrap' }}>
+                      #{c.numero ?? c.id.slice(0, 8)}
+                    </span>
+                    <span style={{ fontWeight: 600, color: '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.titulo}</span>
+                  </div>
                   <div style={{ fontSize: '0.78em', color: '#95a5a6' }}>{c.usuario?.email} · {c._count.mensagens} msg · {formatData(c.atualizadoEm)}</div>
                 </div>
                 <span style={{ padding: '2px 9px', borderRadius: '11px', fontSize: '0.76em', fontWeight: 600, color: si.color, background: si.bg, whiteSpace: 'nowrap' }}>{si.label}</span>
@@ -1348,6 +1353,201 @@ function SecaoLandingPage() {
   );
 }
 
+// ── Aba de E-mails ─────────────────────────────────────────────────────────────
+function AbaEmails() {
+  const [templates, setTemplates] = useState([]);
+  const [editando, setEditando] = useState(null); // { id, nome, assunto, corpo, ativo }
+  const [salvando, setSalvando] = useState(false);
+  const [enviandoTeste, setEnviandoTeste] = useState(false);
+  const [emailTeste, setEmailTeste] = useState('');
+  const [previewAberto, setPreviewAberto] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => { carregar(); }, []);
+
+  async function carregar() {
+    const r = await fetch('/api/admin/email-templates');
+    if (r.ok) setTemplates(await r.json());
+  }
+
+  async function salvar() {
+    setSalvando(true);
+    setMsg(null);
+    const r = await fetch(`/api/admin/email-templates/${editando.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assunto: editando.assunto, corpo: editando.corpo, ativo: editando.ativo }),
+    });
+    setSalvando(false);
+    if (r.ok) {
+      setMsg({ tipo: 'ok', texto: 'Template salvo com sucesso!' });
+      await carregar();
+    } else {
+      const d = await r.json();
+      setMsg({ tipo: 'erro', texto: d.erro || 'Erro ao salvar.' });
+    }
+  }
+
+  async function restaurar(id) {
+    if (!confirm('Restaurar o template padrão? O template personalizado será perdido.')) return;
+    await fetch(`/api/admin/email-templates/${id}`, { method: 'DELETE' });
+    await carregar();
+    if (editando?.id === id) setEditando(null);
+  }
+
+  async function enviarTeste() {
+    if (!emailTeste) return alert('Informe um e-mail de destino.');
+    setEnviandoTeste(true);
+    const r = await fetch(`/api/admin/email-templates/${editando.id}/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ para: emailTeste }),
+    });
+    setEnviandoTeste(false);
+    if (r.ok) alert('E-mail de teste enviado!');
+    else { const d = await r.json(); alert(d.erro || 'Erro ao enviar.'); }
+  }
+
+  const corHeader = { 'welcome': '#7c3aed', 'reset-password': '#d97706', 'password-changed': '#059669' };
+  const iconHeader = { 'welcome': '👋', 'reset-password': '🔐', 'password-changed': '✅' };
+
+  return (
+    <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: editando ? '260px 1fr' : '1fr', gap: '20px' }}>
+      {/* Lista de templates */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {templates.map(t => (
+          <div key={t.id} onClick={() => { setEditando({ ...t }); setMsg(null); setPreviewAberto(false); }}
+            style={{
+              border: `2px solid ${editando?.id === t.id ? corHeader[t.id] || '#7c3aed' : '#e5e7eb'}`,
+              borderRadius: '10px', padding: '16px', cursor: 'pointer', background: '#fff',
+              boxShadow: editando?.id === t.id ? `0 0 0 2px ${(corHeader[t.id] || '#7c3aed')}22` : 'none',
+              transition: 'all .15s',
+            }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <span style={{ fontSize: '20px' }}>{iconHeader[t.id]}</span>
+              <span style={{ fontWeight: 700, fontSize: '0.95em', color: '#1e1b4b' }}>{t.nome}</span>
+              {t.personalizado && (
+                <span style={{ marginLeft: 'auto', fontSize: '11px', background: '#ede9fe', color: '#7c3aed', borderRadius: '4px', padding: '2px 7px', fontWeight: 600 }}>
+                  Personalizado
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {t.assunto}
+            </div>
+            <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {(t.variaveis || []).map(v => (
+                <span key={v} style={{ fontSize: '11px', background: '#f3f4f6', color: '#374151', borderRadius: '4px', padding: '1px 6px' }}>
+                  {`{{${v}}}`}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Editor */}
+      {editando && (
+        <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+          {/* Header do editor */}
+          <div style={{
+            background: `linear-gradient(135deg,${corHeader[editando.id] || '#7c3aed'},${corHeader[editando.id] || '#7c3aed'}cc)`,
+            padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{ color: '#fff', fontWeight: 700, fontSize: '1em' }}>
+              {iconHeader[editando.id]} Editando: {editando.nome}
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {editando.personalizado && (
+                <button onClick={() => restaurar(editando.id)}
+                  style={{ padding: '5px 12px', background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                  Restaurar padrão
+                </button>
+              )}
+              <button onClick={() => setEditando(null)}
+                style={{ padding: '5px 12px', background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                ✕ Fechar
+              </button>
+            </div>
+          </div>
+
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {msg && (
+              <div style={{ background: msg.tipo === 'ok' ? '#ecfdf5' : '#fef2f2', border: `1px solid ${msg.tipo === 'ok' ? '#6ee7b7' : '#fecaca'}`, borderRadius: '6px', padding: '10px 14px', fontSize: '13px', color: msg.tipo === 'ok' ? '#065f46' : '#991b1b' }}>
+                {msg.texto}
+              </div>
+            )}
+
+            {/* Assunto */}
+            <div>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '5px' }}>Assunto do e-mail</label>
+              <input value={editando.assunto} onChange={e => setEditando(p => ({ ...p, assunto: e.target.value }))}
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+            </div>
+
+            {/* Abas HTML / Preview */}
+            <div>
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <button onClick={() => setPreviewAberto(false)}
+                  style={{ padding: '5px 14px', background: !previewAberto ? '#7c3aed' : '#f3f4f6', color: !previewAberto ? '#fff' : '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                  HTML
+                </button>
+                <button onClick={() => setPreviewAberto(true)}
+                  style={{ padding: '5px 14px', background: previewAberto ? '#7c3aed' : '#f3f4f6', color: previewAberto ? '#fff' : '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                  Preview
+                </button>
+              </div>
+
+              {!previewAberto ? (
+                <textarea value={editando.corpo} onChange={e => setEditando(p => ({ ...p, corpo: e.target.value }))}
+                  style={{ width: '100%', height: '420px', padding: '12px', border: '1px solid #d1d5db', borderRadius: '6px', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.5', resize: 'vertical', outline: 'none', boxSizing: 'border-box', background: '#1e1b4b', color: '#e9d5ff' }} />
+              ) : (
+                <iframe srcDoc={editando.corpo} style={{ width: '100%', height: '420px', border: '1px solid #d1d5db', borderRadius: '6px' }} title="Preview do e-mail" />
+              )}
+
+              <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: 600 }}>Variáveis:</span>
+                {(editando.variaveis || []).map(v => (
+                  <span key={v} onClick={() => navigator.clipboard?.writeText(`{{${v}}}`)}
+                    title="Clique para copiar"
+                    style={{ fontSize: '11px', background: '#ede9fe', color: '#7c3aed', borderRadius: '4px', padding: '2px 7px', cursor: 'pointer', userSelect: 'none' }}>
+                    {`{{${v}}}`}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Envio de teste */}
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>Enviar e-mail de teste</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input type="email" placeholder="destinatario@exemplo.com" value={emailTeste} onChange={e => setEmailTeste(e.target.value)}
+                  style={{ flex: 1, padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', outline: 'none' }} />
+                <button onClick={enviarTeste} disabled={enviandoTeste}
+                  style={{ padding: '7px 16px', background: '#374151', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                  {enviandoTeste ? 'Enviando...' : 'Enviar teste'}
+                </button>
+              </div>
+            </div>
+
+            {/* Botões de ação */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={() => setEditando(null)}
+                style={{ padding: '8px 20px', background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', borderRadius: '7px', cursor: 'pointer', fontWeight: 600 }}>
+                Cancelar
+              </button>
+              <button onClick={salvar} disabled={salvando}
+                style={{ padding: '8px 24px', background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: '#fff', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 700, fontSize: '14px' }}>
+                {salvando ? 'Salvando...' : 'Salvar template'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Wrapper do DetalheChamado importado do Chamados.jsx para uso no AdminPanel
 function AdminDetalheChamado({ chamadoId, onVoltar, onAtualizado }) {
   const [Comp, setComp] = useState(null);
@@ -1494,6 +1694,7 @@ export default function AdminPanel({ setActivePage }) {
         <button style={abaMainStyle('assinaturas')} onClick={() => setAbaMain('assinaturas')}>Assinaturas</button>
         <button style={abaMainStyle('cupons')} onClick={() => setAbaMain('cupons')}>Cupons</button>
         <button style={abaMainStyle('banner')} onClick={() => setAbaMain('banner')}>Banner</button>
+        <button style={abaMainStyle('emails')} onClick={() => setAbaMain('emails')}>E-mails</button>
         <button style={abaMainStyle('chamados')} onClick={() => setAbaMain('chamados')}>Chamados</button>
         <button style={abaMainStyle('padroes')} onClick={() => setAbaMain('padroes')}>Padrões por Tipo</button>
         <button style={abaMainStyle('landing')} onClick={() => setAbaMain('landing')}>Landing Page</button>
@@ -1618,6 +1819,17 @@ export default function AdminPanel({ setActivePage }) {
             <strong>Como funciona:</strong> Os módulos e recursos configurados aqui como <em>bloqueados</em> serão aplicados automaticamente a cada novo cliente que se cadastrar na plataforma. Clientes já existentes não são afetados.
           </div>
           <SecaoPadroes />
+        </div>
+      )}
+
+      {/* ── ABA: E-MAILS ── */}
+      {abaMain === 'emails' && (
+        <div style={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+          <div style={{ padding: '14px 20px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: '1em', color: '#2c3e50' }}>Templates de E-mail</span>
+            <span style={{ fontSize: '0.8em', color: '#95a5a6' }}>Edite os templates enviados automaticamente pelo sistema</span>
+          </div>
+          <AbaEmails />
         </div>
       )}
 

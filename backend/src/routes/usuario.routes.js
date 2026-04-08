@@ -2,38 +2,27 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import nodemailer from 'nodemailer';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import prisma from '../config/prisma.js';
+import { enviarEmail } from '../services/email.service.js';
 
 const router = Router();
 
 const INVITE_CODE = '4x4@Gama';
-const JWT_SECRET = process.env.JWT_SECRET || 'changeme_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES = '7d';
 
-function gerarToken(user) {
+function gerarToken(user, sessionId) {
   return jwt.sign(
     {
       userId: user.id,
       role: user.role,
       parentUserId: user.parentUserId || null,
+      sessionId,
     },
     JWT_SECRET,
     { expiresIn: JWT_EXPIRES }
   );
-}
-
-function createMailTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
 }
 
 // 1. REGISTRAR
@@ -69,6 +58,12 @@ router.post('/api/register', async (req, res) => {
       },
     });
 
+    // Envia e-mail de boas-vindas (não bloqueia o cadastro em caso de falha)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    enviarEmail('welcome', email, { nome: email, email, link: frontendUrl }).catch(err =>
+      console.error('[email] Erro ao enviar boas-vindas:', err.message)
+    );
+
     res.status(201).json({ id: user.id, email: user.email });
   } catch (error) {
     res.status(500).json({ erro: error.message });
@@ -94,7 +89,11 @@ router.post('/api/login', async (req, res) => {
 
     if (!valid) return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
 
-    const token = gerarToken(user);
+    // Gera novo sessionId — invalida qualquer sessão ativa em outro dispositivo
+    const sessionId = crypto.randomUUID();
+    await prisma.user.update({ where: { id: user.id }, data: { activeSessionId: sessionId } });
+
+    const token = gerarToken(user, sessionId);
 
     res.json({
       token,
@@ -133,18 +132,7 @@ router.post('/api/forgot-password', async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}?resetToken=${token}`;
 
-    const transporter = createMailTransporter();
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
-      to: email,
-      subject: 'Redefinição de senha',
-      html: `
-        <p>Você solicitou a redefinição de senha.</p>
-        <p>Clique no link abaixo para criar uma nova senha (válido por 1 hora):</p>
-        <a href="${resetLink}">${resetLink}</a>
-        <p>Se não foi você, ignore este e-mail.</p>
-      `,
-    });
+    await enviarEmail('reset-password', email, { nome: email, email, link: resetLink });
 
     res.json({ mensagem: 'Se o e-mail estiver cadastrado, você receberá as instruções.' });
   } catch (error) {
@@ -174,6 +162,11 @@ router.post('/api/reset-password', async (req, res) => {
       where: { id: user.id },
       data: { senha: hash, passwordResetToken: null, passwordResetExpires: null },
     });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    enviarEmail('password-changed', user.email, {
+      nome: user.email, email: user.email, link: frontendUrl,
+    }).catch(err => console.error('[email] Erro ao enviar notificação de senha alterada:', err.message));
 
     res.json({ mensagem: 'Senha redefinida com sucesso.' });
   } catch (error) {
@@ -315,9 +308,12 @@ router.post('/api/usuario/:id/contas-ml', async (req, res) => {
 // 8. EXCLUIR CONTA ML
 router.delete('/api/usuario/:id/contas-ml/:contaId', async (req, res) => {
   try {
-    await prisma.contaML.delete({ where: { id: req.params.contaId } });
+    const deleted = await prisma.contaML.deleteMany({
+      where: { id: req.params.contaId, userId: req.userId }
+    });
+    if (deleted.count === 0) return res.status(404).json({ erro: 'Conta não encontrada.' });
     res.json({ success: true });
-  } catch (error) { res.status(500).json({ erro: error.message }); }
+  } catch (error) { res.status(500).json({ erro: 'Erro ao excluir conta.' }); }
 });
 
 // 9. SALVAR/ATUALIZAR REGRA
@@ -327,7 +323,7 @@ router.post('/api/usuario/:id/regras', async (req, res) => {
     const { id, nome, precoBase, variaveis, variacoesPorConta } = req.body;
     const regraId = id || undefined;
 
-    const existe = regraId ? await prisma.regraPreco.findUnique({ where: { id: regraId } }) : null;
+    const existe = regraId ? await prisma.regraPreco.findFirst({ where: { id: regraId, userId: req.userId } }) : null;
 
     if (existe) {
       const regra = await prisma.regraPreco.update({
@@ -349,9 +345,12 @@ router.post('/api/usuario/:id/regras', async (req, res) => {
 // 10. EXCLUIR REGRA
 router.delete('/api/usuario/:id/regras/:regraId', async (req, res) => {
   try {
-    await prisma.regraPreco.delete({ where: { id: req.params.regraId } });
+    const deleted = await prisma.regraPreco.deleteMany({
+      where: { id: req.params.regraId, userId: req.userId }
+    });
+    if (deleted.count === 0) return res.status(404).json({ erro: 'Regra não encontrada.' });
     res.json({ success: true });
-  } catch (error) { res.status(500).json({ erro: error.message }); }
+  } catch (error) { res.status(500).json({ erro: 'Erro ao excluir regra.' }); }
 });
 
 // 11. BUSCAR CONFIG DE ATACADO

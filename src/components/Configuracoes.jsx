@@ -133,10 +133,7 @@ export default function Configuracoes({ usuarioId }) {
 
   const desconectarTiny = async () => {
     if (!window.confirm('Deseja desconectar a conta Tiny?')) return;
-    await fetch('/api/tiny/disconnect', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: usuarioId })
-    });
+    await fetch('/api/tiny/disconnect', { method: 'DELETE' });
     setTinyConectado(false);
     setErpAtivo(null);
   };
@@ -172,10 +169,7 @@ export default function Configuracoes({ usuarioId }) {
 
   const desconectarBling = async () => {
     if (!window.confirm('Deseja desconectar a conta Bling?')) return;
-    await fetch('/api/bling/disconnect', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: usuarioId })
-    });
+    await fetch('/api/bling/disconnect', { method: 'DELETE' });
     setBlingConectado(false);
     setErpAtivo(null);
   };

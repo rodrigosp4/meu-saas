@@ -1,4 +1,10 @@
 import jwt from 'jsonwebtoken';
+import prisma from '../config/prisma.js';
+
+if (!process.env.JWT_SECRET) {
+  console.error('[FATAL] JWT_SECRET não está definido. O servidor não pode iniciar sem ele.');
+  process.exit(1);
+}
 
 const PUBLIC_ROUTES = [
   { method: 'POST', path: '/api/login' },
@@ -16,7 +22,7 @@ const PUBLIC_ROUTES = [
   { method: 'GET',  path: '/api/landing/secoes' },
 ];
 
-export function authMiddleware(req, res, next) {
+export async function authMiddleware(req, res, next) {
   const isPublic = PUBLIC_ROUTES.some(
     (r) => r.method === req.method && req.path.startsWith(r.path)
   );
@@ -29,7 +35,7 @@ export function authMiddleware(req, res, next) {
 
   const token = authHeader.slice(7);
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'changeme_secret');
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
 
     // Se for impersonação (suporte ou super_admin acessando conta de cliente)
     if (payload.isImpersonating && payload.targetUserId) {
@@ -40,6 +46,20 @@ export function authMiddleware(req, res, next) {
       req.isImpersonating = true;
       req.isSuperAdminImpersonating = payload.isSuperAdminImpersonating || false;
     } else {
+      // Sessão normal: valida se o sessionId do token ainda é o ativo no banco
+      if (payload.sessionId) {
+        const userRecord = await prisma.user.findUnique({
+          where: { id: payload.userId },
+          select: { activeSessionId: true },
+        });
+        if (!userRecord || userRecord.activeSessionId !== payload.sessionId) {
+          return res.status(401).json({
+            erro: 'Sessão encerrada. Você entrou em outro dispositivo.',
+            codigo: 'SESSION_EXPIRED',
+          });
+        }
+      }
+
       // Sub-usuário: usa dados do usuário pai (dono)
       req.userId = payload.parentUserId || payload.userId;
       req.actualUserId = payload.userId;

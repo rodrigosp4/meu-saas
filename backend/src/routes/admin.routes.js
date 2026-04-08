@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { cronQueue } from '../workers/queue.js';
+import { listarTemplates, salvarTemplate, restaurarTemplate, enviarEmail } from '../services/email.service.js';
 
 const prisma = new PrismaClient();
 const router = Router();
@@ -170,7 +171,7 @@ router.post('/api/admin/impersonar/:userId', requireSuperAdmin, async (req, res)
         targetUserId: userId,
         sessaoId: sessao.id,
       },
-      process.env.JWT_SECRET || 'changeme_secret',
+      process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
 
@@ -544,6 +545,55 @@ router.get('/api/banner', async (req, res) => {
       select: { id: true, texto: true },
     });
     res.json({ visivel: true, mensagens });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── Templates de E-mail ───────────────────────────────────────────────────────
+
+// GET /api/admin/email-templates
+router.get('/api/admin/email-templates', requireSuperAdmin, async (req, res) => {
+  try {
+    const templates = await listarTemplates();
+    res.json(templates);
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// PUT /api/admin/email-templates/:id
+router.put('/api/admin/email-templates/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { assunto, corpo, ativo } = req.body;
+    if (!assunto || !corpo) return res.status(400).json({ erro: 'assunto e corpo são obrigatórios.' });
+    const template = await salvarTemplate(req.params.id, { assunto, corpo, ativo: ativo !== false });
+    res.json(template);
+  } catch (err) {
+    res.status(400).json({ erro: err.message });
+  }
+});
+
+// DELETE /api/admin/email-templates/:id  — restaura para o padrão
+router.delete('/api/admin/email-templates/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    await restaurarTemplate(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// POST /api/admin/email-templates/:id/preview — envia e-mail de teste
+router.post('/api/admin/email-templates/:id/preview', requireSuperAdmin, async (req, res) => {
+  try {
+    const { para } = req.body;
+    if (!para) return res.status(400).json({ erro: 'Informe o e-mail de destino.' });
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    await enviarEmail(req.params.id, para, {
+      nome: para, email: para, link: frontendUrl,
+    });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }

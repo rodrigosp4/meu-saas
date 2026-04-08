@@ -39,6 +39,7 @@ model User {
   createdAt            DateTime                @default(now())
   passwordResetToken   String?
   passwordResetExpires DateTime?
+  activeSessionId      String?
   // Controle de usuários
   role                 UserRole                @default(OWNER)
   ativo                Boolean                 @default(true)
@@ -465,6 +466,7 @@ enum ChamadoStatus {
 
 model Chamado {
   id           String          @id @default(uuid())
+  numero       Int             @unique @default(autoincrement())
   titulo       String
   userId       String
   status       ChamadoStatus   @default(ABERTO)
@@ -570,6 +572,17 @@ model ArtigoAjuda {
   @@index([categoriaId])
   @@index([publicado])
   @@index([parentId])
+}
+
+// ── E-mail Templates ──────────────────────────────────────────────────────────
+
+model EmailTemplate {
+  id        String   @id   // 'welcome' | 'reset-password' | 'password-changed'
+  nome      String
+  assunto   String
+  corpo     String   @db.Text
+  ativo     Boolean  @default(true)
+  updatedAt DateTime @updatedAt
 }
 
 // ── Landing Page ──────────────────────────────────────────────────────────────

@@ -278,7 +278,7 @@ function DetalheChamado({ chamadoId, onVoltar, onAtualizado, isAdmin }) {
                 {chamado.usuario.email}
               </span>
             )}
-            <span style={{ fontSize: '0.8em', color: '#aaa' }}>#{chamado.id.slice(0, 8)}</span>
+            <span style={{ fontSize: '0.8em', color: '#aaa' }}>#{chamado.numero ?? chamado.id.slice(0, 8)}</span>
           </div>
         </div>
         {/* Ações de status */}
@@ -470,8 +470,13 @@ export default function Chamados() {
                 onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: '#2c3e50', marginBottom: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {c.titulo}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+                    <span style={{ fontSize: '0.75em', fontWeight: 700, color: '#7c3aed', background: '#f5f3ff', borderRadius: '4px', padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                      #{c.numero ?? c.id.slice(0, 8)}
+                    </span>
+                    <span style={{ fontWeight: 600, color: '#2c3e50', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {c.titulo}
+                    </span>
                   </div>
                   <div style={{ fontSize: '0.8em', color: '#95a5a6' }}>
                     {c._count.mensagens} mensagem(ns) · Atualizado {formatData(c.atualizadoEm)}

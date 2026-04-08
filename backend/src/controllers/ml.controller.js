@@ -1,6 +1,7 @@
 import { mlService } from '../services/ml.service.js';
 import { config } from '../config/env.js';
 import prisma from '../config/prisma.js';
+import { Prisma } from '@prisma/client';
 import { mlSyncQueue, publishQueue, priceQueue, priceCheckQueue, acoesMassaQueue } from '../workers/queue.js';
 import axios from 'axios';
 import { getTinyAccessToken, createTinyClient, listarProdutos, obterProduto } from '../utils/tinyClient.js';
@@ -1029,32 +1030,46 @@ async syncAds(req, res) {
   async getAdTags(req, res) {
     try {
       const { contasIds } = req.query;
-      
-      // Monta a condição de conta como AND adicional (ou string vazia)
-      let contaCondition = '';
+
+      let tagsResult, semTagResult;
+
       if (contasIds) {
-        const ids = contasIds.split(',').map(id => `'${id}'`).join(',');
-        contaCondition = `AND "contaId" IN (${ids})`;
+        // Valida cada ID: apenas dígitos são aceitos (IDs de conta ML são numéricos)
+        const ids = contasIds.split(',').map(id => id.trim()).filter(id => /^\d+$/.test(id));
+        if (ids.length === 0) return res.json({ tags: [], semTagCount: 0 });
+
+        tagsResult = await prisma.$queryRaw`
+          SELECT "tagPrincipal" as tag, COUNT(*)::int as total
+          FROM "AnuncioML"
+          WHERE "tagPrincipal" IS NOT NULL
+            AND "tagPrincipal" != ''
+            AND "contaId" IN (${Prisma.join(ids)})
+          GROUP BY "tagPrincipal"
+          ORDER BY total DESC
+        `;
+
+        semTagResult = await prisma.$queryRaw`
+          SELECT COUNT(*)::int as total
+          FROM "AnuncioML"
+          WHERE ("tagPrincipal" IS NULL OR "tagPrincipal" = '')
+            AND "contaId" IN (${Prisma.join(ids)})
+        `;
+      } else {
+        tagsResult = await prisma.$queryRaw`
+          SELECT "tagPrincipal" as tag, COUNT(*)::int as total
+          FROM "AnuncioML"
+          WHERE "tagPrincipal" IS NOT NULL
+            AND "tagPrincipal" != ''
+          GROUP BY "tagPrincipal"
+          ORDER BY total DESC
+        `;
+
+        semTagResult = await prisma.$queryRaw`
+          SELECT COUNT(*)::int as total
+          FROM "AnuncioML"
+          WHERE ("tagPrincipal" IS NULL OR "tagPrincipal" = '')
+        `;
       }
-
-      // Consulta direta no PostgreSQL para extrair as tags únicas do campo tagPrincipal
-      const tagsResult = await prisma.$queryRawUnsafe(`
-        SELECT "tagPrincipal" as tag, COUNT(*)::int as total
-        FROM "AnuncioML"
-        WHERE "tagPrincipal" IS NOT NULL 
-          AND "tagPrincipal" != ''
-          ${contaCondition}
-        GROUP BY "tagPrincipal"
-        ORDER BY total DESC
-      `);
-
-      // Conta os anúncios SEM tag de problema
-      const semTagResult = await prisma.$queryRawUnsafe(`
-        SELECT COUNT(*)::int as total
-        FROM "AnuncioML"
-        WHERE ("tagPrincipal" IS NULL OR "tagPrincipal" = '')
-          ${contaCondition}
-      `);
 
       const tags = tagsResult.map(row => ({
         value: row.tag,
@@ -1066,8 +1081,8 @@ async syncAds(req, res) {
 
       res.json({ tags, semTagCount });
     } catch (error) {
-      console.error("Erro ao buscar tags:", error);
-      res.status(500).json({ erro: error.message });
+      console.error("Erro ao buscar tags:", error.message);
+      res.status(500).json({ erro: 'Erro ao buscar tags' });
     }
   },
 

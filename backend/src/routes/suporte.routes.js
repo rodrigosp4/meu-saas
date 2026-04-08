@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../config/prisma.js';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'changeme_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Listar clientes que autorizaram acesso de suporte
 router.get('/api/suporte/clientes', async (req, res) => {

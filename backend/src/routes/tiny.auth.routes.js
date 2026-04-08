@@ -95,8 +95,7 @@ router.get('/api/tiny/callback', async (req, res) => {
 // Desconecta a conta Tiny do usuário
 // DELETE /api/tiny/disconnect
 router.delete('/api/tiny/disconnect', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ erro: 'userId obrigatório.' });
+  const userId = req.userId;
 
   await prisma.user.update({
     where: { id: userId },
@@ -107,10 +106,9 @@ router.delete('/api/tiny/disconnect', async (req, res) => {
 });
 
 // Status da conexão Tiny
-// GET /api/tiny/status?userId=xxx
+// GET /api/tiny/status
 router.get('/api/tiny/status', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ erro: 'userId obrigatório.' });
+  const userId = req.userId;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },

@@ -105,8 +105,7 @@ router.get('/api/bling/callback', async (req, res) => {
 // Desconecta a conta Bling do usuário
 // DELETE /api/bling/disconnect
 router.delete('/api/bling/disconnect', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ erro: 'userId obrigatório.' });
+  const userId = req.userId;
 
   await prisma.user.update({
     where: { id: userId },
@@ -122,10 +121,9 @@ router.delete('/api/bling/disconnect', async (req, res) => {
 });
 
 // Status da conexão Bling
-// GET /api/bling/status?userId=xxx
+// GET /api/bling/status
 router.get('/api/bling/status', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ erro: 'userId obrigatório.' });
+  const userId = req.userId;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },

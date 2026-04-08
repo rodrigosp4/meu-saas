@@ -89,6 +89,16 @@ export function AuthProvider({ children }) {
         if (response.status === 401 &&
             !url.includes('/api/login') && !url.includes('/api/register') &&
             !url.includes('/api/forgot-password') && !url.includes('/api/reset-password')) {
+          const clone = response.clone();
+          clone.json().then(data => {
+            if (data?.codigo === 'SESSION_EXPIRED') {
+              const key = 'session_expired_alert';
+              if (!sessionStorage.getItem(key)) {
+                sessionStorage.setItem(key, '1');
+                alert('Sua sessão foi encerrada porque você entrou em outro dispositivo ou navegador. Faça login novamente.');
+              }
+            }
+          }).catch(() => {});
           setAuth(null);
           setImpersonatingState(null);
           localStorage.removeItem('saas_auth');
@@ -189,8 +199,8 @@ export function AuthProvider({ children }) {
     const authData = { user: userData, token };
     setAuth(authData);
     localStorage.setItem('saas_auth', JSON.stringify(authData));
-    // Legado: manter saas_usuario para compatibilidade
-    localStorage.setItem('saas_usuario', JSON.stringify({ id: userData.id, email: userData.email, tinyToken: userData.tinyToken }));
+    // Legado: manter saas_usuario para compatibilidade (sem credenciais sensíveis)
+    localStorage.setItem('saas_usuario', JSON.stringify({ id: userData.id, email: userData.email }));
   }, []);
 
   const logout = useCallback(() => {

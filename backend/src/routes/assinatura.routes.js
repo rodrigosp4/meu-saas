@@ -350,6 +350,10 @@ router.post('/api/assinatura/webhook', async (req, res) => {
 
     if (status === 'approved') {
       const plano = PLANOS[planoKey];
+      if (!plano) {
+        console.error(`[assinatura] planoKey inválido no webhook: ${planoKey}`);
+        return res.sendStatus(200);
+      }
       const agora = new Date();
       const expiraEm = new Date(agora.getTime() + plano.dias * 24 * 60 * 60 * 1000);
 

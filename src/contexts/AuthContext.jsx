@@ -203,6 +203,15 @@ export function AuthProvider({ children }) {
     localStorage.setItem('saas_usuario', JSON.stringify({ id: userData.id, email: userData.email }));
   }, []);
 
+  const updateUser = useCallback((fields) => {
+    setAuth(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, user: { ...prev.user, ...fields } };
+      localStorage.setItem('saas_auth', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const logout = useCallback(() => {
     setAuth(null);
     setImpersonatingState(null);
@@ -244,6 +253,7 @@ export function AuthProvider({ children }) {
         canAccess,
         canUseResource,
         isLoggedIn: !!auth,
+        updateUser,
         role: auth?.user?.role || null,
         assinaturaAtiva,
         assinaturaVerificada,

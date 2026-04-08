@@ -32,9 +32,11 @@ import ConcorrenciaPreco from './components/ConcorrenciaPreco.jsx';
 import Chamados from './components/Chamados.jsx';
 import Reclamacoes from './components/Reclamacoes.jsx';
 import CentralAjuda from './components/CentralAjuda.jsx';
+import ModalNome from './components/ModalNome.jsx';
 
 function App() {
-  const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura } = useAuth();
+  const { isLoggedIn, usuarioAtual, login, logout, stopImpersonating, canAccess, impersonating, role, assinaturaAtiva, assinaturaVerificada, recarregarAssinatura, auth } = useAuth();
+  const [modalNomeVisible, setModalNomeVisible] = useState(false);
 
   const [activePage, setActivePage] = useState(() => {
     const redirectPage = localStorage.getItem('redirect_to_page');
@@ -66,6 +68,13 @@ function App() {
       setActivePage('home');
     }
   }, [isLoggedIn, activePage, canAccess]);
+
+  // Mostrar popup de nome na primeira vez que o usuário loga sem nome
+  useEffect(() => {
+    if (isLoggedIn && !impersonating && !auth?.user?.nome) {
+      setModalNomeVisible(true);
+    }
+  }, [isLoggedIn, impersonating, auth?.user?.nome]);
 
   const resetToken = new URLSearchParams(window.location.search).get('resetToken');
   const [showLogin, setShowLogin] = useState(!!resetToken);
@@ -118,6 +127,10 @@ function App() {
   const uid = usuarioAtual?.id;
 
   return (
+    <>
+    {modalNomeVisible && (
+      <ModalNome onClose={() => setModalNomeVisible(false)} />
+    )}
     <DashboardLayout
       activePage={activePage}
       setActivePage={setActivePage}
@@ -170,6 +183,7 @@ function App() {
       {canAccess('centralAjuda') && activePage === 'centralAjuda' && <CentralAjuda />}
       {activePage === 'rascunhos' && <PainelRascunhos setActivePage={setActivePage} setProdutoParaAnunciar={setProdutoParaAnunciar} usuarioId={uid} />}
     </DashboardLayout>
+    </>
   );
 }
 

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npx prisma generate --schema=./prisma/schema.prisma && vite build",
-    "start": "node backend/src/server.js",
+    "start": "npx prisma migrate deploy && node backend/src/server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "node backend/src/server.js",

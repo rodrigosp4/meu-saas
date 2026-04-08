@@ -13,6 +13,7 @@ const PUBLIC_ROUTES = [
   { method: 'GET',  path: '/api/bling/connect' },
   { method: 'POST', path: '/api/assinatura/webhook' },
   { method: 'GET',  path: '/api/assinatura/planos' },
+  { method: 'GET',  path: '/api/landing/secoes' },
 ];
 
 export function authMiddleware(req, res, next) {

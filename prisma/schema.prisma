@@ -571,3 +571,14 @@ model ArtigoAjuda {
   @@index([publicado])
   @@index([parentId])
 }
+
+// ── Landing Page ──────────────────────────────────────────────────────────────
+
+model LandingPageSecao {
+  id        String   @id @default(uuid())
+  chave     String   @unique
+  titulo    String
+  tipo      String   @default("json")
+  conteudo  String
+  updatedAt DateTime @updatedAt
+}

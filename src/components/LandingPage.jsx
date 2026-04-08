@@ -1138,8 +1138,34 @@ function Footer() {
   );
 }
 
+// ── Bloco de conteúdo extra editável pelo admin ───────────────────────────
+function ExtraHtml({ html }) {
+  if (!html || !html.trim()) return null;
+  return (
+    <div style={{ background: '#07111f', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '48px 24px' }}
+        className="landing-html-content"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  );
+}
+
 // ── Componente principal ───────────────────────────────────────────────────
 export default function LandingPage({ onLoginClick }) {
+  const [extra, setExtra] = useState({});
+
+  useEffect(() => {
+    fetch('/api/landing/secoes')
+      .then(r => r.ok ? r.json() : [])
+      .then(secoes => {
+        const mapa = {};
+        secoes.forEach(s => { if (s.customizada) mapa[s.chave] = s.conteudo; });
+        setExtra(mapa);
+      })
+      .catch(() => {});
+  }, []);
+
   const irParaPlanos = useCallback(() => {
     const el = document.getElementById('pricing');
     if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -1153,12 +1179,19 @@ export default function LandingPage({ onLoginClick }) {
     }}>
       <NavBar onLoginClick={onLoginClick} onAssinarClick={irParaPlanos} />
       <HeroSection onLoginClick={onLoginClick} />
+      <ExtraHtml html={extra.hero} />
       <IntegracaoSection />
+      <ExtraHtml html={extra.integracoes} />
       <FeaturesSection />
+      <ExtraHtml html={extra.features} />
       <HowItWorksSection />
+      <ExtraHtml html={extra.steps} />
       <PricingSection onAssinarClick={onLoginClick} />
+      <ExtraHtml html={extra.plano_vantagens} />
       <CTASection onLoginClick={onLoginClick} />
+      <ExtraHtml html={extra.cta} />
       <Footer />
+      <ExtraHtml html={extra.footer} />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import EditorWysiwyg from './EditorWysiwyg.jsx';
 import { useAuth } from '../contexts/AuthContext';
 import { MODULOS, RECURSOS_SISTEMA, expandirDependencias } from '../constants/recursos';
 
@@ -1183,6 +1184,170 @@ function SecaoChamados() {
   );
 }
 
+// ── Seção Landing Page (Admin) ────────────────────────────────────────────────
+function SecaoLandingPage() {
+  const [secoes, setSecoes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [secaoSelecionada, setSecaoSelecionada] = useState(null);
+  const [conteudoEditado, setConteudoEditado] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const carregar = () => {
+    setLoading(true);
+    fetch('/api/landing/secoes')
+      .then(r => r.json())
+      .then(d => {
+        if (Array.isArray(d)) {
+          setSecoes(d);
+          if (!secaoSelecionada && d.length > 0) {
+            setSecaoSelecionada(d[0]);
+            setConteudoEditado(d[0].conteudo);
+          }
+        }
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { carregar(); }, []);
+
+  const selecionarSecao = (s) => {
+    setSecaoSelecionada(s);
+    setConteudoEditado(s.conteudo);
+    setMsg(null);
+  };
+
+  const salvar = async () => {
+    if (!secaoSelecionada) return;
+    setSalvando(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/landing/secoes/${secaoSelecionada.chave}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conteudo: conteudoEditado }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.erro || 'Erro ao salvar');
+      setMsg({ tipo: 'ok', texto: 'Salvo! As mudanças já estão visíveis na landing page.' });
+      setSecoes(prev => prev.map(s => s.chave === secaoSelecionada.chave ? { ...s, conteudo: conteudoEditado, customizada: true } : s));
+      setSecaoSelecionada(prev => ({ ...prev, conteudo: conteudoEditado, customizada: true }));
+    } catch (e) {
+      setMsg({ tipo: 'erro', texto: e.message });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const resetar = async () => {
+    if (!secaoSelecionada) return;
+    if (!window.confirm(`Resetar "${secaoSelecionada.titulo}" para o conteúdo padrão?`)) return;
+    setSalvando(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/landing/secoes/${secaoSelecionada.chave}/resetar`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.erro || 'Erro ao resetar');
+      setConteudoEditado(d.conteudo);
+      setSecoes(prev => prev.map(s => s.chave === secaoSelecionada.chave ? { ...s, conteudo: d.conteudo, customizada: false } : s));
+      setSecaoSelecionada(prev => ({ ...prev, conteudo: d.conteudo, customizada: false }));
+      setMsg({ tipo: 'ok', texto: 'Resetado para o padrão.' });
+    } catch (e) {
+      setMsg({ tipo: 'erro', texto: e.message });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const ICONES = {
+    hero: '🦸',
+    features: '✨',
+    integracoes: '🔗',
+    steps: '👣',
+    plano_vantagens: '💎',
+    cta: '📣',
+    footer: '🦶',
+  };
+
+  if (loading) return <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>Carregando...</div>;
+
+  return (
+    <div style={{ display: 'flex', minHeight: 600 }}>
+      {/* ── Sidebar de seções ── */}
+      <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid #e9ecef' }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0', fontWeight: 700, fontSize: '0.88em', color: '#34495e' }}>
+          Seções da Landing Page
+        </div>
+        {secoes.map(s => (
+          <div
+            key={s.chave}
+            onClick={() => selecionarSecao(s)}
+            style={{
+              padding: '10px 16px', cursor: 'pointer',
+              background: secaoSelecionada?.chave === s.chave ? '#eaf4fb' : 'transparent',
+              borderLeft: secaoSelecionada?.chave === s.chave ? '3px solid #3498db' : '3px solid transparent',
+              transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 8,
+            }}
+            onMouseEnter={e => { if (secaoSelecionada?.chave !== s.chave) e.currentTarget.style.background = '#f8f9fa'; }}
+            onMouseLeave={e => { if (secaoSelecionada?.chave !== s.chave) e.currentTarget.style.background = 'transparent'; }}
+          >
+            <span style={{ fontSize: '1.1em' }}>{ICONES[s.chave] || '📄'}</span>
+            <div>
+              <div style={{ fontSize: '0.84em', fontWeight: 600, color: '#2c3e50' }}>{s.titulo}</div>
+              {s.customizada && <div style={{ fontSize: '0.7em', color: '#27ae60', marginTop: 1 }}>● customizada</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Área de edição ── */}
+      <div style={{ flex: 1, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {!secaoSelecionada ? (
+          <div style={{ textAlign: 'center', color: '#bbb', padding: 40 }}>Selecione uma seção para editar</div>
+        ) : (
+          <>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '1em', color: '#2c3e50' }}>
+                  {ICONES[secaoSelecionada.chave] || '📄'} {secaoSelecionada.titulo}
+                </div>
+                <div style={{ fontSize: '0.78em', color: '#95a5a6', marginTop: 2 }}>
+                  Editor HTML — insira textos, imagens e vídeos livremente
+                  {secaoSelecionada.customizada && <span style={{ marginLeft: 8, color: '#27ae60' }}>● customizada</span>}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {secaoSelecionada.customizada && (
+                  <button onClick={resetar} disabled={salvando} style={{ padding: '6px 12px', background: '#fef9f0', border: '1px solid #f39c12', borderRadius: 6, color: '#e67e22', cursor: 'pointer', fontSize: '0.83em', fontWeight: 600 }}>
+                    ↩ Resetar padrão
+                  </button>
+                )}
+                <button onClick={salvar} disabled={salvando} style={{ padding: '6px 16px', background: '#3498db', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: '0.88em', fontWeight: 700 }}>
+                  {salvando ? 'Salvando...' : '💾 Salvar'}
+                </button>
+              </div>
+            </div>
+
+            {msg && (
+              <div style={{ padding: '8px 12px', borderRadius: 6, fontSize: '0.85em', fontWeight: 600, background: msg.tipo === 'ok' ? '#eafaf1' : '#fdf2f2', color: msg.tipo === 'ok' ? '#27ae60' : '#e74c3c', border: `1px solid ${msg.tipo === 'ok' ? '#a9dfbf' : '#f1948a'}` }}>
+                {msg.tipo === 'ok' ? '✓' : '✗'} {msg.texto}
+              </div>
+            )}
+
+            <EditorWysiwyg
+              key={secaoSelecionada.chave}
+              value={conteudoEditado}
+              onChange={setConteudoEditado}
+              minHeight={460}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Wrapper do DetalheChamado importado do Chamados.jsx para uso no AdminPanel
 function AdminDetalheChamado({ chamadoId, onVoltar, onAtualizado }) {
   const [Comp, setComp] = useState(null);
@@ -1331,6 +1496,7 @@ export default function AdminPanel({ setActivePage }) {
         <button style={abaMainStyle('banner')} onClick={() => setAbaMain('banner')}>Banner</button>
         <button style={abaMainStyle('chamados')} onClick={() => setAbaMain('chamados')}>Chamados</button>
         <button style={abaMainStyle('padroes')} onClick={() => setAbaMain('padroes')}>Padrões por Tipo</button>
+        <button style={abaMainStyle('landing')} onClick={() => setAbaMain('landing')}>Landing Page</button>
       </div>
 
       {/* ── ABA: CLIENTES ── */}
@@ -1452,6 +1618,17 @@ export default function AdminPanel({ setActivePage }) {
             <strong>Como funciona:</strong> Os módulos e recursos configurados aqui como <em>bloqueados</em> serão aplicados automaticamente a cada novo cliente que se cadastrar na plataforma. Clientes já existentes não são afetados.
           </div>
           <SecaoPadroes />
+        </div>
+      )}
+
+      {/* ── ABA: LANDING PAGE ── */}
+      {abaMain === 'landing' && (
+        <div style={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+          <div style={{ padding: '14px 20px', borderBottom: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: '1em', color: '#2c3e50' }}>Editor da Landing Page</span>
+            <span style={{ fontSize: '0.8em', color: '#95a5a6' }}>As alterações são aplicadas em tempo real na página pública</span>
+          </div>
+          <SecaoLandingPage />
         </div>
       )}
 

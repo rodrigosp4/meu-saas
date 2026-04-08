@@ -15,4 +15,4 @@ COPY . .
 
 EXPOSE 3001
 
-CMD ["node", "backend/src/server.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy --schema=./prisma/schema.prisma && node backend/src/server.js"]

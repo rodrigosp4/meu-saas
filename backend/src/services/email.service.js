@@ -313,12 +313,18 @@ export async function enviarEmail(templateId, para, vars = {}) {
   const varsFinal = { ano: new Date().getFullYear(), empresa: EMPRESA, ...vars };
 
   const transporter = criarTransporter();
-  await transporter.sendMail({
-    from: `"${EMPRESA}" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-    to: para,
-    subject: compilar(assunto, varsFinal),
-    html: compilar(corpo, varsFinal),
-  });
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Timeout: servidor SMTP não respondeu em 12 segundos')), 12000)
+  );
+  await Promise.race([
+    transporter.sendMail({
+      from: `"${EMPRESA}" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+      to: para,
+      subject: compilar(assunto, varsFinal),
+      html: compilar(corpo, varsFinal),
+    }),
+    timeout,
+  ]);
 }
 
 // ── Retorna todos os templates (DB + defaults para os que não existem) ─────────

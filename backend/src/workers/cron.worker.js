@@ -5,6 +5,7 @@ import { config } from '../config/env.js';
 import { mlService } from '../services/ml.service.js';
 import { sincronizarReclamacoes } from '../services/reclamacoes.service.js';
 import { cronQueue, mlSyncQueue, syncQueue, syncBlingQueue } from './queue.js';
+import { isAssinaturaAtiva } from '../utils/assinatura.js';
 
 const connection = {
   host: config.redisHost,
@@ -495,15 +496,18 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
   if (job.name === 'verificar-notificacoes') {
     console.log('⏰ [Cron] Verificando notificações (mensagens + perguntas)...');
     const usuarios = await prisma.user.findMany({ select: { id: true } });
+    let processados = 0;
     for (const user of usuarios) {
+      if (!(await isAssinaturaAtiva(user.id))) continue;
       try {
         await atualizarCacheNotificacoes(user.id);
+        processados++;
       } catch (e) {
         console.error(`[Cron-Notif] Erro para userId=${user.id}:`, e.message);
       }
     }
-    console.log(`✅ [Cron-Notif] Cache atualizado para ${usuarios.length} usuário(s).`);
-    return { usuarios: usuarios.length };
+    console.log(`✅ [Cron-Notif] Cache atualizado para ${processados}/${usuarios.length} usuário(s) com assinatura ativa.`);
+    return { usuarios: processados };
   }
 
   // ── Atualização automática de preços de concorrentes ──────────────────────
@@ -511,17 +515,20 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
     console.log('⏰ [Cron] Iniciando atualização de preços de concorrentes...');
     const usuarios = await prisma.user.findMany({ select: { id: true } });
     let totalItens = 0;
+    let processados = 0;
     for (const user of usuarios) {
+      if (!(await isAssinaturaAtiva(user.id))) continue;
       try {
         const atualizados = await atualizarConcorrentesDeUsuario(user.id);
         totalItens += atualizados;
+        processados++;
       } catch (e) {
         console.error(`[Cron-Concorrentes] Erro para userId=${user.id}:`, e.message);
       }
     }
-    const resumo = `[Cron-Concorrentes] ${totalItens} concorrente(s) atualizado(s) em ${usuarios.length} usuário(s).`;
+    const resumo = `[Cron-Concorrentes] ${totalItens} concorrente(s) atualizado(s) em ${processados}/${usuarios.length} usuário(s) com assinatura ativa.`;
     console.log('✅', resumo);
-    return { totalItens, usuarios: usuarios.length };
+    return { totalItens, usuarios: processados };
   }
 
   if (job.name !== 'varredura-diaria') return;
@@ -536,6 +543,7 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
   // 1) Sincroniza promoções da API do ML (atualiza cache promoML) e depois ativa
   let totalAlertas = 0;
   for (const user of usuarios) {
+    if (!(await isAssinaturaAtiva(user.id))) continue;
     try {
       await sincronizarPromocoesParaCron(user.id);
     } catch (e) {
@@ -554,6 +562,7 @@ export const cronWorker = new Worker('cron-agenda', async (job) => {
 
   // 2) Sincroniza todas as contas ML e Tiny (após ativação de promoções)
   for (const user of usuarios) {
+    if (!(await isAssinaturaAtiva(user.id))) continue;
     const contasML = await prisma.contaML.findMany({
       where: { userId: user.id },
       select: { id: true, refreshToken: true },

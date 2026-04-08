@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import prisma from '../config/prisma.js';
 
 // ── Empresa / remetente ───────────────────────────────────────────────────────
@@ -268,20 +268,9 @@ const TEMPLATES_PADRAO = {
   },
 };
 
-// ── Transporter ───────────────────────────────────────────────────────────────
-function criarTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
+// ── Resend client ─────────────────────────────────────────────────────────────
+function criarResend() {
+  return new Resend(process.env.RESEND_API_KEY);
 }
 
 // ── Busca template (DB primeiro, depois fallback padrão) ──────────────────────
@@ -304,27 +293,27 @@ function compilar(texto, vars) {
 
 // ── Envia email usando template do banco (com fallback) ───────────────────────
 export async function enviarEmail(templateId, para, vars = {}) {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER) {
-    console.warn(`[email] SMTP não configurado. E-mail "${templateId}" para ${para} não enviado.`);
+  if (!process.env.RESEND_API_KEY) {
+    console.warn(`[email] RESEND_API_KEY não configurada. E-mail "${templateId}" para ${para} não enviado.`);
     return;
   }
 
   const { assunto, corpo } = await obterTemplate(templateId);
   const varsFinal = { ano: new Date().getFullYear(), empresa: EMPRESA, ...vars };
 
-  const transporter = criarTransporter();
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Timeout: servidor SMTP não respondeu em 12 segundos')), 12000)
-  );
-  await Promise.race([
-    transporter.sendMail({
-      from: `"${EMPRESA}" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-      to: para,
-      subject: compilar(assunto, varsFinal),
-      html: compilar(corpo, varsFinal),
-    }),
-    timeout,
-  ]);
+  const resend = criarResend();
+  const from = process.env.SMTP_FROM
+    ? `${EMPRESA} <${process.env.SMTP_FROM}>`
+    : `${EMPRESA} <onboarding@resend.dev>`;
+
+  const { error } = await resend.emails.send({
+    from,
+    to: para,
+    subject: compilar(assunto, varsFinal),
+    html: compilar(corpo, varsFinal),
+  });
+
+  if (error) throw new Error(error.message);
 }
 
 // ── Retorna todos os templates (DB + defaults para os que não existem) ─────────
